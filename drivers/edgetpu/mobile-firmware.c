@@ -290,9 +290,9 @@ static void program_iremap_csr(struct edgetpu_dev *etdev)
 	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_NEW_BASE + 8, fw_paddr);
 
 	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_LIMIT,
-			     EDGETPU_INSTRUCTION_REMAP_BASE + SZ_16M);
+			     EDGETPU_INSTRUCTION_REMAP_BASE + SZ_32M);
 	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_LIMIT + 8,
-			     EDGETPU_INSTRUCTION_REMAP_BASE + SZ_16M);
+			     EDGETPU_INSTRUCTION_REMAP_BASE + SZ_32M);
 
 	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_CONTROL, 1);
 	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_CONTROL + 8, 1);
