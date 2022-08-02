@@ -34,7 +34,4 @@ extern uint32_t *edgetpu_states_display;
 
 #define TPU_POLICY_MAX	TPU_ACTIVE_NOM
 
-/* TODO(b/199681752): check whether this domain is correct */
-#define TPU_ACPM_DOMAIN	7
-
 #endif /* __RIO_CONFIG_PWR_STATE_H__ */

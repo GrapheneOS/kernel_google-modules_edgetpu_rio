@@ -12,8 +12,6 @@
 
 #define EDGETPU_NUM_CORES 2
 
-#define EDGETPU_DEV_MAX		1
-
 /* 1 context per VII/group plus 1 for KCI */
 #define EDGETPU_NCONTEXTS 16
 /* Max number of virtual context IDs that can be allocated for one device. */
@@ -23,13 +21,6 @@
 
 /* Placeholder value */
 #define EDGETPU_TZ_MAILBOX_ID 31
-
-/* Is a "mobile" style device. */
-#define EDGETPU_FEATURE_MOBILE
-#define EDGETPU_HAS_WAKELOCK
-
-/* Is able to support external workloads */
-#define EDGETPU_FEATURE_INTEROP
 
 /* Responds to PMQoS-BTS RKCI */
 #define EDGETPU_FEATURE_RKCI_RESPONSE

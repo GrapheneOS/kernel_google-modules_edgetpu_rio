@@ -35,6 +35,10 @@
 #include "edgetpu-wakelock.h"
 #include "edgetpu.h"
 
+#ifndef EDGETPU_NUM_USE_VII_MAILBOXES
+#define EDGETPU_NUM_USE_VII_MAILBOXES EDGETPU_NUM_VII_MAILBOXES
+#endif
+
 /* Bits higher than VMA_TYPE_WIDTH are used to carry type specific data, e.g., core id. */
 #define VMA_TYPE_WIDTH 16
 #define VMA_TYPE(x) ((x) & (BIT_MASK(VMA_TYPE_WIDTH) - 1))
@@ -104,14 +108,12 @@ static edgetpu_vma_flags_t mmap_vma_flag(unsigned long pgoff)
 		return VMA_VII_CMDQ;
 	case EDGETPU_MMAP_RESP_QUEUE_OFFSET:
 		return VMA_VII_RESPQ;
-#ifdef EDGETPU_FEATURE_INTEROP
 	case EDGETPU_MMAP_EXT_CSR_OFFSET:
 		return VMA_EXT_CSR;
 	case EDGETPU_MMAP_EXT_CMD_QUEUE_OFFSET:
 		return VMA_EXT_CMDQ;
 	case EDGETPU_MMAP_EXT_RESP_QUEUE_OFFSET:
 		return VMA_EXT_RESPQ;
-#endif /* EDGETPU_FEATURE_INTEROP */
 	case EDGETPU_MMAP_LOG_BUFFER_OFFSET:
 		return VMA_DATA_SET(VMA_LOG, 0);
 	case EDGETPU_MMAP_TRACE_BUFFER_OFFSET:
@@ -367,6 +369,7 @@ err_release_pvt:
 static struct edgetpu_mailbox_manager_desc mailbox_manager_desc = {
 	.num_mailbox = EDGETPU_NUM_MAILBOXES,
 	.num_vii_mailbox = EDGETPU_NUM_VII_MAILBOXES,
+	.num_use_vii_mailbox = EDGETPU_NUM_USE_VII_MAILBOXES,
 	.num_ext_mailbox = EDGETPU_NUM_EXT_MAILBOXES,
 	.get_context_csr_base = edgetpu_mailbox_get_context_csr_base,
 	.get_cmd_queue_csr_base = edgetpu_mailbox_get_cmd_queue_csr_base,

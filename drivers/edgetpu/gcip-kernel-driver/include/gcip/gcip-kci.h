@@ -312,7 +312,7 @@ int gcip_kci_send_cmd_return_resp(struct gcip_kci *kci, struct gcip_kci_command_
 
 /*
  * Interrupt handler.
- * This function should be called when the interrput of KCI mailbox is fired.
+ * This function should be called when the interrupt of KCI mailbox is fired.
  */
 void gcip_kci_handle_irq(struct gcip_kci *kci);
 

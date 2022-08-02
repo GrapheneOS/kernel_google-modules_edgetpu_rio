@@ -477,8 +477,10 @@ edgetpu_mailbox_create_mgr(struct edgetpu_dev *etdev,
 	mgr->num_mailbox = desc->num_mailbox;
 	/* index 0 is reserved for KCI */
 	mgr->vii_index_from = 1;
-	mgr->vii_index_to = mgr->vii_index_from + desc->num_vii_mailbox;
-	mgr->ext_index_from = mgr->vii_index_to;
+	mgr->vii_index_to = mgr->vii_index_from +
+		(desc->num_use_vii_mailbox ? desc->num_use_vii_mailbox :
+		 desc->num_vii_mailbox);
+	mgr->ext_index_from = mgr->vii_index_from + desc->num_vii_mailbox;
 	mgr->ext_index_to = mgr->ext_index_from + desc->num_ext_mailbox;
 
 	mgr->get_context_csr_base = desc->get_context_csr_base;

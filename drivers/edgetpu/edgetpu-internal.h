@@ -405,9 +405,6 @@ int edgetpu_chip_setup_mmu(struct edgetpu_dev *etdev);
  */
 void edgetpu_chip_remove_mmu(struct edgetpu_dev *etdev);
 
-/* Read TPU timestamp */
-u64 edgetpu_chip_tpu_timestamp(struct edgetpu_dev *etdev);
-
 /*
  * Handle chip-specific incoming requests from firmware over KCI
  * Note: This will get called from the system's work queue.

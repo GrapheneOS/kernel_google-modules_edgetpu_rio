@@ -11,35 +11,6 @@
 #include "edgetpu-internal.h"
 #include "edgetpu-kci.h"
 
-/* Can't build out of tree with acpm_dvfs unless kernel supports ACPM */
-#if IS_ENABLED(CONFIG_ACPM_DVFS) || IS_ENABLED(CONFIG_EDGETPU_TEST)
-
-#include <linux/acpm_dvfs.h>
-
-#else
-
-static unsigned long exynos_acpm_rate;
-static inline int exynos_acpm_set_rate(unsigned int id, unsigned long rate)
-{
-	exynos_acpm_rate = rate;
-	return 0;
-}
-static inline int exynos_acpm_set_init_freq(unsigned int dfs_id,
-					    unsigned long freq)
-{
-	return 0;
-}
-static inline unsigned long exynos_acpm_get_rate(unsigned int id,
-						 unsigned long dbg_val)
-{
-	return exynos_acpm_rate;
-}
-static inline int exynos_acpm_set_policy(unsigned int id, unsigned long policy)
-{
-	return 0;
-}
-#endif /* IS_ENABLED(CONFIG_ACPM_DVFS) || IS_ENABLED(CONFIG_EDGETPU_TEST) */
-
 /*
  * Request codes from firmware
  * Values must match with firmware code base

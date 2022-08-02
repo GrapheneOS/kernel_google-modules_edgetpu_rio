@@ -45,9 +45,6 @@ static bool wakelock_warn_non_zero_event(struct edgetpu_wakelock *wakelock)
 
 struct edgetpu_wakelock *edgetpu_wakelock_alloc(struct edgetpu_dev *etdev)
 {
-#ifndef EDGETPU_HAS_WAKELOCK
-	return EDGETPU_NO_WAKELOCK;
-#else /* !EDGETPU_HAS_WAKELOCK */
 	struct edgetpu_wakelock *wakelock =
 		kzalloc(sizeof(*wakelock), GFP_KERNEL);
 
@@ -58,7 +55,6 @@ struct edgetpu_wakelock *edgetpu_wakelock_alloc(struct edgetpu_dev *etdev)
 	/* Initialize client wakelock state to "released" */
 	wakelock->req_count = 0;
 	return wakelock;
-#endif /* EDGETPU_HAS_WAKELOCK */
 }
 
 void edgetpu_wakelock_free(struct edgetpu_wakelock *wakelock)
@@ -73,8 +69,6 @@ bool edgetpu_wakelock_inc_event_locked(struct edgetpu_wakelock *wakelock,
 {
 	bool ret = true;
 
-	if (NO_WAKELOCK(wakelock))
-		return true;
 	if (!wakelock->req_count) {
 		ret = false;
 		etdev_warn(
@@ -100,8 +94,6 @@ bool edgetpu_wakelock_inc_event(struct edgetpu_wakelock *wakelock,
 {
 	bool ret;
 
-	if (NO_WAKELOCK(wakelock))
-		return true;
 	mutex_lock(&wakelock->lock);
 	ret = edgetpu_wakelock_inc_event_locked(wakelock, evt);
 	mutex_unlock(&wakelock->lock);
@@ -113,8 +105,6 @@ bool edgetpu_wakelock_dec_event_locked(struct edgetpu_wakelock *wakelock,
 {
 	bool ret = true;
 
-	if (NO_WAKELOCK(wakelock))
-		return true;
 	if (!wakelock->event_count[evt]) {
 		ret = false;
 		etdev_warn(wakelock->etdev, "event %d unbalanced decreasing",
@@ -130,8 +120,6 @@ bool edgetpu_wakelock_dec_event(struct edgetpu_wakelock *wakelock,
 {
 	bool ret;
 
-	if (NO_WAKELOCK(wakelock))
-		return true;
 	mutex_lock(&wakelock->lock);
 	ret = edgetpu_wakelock_dec_event_locked(wakelock, evt);
 	mutex_unlock(&wakelock->lock);
@@ -140,24 +128,19 @@ bool edgetpu_wakelock_dec_event(struct edgetpu_wakelock *wakelock,
 
 uint edgetpu_wakelock_lock(struct edgetpu_wakelock *wakelock)
 {
-	if (NO_WAKELOCK(wakelock))
-		return 1;
 	mutex_lock(&wakelock->lock);
 	return wakelock->req_count;
 }
 
 void edgetpu_wakelock_unlock(struct edgetpu_wakelock *wakelock)
 {
-	if (!NO_WAKELOCK(wakelock))
-		mutex_unlock(&wakelock->lock);
+	mutex_unlock(&wakelock->lock);
 }
 
 int edgetpu_wakelock_acquire(struct edgetpu_wakelock *wakelock)
 {
 	int ret;
 
-	if (NO_WAKELOCK(wakelock))
-		return 1;
 	ret = wakelock->req_count++;
 	/* integer overflow */
 	if (unlikely(ret < 0)) {
@@ -169,8 +152,6 @@ int edgetpu_wakelock_acquire(struct edgetpu_wakelock *wakelock)
 
 int edgetpu_wakelock_release(struct edgetpu_wakelock *wakelock)
 {
-	if (NO_WAKELOCK(wakelock))
-		return 1;
 	if (!wakelock->req_count) {
 		etdev_warn(wakelock->etdev, "invalid wakelock release");
 		return -EINVAL;

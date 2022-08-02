@@ -23,6 +23,9 @@ static const struct of_device_id edgetpu_of_match[] = {
 	{
 		.compatible = "google,edgetpu-gs301",
 	},
+	{
+		.compatible = "google,edgetpu-zuma",
+	},
 	{ /* end of list */ },
 };
 
@@ -67,7 +70,9 @@ static int rio_mmu_set_shareability(struct device *dev)
 		return PTR_ERR(addr);
 
 	writel_relaxed(SHAREABLE_WRITE | SHAREABLE_READ | INNER_SHAREABLE,
-		       addr + EDGETPU_SYSREG_TPU_SHAREABILITY);
+		       addr + EDGETPU_SYSREG_TPU0_SHAREABILITY);
+	writel_relaxed(SHAREABLE_WRITE | SHAREABLE_READ | INNER_SHAREABLE,
+		       addr + EDGETPU_SYSREG_TPU1_SHAREABILITY);
 	iounmap(addr);
 	return 0;
 }

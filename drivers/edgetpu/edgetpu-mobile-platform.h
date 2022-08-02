@@ -48,17 +48,11 @@ struct edgetpu_mobile_platform_pwr {
 	/* Block shutdown callback, may be NULL */
 	void (*block_down)(struct edgetpu_dev *etdev);
 
-	/* Firmware shutdown callback. Must be implemented */
-	void (*firmware_down)(struct edgetpu_dev *etdev);
-
 	/* Chip-specific setup after the PM interface is created */
 	int (*after_create)(struct edgetpu_dev *etdev);
 
 	/* Chip-specific cleanup before the PM interface is destroyed */
 	int (*before_destroy)(struct edgetpu_dev *etdev);
-
-	/* ACPM set rate callback. Must be implemented */
-	int (*acpm_set_rate)(unsigned int id, unsigned long rate);
 };
 
 struct edgetpu_mobile_platform_dev {

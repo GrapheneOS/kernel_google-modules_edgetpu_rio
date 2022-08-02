@@ -8,7 +8,7 @@ obj-$(CONFIG_RIO)		+= rio.o
 KERNEL_SRC ?= /lib/modules/$(shell uname -r)/build
 M ?= $(shell pwd)
 
-GIT_PATH=$(KERNEL_SRC)/../private/google-modules/edgetpu
+GIT_PATH=$(KERNEL_SRC)/../private/google-modules/edgetpu/rio
 ifeq ($(shell git --git-dir=$(GIT_PATH)/.git rev-parse --is-inside-work-tree),true)
 	GIT_REPO_STATE=$(shell (git --git-dir=$(GIT_PATH)/.git --work-tree=$(GIT_PATH) status --porcelain | grep -q .) && echo -dirty)
 	ccflags-y       += -DGIT_REPO_TAG=\"$(shell git --git-dir=$(GIT_PATH)/.git rev-parse --short HEAD)$(GIT_REPO_STATE)\"
@@ -27,7 +27,7 @@ rio-objs	:= rio-core.o rio-debug-dump.o rio-device-group.o rio-device.o \
 		   rio-thermal.o rio-usage-stats.o rio-wakelock.o rio-external.o \
 		   rio-soc.o $(edgetpu-objs)
 
-ccflags-y	+= -I$(KERNEL_SRC)/../private/google-modules/edgetpu/drivers/edgetpu/include
+ccflags-y	+= -I$(KERNEL_SRC)/../private/google-modules/edgetpu/rio/drivers/edgetpu/include
 KBUILD_OPTIONS	+= CONFIG_RIO=m
 include $(KERNEL_SRC)/../private/google-modules/soc/gs/Makefile.include
 

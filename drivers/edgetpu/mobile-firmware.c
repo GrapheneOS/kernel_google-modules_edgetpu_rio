@@ -273,19 +273,11 @@ static int mobile_firmware_gsa_authenticate(struct edgetpu_mobile_platform_dev *
 static void program_iremap_csr(struct edgetpu_dev *etdev)
 {
 	const int ctx_id = 0, sid0 = 0x30, sid1 = 0x34;
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
-	phys_addr_t fw_paddr = etmdev->fw_region_paddr;
+	phys_addr_t fw_paddr = EDGETPU_INSTRUCTION_REMAP_BASE;
 
 	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_SECURITY, (ctx_id << 16) | sid0);
 	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_SECURITY + 8,
 			     (ctx_id << 16) | sid1);
-#if defined(ZEBU_SYSMMU_WORKAROUND)
-	/*
-	 * This is required on ZeBu after b/197718405 is fixed, which forwards all transactions to
-	 * the non-secure SysMMU.
-	 */
-	fw_paddr = EDGETPU_INSTRUCTION_REMAP_BASE;
-#endif
 	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_NEW_BASE, fw_paddr);
 	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_NEW_BASE + 8, fw_paddr);
 

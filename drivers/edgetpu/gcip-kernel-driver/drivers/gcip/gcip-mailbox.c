@@ -355,7 +355,7 @@ static int gcip_mailbox_fetch_one_response(struct gcip_mailbox *mailbox, void *r
 	return 1;
 }
 
-/* Handles the timedout asynchronous commands. */
+/* Handles the timed out asynchronous commands. */
 static void gcip_mailbox_async_cmd_timeout_work(struct work_struct *work)
 {
 	struct gcip_mailbox_async_response *async_resp =
@@ -373,7 +373,7 @@ static void gcip_mailbox_async_cmd_timeout_work(struct work_struct *work)
 	gcip_mailbox_del_wait_resp(mailbox, async_resp->resp);
 
 	/*
-	 * Handle timedout async_resp. If `handle_async_resp_timedout` is defined, @async_resp
+	 * Handle timed out async_resp. If `handle_async_resp_timedout` is defined, @async_resp
 	 * will be released from the implementation side. Otherwise, it should be freed from here.
 	 */
 	if (mailbox->ops->handle_async_resp_timedout)
@@ -573,6 +573,7 @@ struct gcip_mailbox_async_response *gcip_mailbox_put_cmd(struct gcip_mailbox *ma
 	async_resp->resp = resp;
 	async_resp->mailbox = mailbox;
 	async_resp->data = data;
+	async_resp->release_data = mailbox->ops->release_async_resp_data;
 
 	INIT_DELAYED_WORK(&async_resp->timeout_work, gcip_mailbox_async_cmd_timeout_work);
 	schedule_delayed_work(&async_resp->timeout_work, msecs_to_jiffies(mailbox->timeout));
@@ -596,10 +597,8 @@ void gcip_mailbox_cancel_async_resp_timeout(struct gcip_mailbox_async_response *
 
 void gcip_mailbox_release_async_resp(struct gcip_mailbox_async_response *async_resp)
 {
-	struct gcip_mailbox *mailbox = async_resp->mailbox;
-
-	if (mailbox->ops->release_async_resp_data)
-		mailbox->ops->release_async_resp_data(mailbox, async_resp->data);
+	if (async_resp->release_data)
+		async_resp->release_data(async_resp->data);
 	kfree(async_resp);
 }
 

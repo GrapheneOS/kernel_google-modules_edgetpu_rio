@@ -11,6 +11,8 @@
 #include <linux/types.h> /* u32 */
 
 #define EDGETPU_NUM_VII_MAILBOXES 15
+/* 7 VII contexts mappable via SysMMU VID */
+#define EDGETPU_NUM_USE_VII_MAILBOXES 7
 #define EDGETPU_NUM_EXT_MAILBOXES 3
 #define EDGETPU_NUM_MAILBOXES (EDGETPU_NUM_VII_MAILBOXES + EDGETPU_NUM_EXT_MAILBOXES + 1)
 /*

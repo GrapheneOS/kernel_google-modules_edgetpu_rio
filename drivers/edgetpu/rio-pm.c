@@ -11,6 +11,7 @@
 #include "edgetpu-config.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-mobile-platform.h"
+#include "edgetpu-soc.h"
 #include "mobile-pm.h"
 
 #define TPU_DEFAULT_POWER_STATE TPU_ACTIVE_NOM
@@ -149,29 +150,13 @@ static void rio_block_down(struct edgetpu_dev *etdev)
 		/* Delay 20us per retry till blk shutdown finished */
 		usleep_range(SHUTDOWN_DELAY_US_MIN, SHUTDOWN_DELAY_US_MAX);
 		/* Only poll for BLK status instead of CLK rate */
-		curr_state = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, 1);
+		curr_state = edgetpu_soc_pm_get_rate(1);
 		if (!curr_state)
 			break;
 		timeout_cnt++;
 	} while (timeout_cnt < SHUTDOWN_MAX_DELAY_COUNT);
 	if (timeout_cnt == SHUTDOWN_MAX_DELAY_COUNT)
 		etdev_warn(etdev, "%s: blk_shutdown timeout\n", __func__);
-}
-
-static void rio_firmware_down(struct edgetpu_dev *etdev)
-{
-	int ret;
-
-	ret = edgetpu_kci_shutdown(etdev->etkci);
-	if (ret) {
-		etdev_err(etdev, "firmware shutdown failed: %d", ret);
-		return;
-	}
-}
-
-static int rio_acpm_set_rate(unsigned int id, unsigned long rate)
-{
-	return exynos_acpm_set_rate(id, rate);
 }
 
 int edgetpu_chip_pm_create(struct edgetpu_dev *etdev)
@@ -182,8 +167,6 @@ int edgetpu_chip_pm_create(struct edgetpu_dev *etdev)
 	platform_pwr->lpm_up = rio_lpm_up;
 	platform_pwr->lpm_down = rio_lpm_down;
 	platform_pwr->block_down = rio_block_down;
-	platform_pwr->firmware_down = rio_firmware_down;
-	platform_pwr->acpm_set_rate = rio_acpm_set_rate;
 
 	return mobile_pm_create(etdev);
 }

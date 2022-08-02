@@ -152,6 +152,7 @@ struct edgetpu_mailbox_manager {
 struct edgetpu_mailbox_manager_desc {
 	u8 num_mailbox;
 	u8 num_vii_mailbox;
+	u8 num_use_vii_mailbox;
 	u8 num_ext_mailbox;
 	get_csr_base_t get_context_csr_base;
 	get_csr_base_t get_cmd_queue_csr_base;

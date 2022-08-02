@@ -74,8 +74,6 @@ struct edgetpu_device_group {
 	 * inaccessible (typically not powered on) then set this field to true to
 	 * prevent HW interactions.
 	 *
-	 * This field is always false for !EDGETPU_HAS_WAKELOCK chipsets.
-	 *
 	 * Is not protected by @lock because this is only written when releasing the
 	 * leader of this group.
 	 */

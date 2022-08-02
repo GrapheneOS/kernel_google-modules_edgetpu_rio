@@ -14,14 +14,6 @@
 #include "edgetpu-internal.h"
 
 /*
- * See edgetpu_wakelock_alloc() for when this value is returned.
- * Define as an errno so we can use IS_ERR* macros.
- */
-#define EDGETPU_NO_WAKELOCK ERR_PTR(-EOPNOTSUPP)
-
-#define NO_WAKELOCK(wakelock) ((wakelock) == EDGETPU_NO_WAKELOCK)
-
-/*
  * Events that could block the wakelock from being released.
  * Use inc_event() and dec_event() to increase and decrease the counters when
  * the event happens.
@@ -62,9 +54,6 @@ struct edgetpu_wakelock {
  * Allocates and initializes a wakelock object.
  *
  * Returns the pointer on success, or NULL when out of memory.
- *
- * When the chipset doesn't support wakelock (judged by EDGETPU_HAS_WAKELOCK):
- *   Nothing is allocated and this function returns EDGETPU_NO_WAKELOCK.
  */
 struct edgetpu_wakelock *edgetpu_wakelock_alloc(struct edgetpu_dev *etdev);
 /* Frees the allocated wakelock. */
@@ -132,14 +121,11 @@ void edgetpu_wakelock_unlock(struct edgetpu_wakelock *wakelock);
  * Returns the request counter of @wakelock.
  *
  * Caller calls edgetpu_wakelock_lock() before calling this function.
- *
- * When the chipset doesn't support wakelock:
- *   Returns 1.
  */
 static inline uint
 edgetpu_wakelock_count_locked(struct edgetpu_wakelock *wakelock)
 {
-	return NO_WAKELOCK(wakelock) ? 1 : wakelock->req_count;
+	return wakelock->req_count;
 }
 
 /*
@@ -150,9 +136,6 @@ edgetpu_wakelock_count_locked(struct edgetpu_wakelock *wakelock)
  *
  * Returns the value of request counter *before* being increased.
  * Returns -EOVERFLOW if the request counter would overflow after increment.
- *
- * When the chipset doesn't support wakelock:
- *   Does nothing and returns 1.
  */
 int edgetpu_wakelock_acquire(struct edgetpu_wakelock *wakelock);
 /*
@@ -165,9 +148,6 @@ int edgetpu_wakelock_acquire(struct edgetpu_wakelock *wakelock);
  * Returns the value of request counter *after* being decreased.
  * Returns -EINVAL if the request counter is already zero.
  * Returns -EAGAIN when there are events blocking wakelock from being released.
- *
- * When the chipset doesn't support wakelock:
- *   Does nothing and returns 1.
  */
 int edgetpu_wakelock_release(struct edgetpu_wakelock *wakelock);
 

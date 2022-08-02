@@ -267,8 +267,7 @@ static int mobile_sscd_collect_clients_info(struct edgetpu_client **clients, siz
 		SET_FIELD(info, client, pid);
 		SET_FIELD(info, client, tgid);
 		SET_FIELD(info, client, perdie_events);
-		info->wakelock_req_count =
-			NO_WAKELOCK(client->wakelock) ? ~0u : client->wakelock->req_count;
+		info->wakelock_req_count = client->wakelock->req_count;
 		mutex_lock(&client->group_lock);
 		info->group_workload_id = client->group ? client->group->workload_id : ~0u;
 		mutex_unlock(&client->group_lock);

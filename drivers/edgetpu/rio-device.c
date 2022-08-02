@@ -55,11 +55,6 @@ irqreturn_t edgetpu_chip_irq_handler(int irq, void *arg)
 	return rio_mailbox_handle_irq(etdev, irq);
 }
 
-u64 edgetpu_chip_tpu_timestamp(struct edgetpu_dev *etdev)
-{
-	return edgetpu_dev_read_64(etdev, EDGETPU_REG_CPUNS_TIMESTAMP);
-}
-
 void edgetpu_chip_init(struct edgetpu_dev *etdev)
 {
 }

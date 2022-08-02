@@ -22,6 +22,7 @@
 #include "edgetpu-kci.h"
 #include "edgetpu-mmu.h"
 #include "edgetpu-pm.h"
+#include "edgetpu-soc.h"
 #include "edgetpu-thermal.h"
 #include "mobile-pm.h"
 
@@ -70,7 +71,7 @@ static int edgetpu_set_thermal_policy(struct edgetpu_dev *etdev, unsigned long p
 	if (edgetpu_is_powered(etdev))
 		edgetpu_kci_block_bus_speed_control(etdev, true);
 
-	ret = exynos_acpm_set_policy(TPU_ACPM_DOMAIN, pwr_state);
+	ret = edgetpu_soc_pm_set_policy(pwr_state);
 
 	if (edgetpu_is_powered(etdev))
 		edgetpu_kci_block_bus_speed_control(etdev, false);
@@ -105,9 +106,9 @@ static int edgetpu_set_cur_state(struct thermal_cooling_device *cdev, unsigned l
 	}
 
 	/*
-	 * Set the thermal policy through ACPM to allow cooling by DVFS. Any states lower
-	 * than UUD should be handled by firmware when it gets the throttling notification
-	 * KCI
+	 * Set the thermal policy to allow cooling by DVFS. Any states lower
+	 * than UUD should be handled by firmware when it gets the throttling
+	 * notification KCI.
 	 */
 	if (pwr_state < TPU_ACTIVE_UUD) {
 		dev_warn_ratelimited(dev,
@@ -139,7 +140,7 @@ static int edgetpu_get_cur_state(struct thermal_cooling_device *cdev, unsigned l
 	dev_warn(cooling->dev, "Unknown cooling state: %lu, resetting\n", *state);
 	mutex_lock(&cooling->lock);
 
-	ret = exynos_acpm_set_policy(TPU_ACPM_DOMAIN, TPU_ACTIVE_NOM);
+	ret = edgetpu_soc_pm_set_policy(TPU_ACTIVE_NOM);
 	if (ret) {
 		dev_err(cooling->dev, "error setting tpu policy: %d\n", ret);
 		mutex_unlock(&cooling->lock);
@@ -178,7 +179,7 @@ static int edgetpu_get_requested_power(struct thermal_cooling_device *cdev,
 	unsigned long state_original;
 	struct edgetpu_thermal *cooling = cdev->devdata;
 
-	state_original = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, 0);
+	state_original = edgetpu_soc_pm_get_rate(0);
 	return edgetpu_state2power_internal(state_original, power, cooling);
 }
 
@@ -343,21 +344,6 @@ static ssize_t user_vote_store(struct device *dev, struct device_attribute *attr
 
 static DEVICE_ATTR_RW(user_vote);
 
-static int tpu_pause_callback(enum thermal_pause_state action, void *dev)
-{
-	int ret = -EINVAL;
-
-	if (!dev)
-		return ret;
-
-	if (action == THERMAL_SUSPEND)
-		ret = edgetpu_thermal_suspend(dev);
-	else if (action == THERMAL_RESUME)
-		ret = edgetpu_thermal_resume(dev);
-
-	return ret;
-}
-
 static int tpu_thermal_cooling_register(struct edgetpu_thermal *thermal, char *type)
 {
 	struct device_node *cooling_node = NULL;
@@ -403,8 +389,7 @@ static int tpu_thermal_init(struct edgetpu_thermal *thermal, struct device *dev)
 		return err;
 	}
 
-	register_tpu_thermal_pause_cb(tpu_pause_callback, dev);
-
+	edgetpu_soc_thermal_init(thermal);
 	return 0;
 }
 

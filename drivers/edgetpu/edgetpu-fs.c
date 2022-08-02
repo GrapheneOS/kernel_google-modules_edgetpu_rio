@@ -41,14 +41,14 @@
 #include "edgetpu-wakelock.h"
 #include "edgetpu.h"
 
-#ifdef EDGETPU_FEATURE_INTEROP
 #include <soc/google/tpu-ext.h>
-#endif
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/edgetpu.h>
 
 #define DRIVER_VERSION "1.0"
+
+#define EDGETPU_DEV_MAX		1
 
 static struct class *edgetpu_class;
 static dev_t edgetpu_basedev;
@@ -114,7 +114,7 @@ static int edgetpu_fs_release(struct inode *inode, struct file *file)
 	 * modified during [acquire/release]_wakelock ioctl calls which cannot
 	 * race with releasing client/fd.
 	 */
-	wakelock_count = NO_WAKELOCK(client->wakelock) ? 1 : client->wakelock->req_count;
+	wakelock_count = client->wakelock->req_count;
 	/*
 	 * @wakelock_count = 0 means the device might be powered off. Mailbox(EXT/VII) is removed
 	 * when the group is released, So we need to ensure the device should not accessed to
@@ -435,6 +435,11 @@ static int edgetpu_ioctl_fw_version(struct edgetpu_dev *etdev,
 	return 0;
 }
 
+static u64 edgetpu_tpu_timestamp(struct edgetpu_dev *etdev)
+{
+	return edgetpu_dev_read_64(etdev, EDGETPU_REG_CPUNS_TIMESTAMP);
+}
+
 static int edgetpu_ioctl_tpu_timestamp(struct edgetpu_client *client,
 				       __u64 __user *argp)
 {
@@ -445,7 +450,7 @@ static int edgetpu_ioctl_tpu_timestamp(struct edgetpu_client *client,
 		edgetpu_wakelock_unlock(client->wakelock);
 		ret = -EAGAIN;
 	} else {
-		timestamp = edgetpu_chip_tpu_timestamp(client->etdev);
+		timestamp = edgetpu_tpu_timestamp(client->etdev);
 		edgetpu_wakelock_unlock(client->wakelock);
 		if (copy_to_user(argp, &timestamp, sizeof(*argp)))
 			ret = -EFAULT;
@@ -464,7 +469,6 @@ static int edgetpu_ioctl_release_wakelock(struct edgetpu_client *client)
 
 	LOCK(client);
 	edgetpu_wakelock_lock(client->wakelock);
-	/* when NO_WAKELOCK: count should be 1 so here is a no-op */
 	count = edgetpu_wakelock_release(client->wakelock);
 	if (count < 0) {
 		edgetpu_wakelock_unlock(client->wakelock);
@@ -516,7 +520,6 @@ static int edgetpu_ioctl_acquire_wakelock(struct edgetpu_client *client)
 		}
 	}
 	edgetpu_wakelock_lock(client->wakelock);
-	/* when NO_WAKELOCK: count should be 1 so here is a no-op */
 	count = edgetpu_wakelock_acquire(client->wakelock);
 	if (count < 0) {
 		edgetpu_pm_put(client->etdev->pm);
@@ -607,7 +610,6 @@ static int edgetpu_ioctl_get_fatal_errors(struct edgetpu_client *client,
 	return ret;
 }
 
-#ifdef EDGETPU_FEATURE_INTEROP
 static int edgetpu_ioctl_test_external(struct edgetpu_client *client,
 				       struct edgetpu_test_ext_ioctl __user *argp)
 {
@@ -639,7 +641,6 @@ static int edgetpu_ioctl_test_external(struct edgetpu_client *client,
 	kfree(info);
 	return ret;
 }
-#endif /* EDGETPU_FEATURE_INTEROP */
 
 long edgetpu_ioctl(struct file *file, uint cmd, ulong arg)
 {
@@ -732,11 +733,9 @@ long edgetpu_ioctl(struct file *file, uint cmd, ulong arg)
 	case EDGETPU_GET_FATAL_ERRORS:
 		ret = edgetpu_ioctl_get_fatal_errors(client, argp);
 		break;
-#ifdef EDGETPU_FEATURE_INTEROP
 	case EDGETPU_TEST_EXTERNAL:
 		ret = edgetpu_ioctl_test_external(client, argp);
 		break;
-#endif /* EDGETPU_FEATURE_INTEROP */
 	default:
 		return -ENOTTY; /* unknown command */
 	}
@@ -759,147 +758,6 @@ static int edgetpu_fs_mmap(struct file *file, struct vm_area_struct *vma)
 
 	return edgetpu_mmap(client, vma);
 }
-
-#ifndef EDGETPU_FEATURE_MOBILE
-static struct edgetpu_dumpregs_range common_statusregs_ranges[] = {
-	{
-		.firstreg = EDGETPU_REG_AON_RESET,
-		.lastreg = EDGETPU_REG_AON_FORCE_QUIESCE,
-	},
-	{
-		.firstreg = EDGETPU_REG_USER_HIB_DMA_PAUSED,
-		.lastreg = EDGETPU_REG_USER_HIB_DMA_PAUSED,
-	},
-	{
-		.firstreg = EDGETPU_REG_USER_HIB_ERROR_STATUS,
-		.lastreg = EDGETPU_REG_USER_HIB_ERROR_MASK,
-	},
-	{
-		.firstreg = EDGETPU_REG_SC_CURRENTPC,
-		.lastreg = EDGETPU_REG_SC_DECODEPC,
-	},
-	{
-		.firstreg = EDGETPU_REG_SC_ERROR,
-		.lastreg = EDGETPU_REG_SC_ERROR_MASK,
-	},
-	{
-		.firstreg = EDGETPU_REG_SC_ERROR_INFO,
-		.lastreg = EDGETPU_REG_SC_ERROR_INFO,
-	},
-	{
-		.firstreg = EDGETPU_REG_USER_HIB_INSTRQ_TAIL,
-		.lastreg = EDGETPU_REG_USER_HIB_INSTRQ_INT_STAT,
-	},
-	{
-		.firstreg = EDGETPU_REG_USER_HIB_SC_HOST_INT_STAT,
-		.lastreg = EDGETPU_REG_USER_HIB_SC_HOST_INT_STAT,
-	},
-	{
-		.firstreg = EDGETPU_REG_USER_HIB_FATALERR_INT_STAT,
-		.lastreg = EDGETPU_REG_USER_HIB_FATALERR_INT_STAT,
-	},
-	{
-		.firstreg = EDGETPU_REG_USER_HIB_SNAPSHOT,
-		.lastreg = EDGETPU_REG_USER_HIB_SNAPSHOT,
-	},
-};
-
-static struct edgetpu_dumpregs_range common_tile_statusregs_ranges[] = {
-	{
-		.firstreg = EDGETPU_REG_TILECONF1_DEEPSLEEP,
-		.lastreg = EDGETPU_REG_TILECONF1_DEEPSLEEP,
-	},
-	{
-		.firstreg = EDGETPU_REG_TILECONF1_ERROR_TILE,
-		.lastreg = EDGETPU_REG_TILECONF1_ERROR_MASK_TILE,
-	},
-	{
-		.firstreg = EDGETPU_REG_TILECONF1_ERROR_INFO_TILE,
-		.lastreg = EDGETPU_REG_TILECONF1_ERROR_INFO_TILE,
-	},
-};
-
-static void dump_statusregs_ranges(
-	struct seq_file *s, struct edgetpu_dev *etdev,
-	struct edgetpu_dumpregs_range *ranges, int nranges)
-{
-	int i;
-	enum edgetpu_csrs reg;
-	uint64_t val;
-
-	for (i = 0; i < nranges; i++) {
-		for (reg = ranges[i].firstreg; reg <= ranges[i].lastreg;
-		     reg += sizeof(val)) {
-			val = edgetpu_dev_read_64(etdev, reg);
-			seq_printf(s, "%#08x: %#016llx\n", reg, val);
-		}
-	}
-}
-
-static void dump_mboxes(struct seq_file *s, struct edgetpu_dev *etdev)
-{
-	enum edgetpu_csrs base;
-	uint32_t val;
-	int mbox_id;
-
-	/* Dump VII mailboxes + KCI. */
-	for (mbox_id = 0, base = EDGETPU_MBOX_BASE;
-	     mbox_id < EDGETPU_NUM_VII_MAILBOXES + 1;
-	     mbox_id++, base += EDGETPU_MBOX_CSRS_SIZE) {
-		int offset;
-
-		for (offset = 0x0; offset <= 0x40; offset += sizeof(val)) {
-			val = edgetpu_dev_read_32(etdev, base + offset);
-			seq_printf(s, "%#08x: %#08x\n", base + offset, val);
-		}
-		for (offset = 0x1000; offset <= 0x1014; offset += sizeof(val)) {
-			val = edgetpu_dev_read_32(etdev, base + offset);
-			seq_printf(s, "%#08x: %#08x\n", base + offset, val);
-		}
-		for (offset = 0x1800; offset <= 0x1818; offset += sizeof(val)) {
-			val = edgetpu_dev_read_32(etdev, base + offset);
-			seq_printf(s, "%#08x: %#08x\n", base + offset, val);
-		}
-	}
-}
-
-static int statusregs_show(struct seq_file *s, void *data)
-{
-	struct edgetpu_dev *etdev = s->private;
-	int tileid;
-
-	dump_statusregs_ranges(s, etdev, common_statusregs_ranges,
-			       ARRAY_SIZE(common_statusregs_ranges));
-	dump_statusregs_ranges(s, etdev, edgetpu_chip_statusregs_ranges,
-			       edgetpu_chip_statusregs_nranges);
-	for (tileid = 0; tileid < EDGETPU_NTILES; tileid++) {
-		edgetpu_dev_write_64(etdev, EDGETPU_REG_USER_HIB_TILECONFIG1,
-				     tileid);
-		seq_printf(s, "tile %d:\n", tileid);
-		dump_statusregs_ranges(
-			s, etdev, common_tile_statusregs_ranges,
-			ARRAY_SIZE(common_tile_statusregs_ranges));
-		dump_statusregs_ranges(s, etdev,
-				       edgetpu_chip_tile_statusregs_ranges,
-				       edgetpu_chip_tile_statusregs_nranges);
-	}
-	dump_mboxes(s, etdev);
-	return 0;
-}
-
-static int statusregs_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, statusregs_show, inode->i_private);
-}
-
-static const struct file_operations statusregs_ops = {
-	.open = statusregs_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.owner = THIS_MODULE,
-	.release = single_release,
-};
-#endif /* EDGETPU_FEATURE_MOBILE */
 
 static int mappings_show(struct seq_file *s, void *data)
 {
@@ -956,10 +814,6 @@ static void edgetpu_fs_setup_debugfs(struct edgetpu_dev *etdev)
 			    etdev, &mappings_ops);
 	debugfs_create_file("wakelock", 0220, etdev->d_entry, etdev,
 			    &fops_wakelock);
-#ifndef EDGETPU_FEATURE_MOBILE
-	debugfs_create_file("statusregs", 0440, etdev->d_entry, etdev,
-			    &statusregs_ops);
-#endif
 }
 
 static ssize_t firmware_crash_count_show(
@@ -1001,8 +855,7 @@ static ssize_t clients_show(
 				"pid %d tgid %d group %d wakelock %d\n",
 				lc->client->pid, lc->client->tgid,
 				group ? group->workload_id : -1,
-				NO_WAKELOCK(lc->client->wakelock) ?
-				0 : lc->client->wakelock->req_count);
+				lc->client->wakelock->req_count);
 		mutex_unlock(&lc->client->group_lock);
 		buf += len;
 		ret += len;

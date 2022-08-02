@@ -18,13 +18,6 @@
 #include "edgetpu-sw-watchdog.h"
 #include "edgetpu-wakelock.h"
 
-#if IS_ENABLED(CONFIG_EDGETPU_TEST)
-#include "unittests/factory/fake-edgetpu-firmware.h"
-#define SIM_PCHANNEL(etdev) fake_edgetpu_firmware_sim_pchannel(etdev)
-#else
-#define SIM_PCHANNEL(...)
-#endif
-
 #define EDGETPU_ASYNC_POWER_DOWN_RETRY_DELAY	200
 
 struct edgetpu_pm_private {
@@ -260,104 +253,6 @@ bool edgetpu_is_powered(struct edgetpu_dev *etdev)
 	return etpm->p->power_up_count;
 }
 
-#define etdev_poll_power_state(etdev, val, cond)                               \
-	({                                                                     \
-		SIM_PCHANNEL(etdev);                                           \
-		readl_relaxed_poll_timeout(                                    \
-			etdev->regs.mem + EDGETPU_REG_POWER_CONTROL, val,      \
-			cond, 1, EDGETPU_PCHANNEL_STATE_CHANGE_TIMEOUT);       \
-	})
-
-static int pchannel_state_change_request(struct edgetpu_dev *etdev, int state)
-{
-	int ret;
-	u32 val;
-	bool deny = false;
-
-	/* P-channel state change request and handshake. */
-	val = edgetpu_dev_read_32(etdev, EDGETPU_REG_POWER_CONTROL);
-	/* Phase 1: Drive PREQ to 0 */
-	if (val & PREQ) {
-		edgetpu_dev_write_32(etdev, EDGETPU_REG_POWER_CONTROL,
-				     val & ~(PREQ));
-		ret = etdev_poll_power_state(etdev, val, (val & PACCEPT) == 0);
-		if (ret) {
-			etdev_err(etdev, "p-channel request timeout\n");
-			return ret;
-		}
-	}
-	/* Phase 2: Request state */
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_POWER_CONTROL,
-			     (state << PSTATE_SHIFT) | PREQ);
-	SIM_PCHANNEL(etdev);
-
-	/* don't wait for state accept if STATE RUN */
-	if (state == STATE_RUN)
-		return 0;
-
-	/* Phase 3: CPU acknowledgment */
-	ret = etdev_poll_power_state(etdev, val,
-				     (val & PACCEPT) || (val & PDENY));
-	if (val & PDENY) {
-		edgetpu_dev_write_32(etdev, EDGETPU_REG_POWER_CONTROL,
-				     val & ~(state << PSTATE_SHIFT));
-		etdev_dbg(etdev, "p-channel state change request denied\n");
-		deny = true;
-	}
-	if (ret) {
-		etdev_dbg(etdev, "p-channel state change request timeout\n");
-		return ret;
-	}
-	/* Phase 4. Drive PREQ to 0 */
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_POWER_CONTROL, val & ~(PREQ));
-	ret = etdev_poll_power_state(
-		etdev, val, ((val & PACCEPT) == 0) && ((val & PDENY) == 0));
-
-	return deny ? -EACCES : ret;
-}
-
-int edgetpu_pchannel_power_down(struct edgetpu_dev *etdev, bool wait_on_pactive)
-{
-	int ret;
-	int tries = EDGETPU_PCHANNEL_STATE_CHANGE_RETRIES;
-	u32 val;
-
-	etdev_dbg(etdev, "Starting p-channel power down\n");
-	edgetpu_sw_wdt_stop(etdev);
-	ret = edgetpu_kci_shutdown(etdev->etkci);
-	if (ret) {
-		etdev_err(etdev, "p-channel power down routing failed: %d",
-			  ret);
-		return ret;
-	}
-	if (wait_on_pactive) {
-		/* wait for PACTIVE[1] goes low. */
-		ret = etdev_poll_power_state(etdev, val, (val & PACTIVE) == 0);
-		tries = 1;
-	}
-	if (ret)
-		return ret;
-	do {
-		ret = pchannel_state_change_request(etdev, STATE_SHUTDOWN);
-		tries--;
-		/* Throttle the retry */
-		if (tries && ret == -EACCES)
-			usleep_range(EDGETPU_PCHANNEL_RETRY_DELAY_MIN,
-				     EDGETPU_PCHANNEL_RETRY_DELAY_MAX);
-	} while (ret && tries);
-
-	if (ret)
-		etdev_err(etdev, "p-channel shutdown state change failed: %d",
-			  ret);
-
-	return ret;
-}
-
-void edgetpu_pchannel_power_up(struct edgetpu_dev *etdev)
-{
-	pchannel_state_change_request(etdev, STATE_RUN);
-}
-
 #if IS_ENABLED(CONFIG_PM_SLEEP)
 
 int edgetpu_pm_suspend(struct edgetpu_dev *etdev)
@@ -375,8 +270,7 @@ int edgetpu_pm_suspend(struct edgetpu_dev *etdev)
 	if (!mutex_trylock(&etdev->clients_lock))
 		return -EAGAIN;
 	for_each_list_device_client(etdev, lc) {
-		if (NO_WAKELOCK(lc->client->wakelock) ||
-		    !lc->client->wakelock->req_count)
+		if (!lc->client->wakelock->req_count)
 			continue;
 		etdev_warn_ratelimited(etdev,
 				       "client pid %d tgid %d count %d\n",
