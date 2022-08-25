@@ -67,28 +67,6 @@ void edgetpu_mark_probe_fail(struct edgetpu_dev *etdev)
 {
 }
 
-void edgetpu_chip_handle_reverse_kci(struct edgetpu_dev *etdev,
-				     struct gcip_kci_response_element *resp)
-{
-	int ret;
-
-	switch (resp->code) {
-	case RKCI_CODE_PM_QOS_BTS:
-		/* FW indicates to ignore the request by setting them to undefined values. */
-		if (resp->retval != (typeof(resp->retval))~0ull)
-			mobile_pm_set_pm_qos(etdev, resp->retval);
-		if (resp->status != (typeof(resp->status))~0ull)
-			mobile_pm_set_bts(etdev, resp->status);
-		ret = edgetpu_kci_resp_rkci_ack(etdev, resp);
-		if (ret)
-			etdev_err(etdev, "failed to send rkci resp for %llu (%d)", resp->seq, ret);
-		break;
-	default:
-		etdev_warn(etdev, "%s: Unrecognized KCI request: %u\n", __func__, resp->code);
-		break;
-	}
-}
-
 int edgetpu_chip_get_ext_mailbox_index(u32 mbox_type, u32 *start, u32 *end)
 {
 	switch (mbox_type) {

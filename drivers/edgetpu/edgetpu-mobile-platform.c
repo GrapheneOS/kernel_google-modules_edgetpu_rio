@@ -18,6 +18,7 @@
 #include "edgetpu-iremap-pool.h"
 #include "edgetpu-mmu.h"
 #include "edgetpu-mobile-platform.h"
+#include "edgetpu-soc.h"
 #include "edgetpu-telemetry.h"
 #include "mobile-firmware.h"
 #include "mobile-pm.h"
@@ -220,29 +221,6 @@ void edgetpu_chip_remove_mmu(struct edgetpu_dev *etdev)
 	edgetpu_mmu_detach(etdev);
 }
 
-static int edgetpu_platform_parse_ssmt(struct edgetpu_mobile_platform_dev *etmdev)
-{
-	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
-	struct platform_device *pdev = to_platform_device(etdev->dev);
-	struct resource *res;
-	int ret;
-	void __iomem *ssmt_base;
-
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "ssmt");
-	if (!res) {
-		etdev_warn(etdev, "Failed to find SSMT register base");
-		return -EINVAL;
-	}
-	ssmt_base = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR(ssmt_base)) {
-		ret = PTR_ERR(ssmt_base);
-		etdev_warn(etdev, "Failed to map SSMT register base: %d", ret);
-		return ret;
-	}
-	etmdev->ssmt_base = ssmt_base;
-	return 0;
-}
-
 static int edgetpu_platform_setup_irq(struct edgetpu_mobile_platform_dev *etmdev)
 {
 	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
@@ -331,6 +309,7 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 	platform_set_drvdata(pdev, etdev);
 	etdev->dev = dev;
 	etdev->num_cores = EDGETPU_NUM_CORES;
+	etdev->num_ssmts = EDGETPU_NUM_SSMTS;
 
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (IS_ERR_OR_NULL(r)) {
@@ -346,14 +325,10 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		return -ENODEV;
 	}
 
+	edgetpu_soc_init(etdev);
+
 	mutex_init(&etmdev->platform_pwr.policy_lock);
 	etmdev->platform_pwr.curr_policy = TPU_POLICY_MAX;
-
-	ret = edgetpu_chip_pm_create(etdev);
-	if (ret) {
-		dev_err(dev, "Failed to initialize PM interface: %d", ret);
-		return ret;
-	}
 
 	ret = edgetpu_platform_setup_fw_region(etmdev);
 	if (ret) {
@@ -390,10 +365,6 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		dev_err(dev, "IRQ setup failed: %d", ret);
 		goto out_remove_device;
 	}
-
-	ret = edgetpu_platform_parse_ssmt(etmdev);
-	if (ret)
-		dev_warn(dev, "SSMT setup failed (%d). Context isolation not enforced", ret);
 
 	etmdev->log_mem = devm_kcalloc(dev, etdev->num_cores, sizeof(*etmdev->log_mem), GFP_KERNEL);
 	if (!etmdev->log_mem) {
@@ -469,6 +440,6 @@ static int edgetpu_mobile_platform_remove(struct platform_device *pdev)
 	edgetpu_platform_cleanup_fw_region(etmdev);
 	edgetpu_pm_put(etdev->pm);
 	edgetpu_pm_shutdown(etdev, true);
-	mobile_pm_destroy(etdev);
+	edgetpu_mobile_pm_destroy(etdev);
 	return 0;
 }

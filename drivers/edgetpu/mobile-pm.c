@@ -11,8 +11,6 @@
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
 #include <soc/google/bcl.h>
-#include <soc/google/bts.h>
-#include <soc/google/exynos_pm_qos.h>
 
 #include "edgetpu-config.h"
 #include "edgetpu-firmware.h"
@@ -27,19 +25,9 @@
 #include "edgetpu-pm.c"
 #include "edgetpu-soc.h"
 
-/*
- * Encode INT/MIF values as a 16 bit pair in the 32-bit return value
- * (in units of MHz, to provide enough range)
- */
-#define PM_QOS_INT_SHIFT                (16)
-#define PM_QOS_MIF_MASK                 (0xFFFF)
-#define PM_QOS_FACTOR                   (1000)
-
 static int power_state = TPU_DEFAULT_POWER_STATE;
 
 module_param(power_state, int, 0660);
-
-#define MAX_VOLTAGE_VAL 1250000
 
 enum edgetpu_pwr_state edgetpu_active_states[EDGETPU_NUM_STATES] = {
 	TPU_ACTIVE_UUD,
@@ -49,11 +37,6 @@ enum edgetpu_pwr_state edgetpu_active_states[EDGETPU_NUM_STATES] = {
 };
 
 uint32_t *edgetpu_states_display = edgetpu_active_states;
-
-/* TODO(b/240363978): Remove once ACPM is ready. */
-#if !IS_ENABLED(CONFIG_EDGETPU_TEST)
-unsigned long exynos_acpm_rate = 0;
-#endif /* IS_ENABLED(CONFIG_EDGETPU_TEST) */
 
 static int mobile_pwr_state_init(struct device *dev)
 {
@@ -81,139 +64,6 @@ static int mobile_pwr_state_init(struct device *dev)
 	}
 
 	return ret;
-}
-
-static int edgetpu_core_rate_get(void *data, u64 *val)
-{
-	*val = edgetpu_soc_pm_get_rate(TPU_DEBUG_REQ | TPU_CLK_CORE_DEBUG);
-	return 0;
-}
-
-static int edgetpu_core_rate_set(void *data, u64 val)
-{
-	unsigned long dbg_rate_req;
-
-	dbg_rate_req = TPU_DEBUG_REQ | TPU_CLK_CORE_DEBUG;
-	dbg_rate_req |= val;
-
-	return edgetpu_soc_pm_set_rate(dbg_rate_req);
-}
-
-static int edgetpu_ctl_rate_get(void *data, u64 *val)
-{
-	*val = edgetpu_soc_pm_get_rate(TPU_DEBUG_REQ | TPU_CLK_CTL_DEBUG);
-	return 0;
-}
-
-static int edgetpu_ctl_rate_set(void *data, u64 val)
-{
-	unsigned long dbg_rate_req;
-
-	dbg_rate_req = TPU_DEBUG_REQ | TPU_CLK_CTL_DEBUG;
-	dbg_rate_req |= 1000;
-
-	return edgetpu_soc_pm_set_rate(dbg_rate_req);
-}
-
-static int edgetpu_axi_rate_get(void *data, u64 *val)
-{
-	*val = edgetpu_soc_pm_get_rate(TPU_DEBUG_REQ | TPU_CLK_AXI_DEBUG);
-	return 0;
-}
-
-static int edgetpu_axi_rate_set(void *data, u64 val)
-{
-	unsigned long dbg_rate_req;
-
-	dbg_rate_req = TPU_DEBUG_REQ | TPU_CLK_AXI_DEBUG;
-	dbg_rate_req |= 1000;
-
-	return edgetpu_soc_pm_set_rate(dbg_rate_req);
-}
-
-static int edgetpu_apb_rate_get(void *data, u64 *val)
-{
-	*val = edgetpu_soc_pm_get_rate(TPU_DEBUG_REQ | TPU_CLK_APB_DEBUG);
-	return 0;
-}
-
-static int edgetpu_uart_rate_get(void *data, u64 *val)
-{
-	*val = edgetpu_soc_pm_get_rate(TPU_DEBUG_REQ | TPU_CLK_UART_DEBUG);
-	return 0;
-}
-
-static int edgetpu_vdd_int_m_set(void *data, u64 val)
-{
-	struct device *dev = (struct device *)data;
-	unsigned long dbg_rate_req;
-
-	if (val > MAX_VOLTAGE_VAL) {
-		dev_err(dev, "Preventing INT_M voltage > %duV",
-			MAX_VOLTAGE_VAL);
-		return -EINVAL;
-	}
-
-	dbg_rate_req = TPU_DEBUG_REQ | TPU_VDD_INT_M_DEBUG;
-	dbg_rate_req |= val;
-
-	return edgetpu_soc_pm_set_rate(dbg_rate_req);
-}
-
-static int edgetpu_vdd_int_m_get(void *data, u64 *val)
-{
-	*val = edgetpu_soc_pm_get_rate(TPU_DEBUG_REQ | TPU_VDD_INT_M_DEBUG);
-	return 0;
-}
-
-static int edgetpu_vdd_tpu_set(void *data, u64 val)
-{
-	int ret;
-	struct device *dev = (struct device *)data;
-	unsigned long dbg_rate_req;
-
-	if (val > MAX_VOLTAGE_VAL) {
-		dev_err(dev, "Preventing VDD_TPU voltage > %duV",
-			MAX_VOLTAGE_VAL);
-		return -EINVAL;
-	}
-
-	dbg_rate_req = TPU_DEBUG_REQ | TPU_VDD_TPU_DEBUG;
-	dbg_rate_req |= val;
-
-	ret = edgetpu_soc_pm_set_rate(dbg_rate_req);
-	return ret;
-}
-
-static int edgetpu_vdd_tpu_get(void *data, u64 *val)
-{
-	*val = edgetpu_soc_pm_get_rate(TPU_DEBUG_REQ | TPU_VDD_TPU_DEBUG);
-	return 0;
-}
-
-static int edgetpu_vdd_tpu_m_set(void *data, u64 val)
-{
-	int ret;
-	struct device *dev = (struct device *)data;
-	unsigned long dbg_rate_req;
-
-	if (val > MAX_VOLTAGE_VAL) {
-		dev_err(dev, "Preventing VDD_TPU voltage > %duV",
-			MAX_VOLTAGE_VAL);
-		return -EINVAL;
-	}
-
-	dbg_rate_req = TPU_DEBUG_REQ | TPU_VDD_TPU_M_DEBUG;
-	dbg_rate_req |= val;
-
-	ret = edgetpu_soc_pm_set_rate(dbg_rate_req);
-	return ret;
-}
-
-static int edgetpu_vdd_tpu_m_get(void *data, u64 *val)
-{
-	*val = edgetpu_soc_pm_get_rate(TPU_DEBUG_REQ | TPU_VDD_TPU_M_DEBUG);
-	return 0;
 }
 
 static int mobile_pwr_state_set_locked(struct edgetpu_mobile_platform_dev *etmdev, u64 val)
@@ -366,29 +216,6 @@ DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_pwr_state, mobile_pwr_state_get, mobile_pwr_st
 DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_min_pwr_state, mobile_min_pwr_state_get, mobile_min_pwr_state_set,
 			"%llu\n");
 
-DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_core_rate, edgetpu_core_rate_get,
-			 edgetpu_core_rate_set, "%llu\n");
-
-DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_ctl_rate, edgetpu_ctl_rate_get,
-			 edgetpu_ctl_rate_set, "%llu\n");
-
-DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_axi_rate, edgetpu_axi_rate_get,
-			 edgetpu_axi_rate_set, "%llu\n");
-
-DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_apb_rate, edgetpu_apb_rate_get, NULL,
-			 "%llu\n");
-
-DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_uart_rate, edgetpu_uart_rate_get, NULL,
-			 "%llu\n");
-
-DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_vdd_int_m, edgetpu_vdd_int_m_get,
-			 edgetpu_vdd_int_m_set, "%llu\n");
-
-DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_vdd_tpu, edgetpu_vdd_tpu_get,
-			 edgetpu_vdd_tpu_set, "%llu\n");
-DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_vdd_tpu_m, edgetpu_vdd_tpu_m_get,
-			 edgetpu_vdd_tpu_m_set, "%llu\n");
-
 static int mobile_get_initial_pwr_state(struct device *dev)
 {
 	switch (power_state) {
@@ -484,30 +311,6 @@ static int mobile_power_up(struct edgetpu_pm *etpm)
 	return ret;
 }
 
-static void mobile_pm_cleanup_bts_scenario(struct edgetpu_dev *etdev)
-{
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
-	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
-	int performance_scenario = platform_pwr->performance_scenario;
-
-	if (!performance_scenario)
-		return;
-
-	mutex_lock(&platform_pwr->scenario_lock);
-	while (platform_pwr->scenario_count) {
-		int ret = bts_del_scenario(performance_scenario);
-
-		if (ret) {
-			platform_pwr->scenario_count = 0;
-			etdev_warn_once(etdev, "error %d in cleaning up BTS scenario %u\n", ret,
-					performance_scenario);
-			break;
-		}
-		platform_pwr->scenario_count--;
-	}
-	mutex_unlock(&platform_pwr->scenario_lock);
-}
-
 static void mobile_firmware_down(struct edgetpu_dev *etdev)
 {
 	int ret = edgetpu_kci_shutdown(etdev->etkci);
@@ -569,11 +372,7 @@ static int mobile_power_down(struct edgetpu_pm *etpm)
 
 	mobile_pwr_state_set(etdev, TPU_OFF);
 
-	/* Remove our vote for INT/MIF state (if any) */
-	exynos_pm_qos_update_request(&platform_pwr->int_min, 0);
-	exynos_pm_qos_update_request(&platform_pwr->mif_min, 0);
-
-	mobile_pm_cleanup_bts_scenario(etdev);
+	edgetpu_soc_pm_power_down(etdev);
 
 	/*
 	 * It should be impossible that power_down() is called when secure_client is set.
@@ -602,14 +401,6 @@ static int mobile_pm_after_create(struct edgetpu_pm *etpm)
 	mutex_init(&platform_pwr->state_lock);
 	mutex_init(&platform_pwr->scenario_lock);
 
-	exynos_pm_qos_add_request(&platform_pwr->int_min, PM_QOS_DEVICE_THROUGHPUT, 0);
-	exynos_pm_qos_add_request(&platform_pwr->mif_min, PM_QOS_BUS_THROUGHPUT, 0);
-
-	platform_pwr->performance_scenario = bts_get_scenindex("tpu_performance");
-	if (!platform_pwr->performance_scenario)
-		dev_warn(etdev->dev, "tpu_performance BTS scenario not found\n");
-	platform_pwr->scenario_count = 0;
-
 	ret = mobile_pwr_state_set(etdev, mobile_get_initial_pwr_state(dev));
 	if (ret)
 		return ret;
@@ -623,14 +414,7 @@ static int mobile_pm_after_create(struct edgetpu_pm *etpm)
 	debugfs_create_file("min_state", 0660, platform_pwr->debugfs_dir, etdev,
 			    &fops_tpu_min_pwr_state);
 	debugfs_create_file("policy", 0660, platform_pwr->debugfs_dir, etdev, &fops_tpu_pwr_policy);
-	debugfs_create_file("vdd_tpu", 0660, platform_pwr->debugfs_dir, dev, &fops_tpu_vdd_tpu);
-	debugfs_create_file("vdd_tpu_m", 0660, platform_pwr->debugfs_dir, dev, &fops_tpu_vdd_tpu_m);
-	debugfs_create_file("vdd_int_m", 0660, platform_pwr->debugfs_dir, dev, &fops_tpu_vdd_int_m);
-	debugfs_create_file("core_rate", 0660, platform_pwr->debugfs_dir, dev, &fops_tpu_core_rate);
-	debugfs_create_file("ctl_rate", 0660, platform_pwr->debugfs_dir, dev, &fops_tpu_ctl_rate);
-	debugfs_create_file("axi_rate", 0660, platform_pwr->debugfs_dir, dev, &fops_tpu_axi_rate);
-	debugfs_create_file("apb_rate", 0440, platform_pwr->debugfs_dir, dev, &fops_tpu_apb_rate);
-	debugfs_create_file("uart_rate", 0440, platform_pwr->debugfs_dir, dev, &fops_tpu_uart_rate);
+	edgetpu_soc_pm_init(etdev);
 
 	if (platform_pwr->after_create)
 		ret = platform_pwr->after_create(etdev);
@@ -649,9 +433,7 @@ static void mobile_pm_before_destroy(struct edgetpu_pm *etpm)
 
 	debugfs_remove_recursive(platform_pwr->debugfs_dir);
 	pm_runtime_disable(etpm->etdev->dev);
-	mobile_pm_cleanup_bts_scenario(etdev);
-	exynos_pm_qos_remove_request(&platform_pwr->int_min);
-	exynos_pm_qos_remove_request(&platform_pwr->mif_min);
+	edgetpu_soc_pm_exit(etdev);
 }
 
 static struct edgetpu_pm_handlers mobile_pm_handlers = {
@@ -661,92 +443,12 @@ static struct edgetpu_pm_handlers mobile_pm_handlers = {
 	.power_down = mobile_power_down,
 };
 
-int mobile_pm_create(struct edgetpu_dev *etdev)
+int edgetpu_mobile_pm_create(struct edgetpu_dev *etdev)
 {
 	return edgetpu_pm_create(etdev, &mobile_pm_handlers);
 }
 
-void mobile_pm_destroy(struct edgetpu_dev *etdev)
+void edgetpu_mobile_pm_destroy(struct edgetpu_dev *etdev)
 {
 	edgetpu_pm_destroy(etdev);
-}
-
-void mobile_pm_set_pm_qos(struct edgetpu_dev *etdev, u32 pm_qos_val)
-{
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
-	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
-	s32 int_val = (pm_qos_val >> PM_QOS_INT_SHIFT) * PM_QOS_FACTOR;
-	s32 mif_val = (pm_qos_val & PM_QOS_MIF_MASK) * PM_QOS_FACTOR;
-
-	etdev_dbg(etdev, "%s: pm_qos request - int = %d mif = %d\n", __func__, int_val, mif_val);
-
-	exynos_pm_qos_update_request(&platform_pwr->int_min, int_val);
-	exynos_pm_qos_update_request(&platform_pwr->mif_min, mif_val);
-}
-
-static void mobile_pm_activate_bts_scenario(struct edgetpu_dev *etdev)
-{
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
-	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
-	int performance_scenario = platform_pwr->performance_scenario;
-
-	/* bts_add_scenario() keeps track of reference count internally.*/
-	int ret;
-
-	if (!performance_scenario)
-		return;
-	mutex_lock(&platform_pwr->scenario_lock);
-	ret = bts_add_scenario(performance_scenario);
-	if (ret)
-		etdev_warn_once(etdev, "error %d adding BTS scenario %u\n", ret,
-				performance_scenario);
-	else
-		platform_pwr->scenario_count++;
-
-	etdev_dbg(etdev, "BTS Scenario activated: %d\n", platform_pwr->scenario_count);
-	mutex_unlock(&platform_pwr->scenario_lock);
-}
-
-static void mobile_pm_deactivate_bts_scenario(struct edgetpu_dev *etdev)
-{
-	/* bts_del_scenario() keeps track of reference count internally.*/
-	int ret;
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
-	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
-	int performance_scenario = platform_pwr->performance_scenario;
-
-	if (!performance_scenario)
-		return;
-	mutex_lock(&platform_pwr->scenario_lock);
-	if (!platform_pwr->scenario_count) {
-		etdev_warn(etdev, "Unbalanced bts deactivate\n");
-		mutex_unlock(&platform_pwr->scenario_lock);
-		return;
-	}
-	ret = bts_del_scenario(performance_scenario);
-	if (ret)
-		etdev_warn_once(etdev, "error %d deleting BTS scenario %u\n", ret,
-				performance_scenario);
-	else
-		platform_pwr->scenario_count--;
-
-	etdev_dbg(etdev, "BTS Scenario deactivated: %d\n", platform_pwr->scenario_count);
-	mutex_unlock(&platform_pwr->scenario_lock);
-}
-
-void mobile_pm_set_bts(struct edgetpu_dev *etdev, u16 bts_val)
-{
-	etdev_dbg(etdev, "%s: bts request - val = %u\n", __func__, bts_val);
-
-	switch (bts_val) {
-	case 0:
-		mobile_pm_deactivate_bts_scenario(etdev);
-		break;
-	case 1:
-		mobile_pm_activate_bts_scenario(etdev);
-		break;
-	default:
-		etdev_warn(etdev, "%s: invalid BTS request value: %u\n", __func__, bts_val);
-		break;
-	}
 }

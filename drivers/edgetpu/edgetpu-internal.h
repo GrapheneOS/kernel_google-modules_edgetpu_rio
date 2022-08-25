@@ -170,6 +170,7 @@ struct edgetpu_dev {
 	struct device *dev;	   /* platform/pci bus device */
 	uint num_ifaces;		   /* Number of device interfaces */
 	uint num_cores; /* Number of cores */
+	uint num_ssmts; /* Number of SSMTs */
 	/*
 	 * Array of device interfaces
 	 * First element is the default interface
@@ -404,14 +405,6 @@ int edgetpu_chip_setup_mmu(struct edgetpu_dev *etdev);
  * This is called during device removal.
  */
 void edgetpu_chip_remove_mmu(struct edgetpu_dev *etdev);
-
-/*
- * Handle chip-specific incoming requests from firmware over KCI
- * Note: This will get called from the system's work queue.
- * Code should not block for extended periods of time
- */
-void edgetpu_chip_handle_reverse_kci(struct edgetpu_dev *etdev,
-				     struct gcip_kci_response_element *resp);
 
 /* Device -> Core API */
 

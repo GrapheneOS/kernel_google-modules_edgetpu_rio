@@ -80,7 +80,7 @@ struct edgetpu_mobile_platform_dev {
 	 */
 	struct device *gsa_dev;
 	/* Virtual address of the SSMT block for this chip. */
-	void __iomem *ssmt_base;
+	void __iomem **ssmt_base;
 	/* Coherent log buffer */
 	struct edgetpu_coherent_mem *log_mem;
 	/* Coherent trace buffer */

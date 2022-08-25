@@ -12,6 +12,10 @@
 
 #define EDGETPU_NUM_CORES 2
 
+#define EDGETPU_NUM_SSMTS 2
+
+#define EDGETPU_MAX_STREAM_ID 64
+
 /* 1 context per VII/group plus 1 for KCI */
 #define EDGETPU_NCONTEXTS 16
 /* Max number of virtual context IDs that can be allocated for one device. */
@@ -21,9 +25,6 @@
 
 /* Placeholder value */
 #define EDGETPU_TZ_MAILBOX_ID 31
-
-/* Responds to PMQoS-BTS RKCI */
-#define EDGETPU_FEATURE_RKCI_RESPONSE
 
 /*
  * Size of the area in remapped DRAM reserved for firmware code and internal

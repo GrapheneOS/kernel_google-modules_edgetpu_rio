@@ -446,9 +446,17 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 			etdev->dev_name, ret);
 		goto remove_dev;
 	}
+
+	/* Init PM in case the platform needs power up actions before MMU setup and such. */
+	ret = edgetpu_chip_pm_create(etdev);
+	if (ret) {
+		etdev_err(etdev, "Failed to initialize PM interface: %d", ret);
+		goto remove_mboxes;
+	}
+
 	ret = edgetpu_chip_setup_mmu(etdev);
 	if (ret)
-		goto remove_dev;
+		goto remove_mboxes;
 
 	edgetpu_usage_stats_init(etdev);
 
@@ -481,6 +489,8 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 remove_usage_stats:
 	edgetpu_usage_stats_exit(etdev);
 	edgetpu_chip_remove_mmu(etdev);
+remove_mboxes:
+	edgetpu_mailbox_remove_all(etdev->mailbox_manager);
 remove_dev:
 	edgetpu_mark_probe_fail(etdev);
 	edgetpu_fs_remove(etdev);

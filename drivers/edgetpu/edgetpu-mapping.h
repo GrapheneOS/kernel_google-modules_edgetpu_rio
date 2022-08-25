@@ -160,11 +160,8 @@ static inline int mmu_flag_to_iommu_prot(u32 mmu_flags, struct device *dev,
 {
 	int prot = 0;
 
-	if (mmu_flags & EDGETPU_MMU_COHERENT) {
-#ifdef EDGETPU_IS_DMA_COHERENT
+	if (mmu_flags & EDGETPU_MMU_COHERENT)
 		prot = IOMMU_CACHE;
-#endif
-	}
 	prot |= __dma_dir_to_iommu_prot(dir);
 	return prot;
 }

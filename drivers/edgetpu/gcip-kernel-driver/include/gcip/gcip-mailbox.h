@@ -13,6 +13,7 @@
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/wait.h>
+#include <linux/workqueue.h>
 
 #define CIRC_QUEUE_WRAPPED(idx, wrap_bit) ((idx)&wrap_bit)
 #define CIRC_QUEUE_INDEX_MASK(wrap_bit) (wrap_bit - 1)

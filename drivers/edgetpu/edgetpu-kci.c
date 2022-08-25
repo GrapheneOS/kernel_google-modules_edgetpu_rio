@@ -20,6 +20,7 @@
 #include "edgetpu-iremap-pool.h"
 #include "edgetpu-kci.h"
 #include "edgetpu-mmu.h"
+#include "edgetpu-soc.h"
 #include "edgetpu-telemetry.h"
 #include "edgetpu-usage-stats.h"
 
@@ -145,7 +146,7 @@ static void edgetpu_reverse_kci_handle_response(struct gcip_kci *kci,
 	struct edgetpu_dev *etdev = mailbox->etdev;
 
 	if (resp->code <= GCIP_RKCI_CHIP_CODE_LAST) {
-		edgetpu_chip_handle_reverse_kci(etdev, resp);
+		edgetpu_soc_handle_reverse_kci(etdev, resp);
 		return;
 	}
 

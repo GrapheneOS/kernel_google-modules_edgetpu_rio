@@ -168,5 +168,5 @@ int edgetpu_chip_pm_create(struct edgetpu_dev *etdev)
 	platform_pwr->lpm_down = rio_lpm_down;
 	platform_pwr->block_down = rio_block_down;
 
-	return mobile_pm_create(etdev);
+	return edgetpu_mobile_pm_create(etdev);
 }

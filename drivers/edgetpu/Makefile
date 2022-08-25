@@ -27,10 +27,19 @@ rio-objs	:= rio-core.o rio-debug-dump.o rio-device-group.o rio-device.o \
 		   rio-thermal.o rio-usage-stats.o rio-wakelock.o rio-external.o \
 		   rio-soc.o $(edgetpu-objs)
 
+
 ccflags-y	+= -I$(KERNEL_SRC)/../private/google-modules/edgetpu/rio/drivers/edgetpu/include
 KBUILD_OPTIONS	+= CONFIG_RIO=m
 include $(KERNEL_SRC)/../private/google-modules/soc/gs/Makefile.include
 
-modules modules_install clean:
+GCIP_DIR=gcip-kernel-driver/drivers/gcip
+
+modules modules_install:
+	$(MAKE) -C $(KERNEL_SRC) M=$(M)/$(GCIP_DIR) W=1 gcip.o
+	$(MAKE) -C $(KERNEL_SRC) M=$(M) W=1 $(KBUILD_OPTIONS) \
+	EXTRA_CFLAGS="$(EXTRA_CFLAGS)" KBUILD_EXTRA_SYMBOLS="$(EXTRA_SYMBOLS)" $(@)
+clean:
+	$(MAKE) -C $(KERNEL_SRC) M=$(M)/$(GCIP_DIR) W=1 \
+	EXTRA_CFLAGS="$(EXTRA_CFLAGS)" KBUILD_EXTRA_SYMBOLS="$(EXTRA_SYMBOLS)" $(@)
 	$(MAKE) -C $(KERNEL_SRC) M=$(M) W=1 $(KBUILD_OPTIONS) \
 	EXTRA_CFLAGS="$(EXTRA_CFLAGS)" KBUILD_EXTRA_SYMBOLS="$(EXTRA_SYMBOLS)" $(@)

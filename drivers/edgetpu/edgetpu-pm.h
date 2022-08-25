@@ -72,6 +72,12 @@ void edgetpu_pm_put(struct edgetpu_pm *etpm);
 int edgetpu_pm_create(struct edgetpu_dev *etdev,
 		      const struct edgetpu_pm_handlers *handlers);
 
+/*
+ * Wrapper for chip-specific implementation.
+ * Typically calls mobile_pm_create after initializing the platform_pwr struct.
+ */
+int edgetpu_chip_pm_create(struct edgetpu_dev *etdev);
+
 /* Destroy the power management interface associated with an edgetpu device */
 void edgetpu_pm_destroy(struct edgetpu_dev *etdev);
 
