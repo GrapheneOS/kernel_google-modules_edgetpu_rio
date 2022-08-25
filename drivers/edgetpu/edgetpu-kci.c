@@ -158,7 +158,7 @@ static void edgetpu_reverse_kci_handle_response(struct gcip_kci *kci,
 		edgetpu_handle_job_lockup(etdev, resp->retval);
 		break;
 	default:
-		etdev_warn(etdev, "%s: Unrecognized KCI request: %#x\n", __func__, resp->code);
+		etdev_warn(etdev, "Unrecognized RKCI request: %#x\n", resp->code);
 	}
 }
 
@@ -394,8 +394,7 @@ enum gcip_fw_flavor edgetpu_kci_fw_info(struct edgetpu_kci *etkci, struct gcip_f
 
 	/* If allocation failed still try handshake without full fw_info */
 	if (ret) {
-		etdev_warn(etdev, "%s: error setting up fw info buffer: %d",
-			   __func__, ret);
+		etdev_warn(etdev, "error setting up fw info buffer: %d", ret);
 		memset(fw_info, 0, sizeof(*fw_info));
 	} else {
 		memset(mem.vaddr, 0, sizeof(*fw_info));
@@ -485,8 +484,7 @@ int edgetpu_kci_update_usage_locked(struct edgetpu_dev *etdev)
 				   EDGETPU_CONTEXT_KCI);
 
 	if (ret) {
-		etdev_warn_once(etdev, "%s: failed to allocate usage buffer",
-				__func__);
+		etdev_warn_once(etdev, "failed to allocate usage buffer");
 		return ret;
 	}
 
@@ -500,7 +498,7 @@ int edgetpu_kci_update_usage_locked(struct edgetpu_dev *etdev)
 	else if (ret == GCIP_KCI_ERROR_OK)
 		edgetpu_usage_stats_process_buffer(etdev, mem.vaddr);
 	else if (ret != -ETIMEDOUT)
-		etdev_warn_once(etdev, "%s: error %d", __func__, ret);
+		etdev_warn_once(etdev, "error %d", ret);
 
 	edgetpu_iremap_free(etdev, &mem, EDGETPU_CONTEXT_KCI);
 

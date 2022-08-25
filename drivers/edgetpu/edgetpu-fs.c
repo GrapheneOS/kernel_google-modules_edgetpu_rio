@@ -514,8 +514,7 @@ static int edgetpu_ioctl_acquire_wakelock(struct edgetpu_client *client)
 		ret = edgetpu_pm_get(client->etdev->pm);
 		edgetpu_thermal_unlock(thermal);
 		if (ret) {
-			etdev_warn(client->etdev, "%s: pm_get failed (%d)",
-				   __func__, ret);
+			etdev_warn(client->etdev, "pm_get failed (%d)", ret);
 			goto error_unlock;
 		}
 	}

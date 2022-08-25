@@ -156,7 +156,7 @@ static void rio_block_down(struct edgetpu_dev *etdev)
 		timeout_cnt++;
 	} while (timeout_cnt < SHUTDOWN_MAX_DELAY_COUNT);
 	if (timeout_cnt == SHUTDOWN_MAX_DELAY_COUNT)
-		etdev_warn(etdev, "%s: blk_shutdown timeout\n", __func__);
+		etdev_warn(etdev, "blk_shutdown timeout\n");
 }
 
 int edgetpu_chip_pm_create(struct edgetpu_dev *etdev)

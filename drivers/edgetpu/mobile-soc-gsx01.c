@@ -79,6 +79,9 @@ static int gsx01_parse_ssmt(struct edgetpu_mobile_platform_dev *etmdev)
 	if (!etmdev->ssmt_base)
 		return -ENOMEM;
 
+	if (unlikely(etdev->num_ssmts > 9))
+		return -EINVAL;
+
 	for (i = 0; i < etdev->num_ssmts; i++) {
 		sprintf(ssmt_name, "ssmt_d%d", i);
 
@@ -220,7 +223,7 @@ static void gsx01_set_bts(struct edgetpu_dev *etdev, u16 bts_val)
 		gsx01_activate_bts_scenario(etdev);
 		break;
 	default:
-		etdev_warn(etdev, "%s: invalid BTS request value: %u\n", __func__, bts_val);
+		etdev_warn(etdev, "invalid BTS request value: %u\n", bts_val);
 		break;
 	}
 }
@@ -255,7 +258,7 @@ void edgetpu_soc_handle_reverse_kci(struct edgetpu_dev *etdev,
 			etdev_err(etdev, "failed to send rkci resp for %llu (%d)", resp->seq, ret);
 		break;
 	default:
-		etdev_warn(etdev, "%s: Unrecognized KCI request: %u\n", __func__, resp->code);
+		etdev_warn(etdev, "Unrecognized KCI request: %u\n", resp->code);
 		break;
 	}
 }
