@@ -71,17 +71,10 @@ struct edgetpu_telemetry {
 
 	struct edgetpu_coherent_mem coherent_mem;
 	struct edgetpu_telemetry_header *header;
-	/*
-	 * If coherent_mem buffer is provided by the caller in
-	 * edgetpu_telemetry_init, the caller is responsible for
-	 * releasing/unmapping it.
-	 */
-	bool caller_mem;
 
 	struct eventfd_ctx *ctx; /* signal this to notify the runtime */
 	rwlock_t ctx_lock; /* protects ctx */
 	const char *name; /* for debugging */
-	bool inited; /* whether telemetry_init() succeeded */
 
 	/* Worker for handling data. */
 	struct work_struct work;

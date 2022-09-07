@@ -45,8 +45,6 @@ static int telemetry_kci(struct edgetpu_dev *etdev, struct edgetpu_telemetry *te
 {
 	int err;
 
-	if (!tel->inited)
-		return -ENODEV;
 	etdev_dbg(etdev, "Sending KCI %s", tel->name);
 	err = send_kci(etdev->etkci, tel->coherent_mem.tpu_addr, tel->coherent_mem.size);
 
@@ -69,8 +67,6 @@ static int telemetry_set_event(struct edgetpu_dev *etdev,
 	struct eventfd_ctx *ctx;
 	ulong flags;
 
-	if (!tel->inited)
-		return -ENODEV;
 	ctx = eventfd_ctx_fdget(eventfd);
 	if (IS_ERR(ctx))
 		return PTR_ERR(ctx);
@@ -89,8 +85,6 @@ static void telemetry_unset_event(struct edgetpu_dev *etdev,
 {
 	ulong flags;
 
-	if (!tel->inited)
-		return;
 	write_lock_irqsave(&tel->ctx_lock, flags);
 	if (tel->ctx)
 		eventfd_ctx_put(tel->ctx);
@@ -223,8 +217,6 @@ static void telemetry_worker(struct work_struct *work)
 static void telemetry_irq_handler(struct edgetpu_dev *etdev,
 				  struct edgetpu_telemetry *tel)
 {
-	if (!tel->inited)
-		return;
 	spin_lock(&tel->state_lock);
 
 	if (tel->state == EDGETPU_TELEMETRY_ENABLED &&
@@ -238,9 +230,6 @@ static void telemetry_irq_handler(struct edgetpu_dev *etdev,
 static void telemetry_mappings_show(struct edgetpu_telemetry *tel,
 				    struct seq_file *s)
 {
-	if (!tel->inited)
-		return;
-
 	seq_printf(s, "  %#llx %lu %s %#llx %pad\n",
 		   tel->coherent_mem.tpu_addr,
 		   DIV_ROUND_UP(tel->coherent_mem.size, PAGE_SIZE), tel->name,
@@ -249,9 +238,6 @@ static void telemetry_mappings_show(struct edgetpu_telemetry *tel,
 
 static void telemetry_inc_mmap_count(struct edgetpu_telemetry *tel, int dif)
 {
-	if (!tel->inited)
-		return;
-
 	mutex_lock(&tel->mmap_lock);
 	tel->mmapped_count += dif;
 	mutex_unlock(&tel->mmap_lock);
@@ -262,9 +248,6 @@ static int telemetry_mmap_buffer(struct edgetpu_dev *etdev,
 				 struct vm_area_struct *vma)
 {
 	int ret;
-
-	if (!tel->inited)
-		return -ENODEV;
 
 	mutex_lock(&tel->mmap_lock);
 
@@ -290,42 +273,12 @@ static int telemetry_init(struct edgetpu_dev *etdev, struct edgetpu_telemetry *t
 			  const char *name, struct edgetpu_coherent_mem *mem, const size_t size,
 			  void (*fallback)(struct edgetpu_telemetry *))
 {
-	const u32 flags = EDGETPU_MMU_32 | EDGETPU_MMU_HOST;
-	void *vaddr;
-	dma_addr_t dma_addr;
-	tpu_addr_t tpu_addr;
-
-	if (mem) {
-		tel->coherent_mem = *mem;
-		vaddr = mem->vaddr;
-		tel->caller_mem = true;
-	} else {
-		vaddr = dmam_alloc_coherent(etdev->dev, size, &dma_addr,
-					    GFP_KERNEL);
-		if (!vaddr)
-			return -ENOMEM;
-		tpu_addr = edgetpu_mmu_tpu_map(etdev, dma_addr, size,
-					       DMA_BIDIRECTIONAL,
-					       EDGETPU_CONTEXT_KCI, flags);
-		if (!tpu_addr) {
-			dev_err(etdev->dev,
-				"%s: failed to map buffer for '%s'\n",
-				etdev->dev_name, name);
-			return -ENOSPC;
-		}
-		tel->coherent_mem.vaddr = vaddr;
-		tel->coherent_mem.dma_addr = dma_addr;
-		tel->coherent_mem.tpu_addr = tpu_addr;
-		tel->coherent_mem.size = size;
-		tel->caller_mem = false;
-		edgetpu_x86_coherent_mem_set_uc(&tel->coherent_mem);
-	}
-
 	rwlock_init(&tel->ctx_lock);
 	tel->name = name;
 	tel->etdev = etdev;
+	tel->coherent_mem = *mem;
 
-	tel->header = (struct edgetpu_telemetry_header *)vaddr;
+	tel->header = (struct edgetpu_telemetry_header *)mem->vaddr;
 	tel->header->head = 0;
 	tel->header->size = 0;
 	tel->header->tail = 0;
@@ -337,7 +290,6 @@ static int telemetry_init(struct edgetpu_dev *etdev, struct edgetpu_telemetry *t
 	INIT_WORK(&tel->work, telemetry_worker);
 	tel->fallback_fn = fallback;
 	tel->state = EDGETPU_TELEMETRY_ENABLED;
-	tel->inited = true;
 	mutex_init(&tel->mmap_lock);
 	tel->mmapped_count = 0;
 
@@ -349,21 +301,12 @@ static void telemetry_exit(struct edgetpu_dev *etdev,
 {
 	ulong flags;
 
-	if (!tel->inited)
-		return;
 	spin_lock_irqsave(&tel->state_lock, flags);
 	/* Prevent racing with the IRQ handler or worker */
 	tel->state = EDGETPU_TELEMETRY_INVALID;
 	spin_unlock_irqrestore(&tel->state_lock, flags);
 	cancel_work_sync(&tel->work);
 
-	if (tel->coherent_mem.tpu_addr && !tel->caller_mem) {
-		edgetpu_mmu_tpu_unmap(etdev, tel->coherent_mem.tpu_addr,
-				      tel->coherent_mem.size,
-				      EDGETPU_CONTEXT_KCI);
-		tel->coherent_mem.tpu_addr = 0;
-		edgetpu_x86_coherent_mem_set_wb(&tel->coherent_mem);
-	}
 	if (tel->ctx)
 		eventfd_ctx_put(tel->ctx);
 	tel->ctx = NULL;
@@ -374,9 +317,6 @@ int edgetpu_telemetry_init(struct edgetpu_dev *etdev,
 			   struct edgetpu_coherent_mem *trace_mem)
 {
 	int ret, i;
-
-	if (!etdev->telemetry)
-		return -ENODEV;
 
 	for (i = 0; i < etdev->num_cores; i++) {
 		ret = telemetry_init(etdev, &etdev->telemetry[i].log, "telemetry_log",
@@ -403,9 +343,6 @@ void edgetpu_telemetry_exit(struct edgetpu_dev *etdev)
 {
 	int i;
 
-	if (!etdev->telemetry)
-		return;
-
 	for (i = 0; i < etdev->num_cores; i++) {
 #if IS_ENABLED(CONFIG_EDGETPU_TELEMETRY_TRACE)
 		telemetry_exit(etdev, &etdev->telemetry[i].trace);
@@ -417,9 +354,6 @@ void edgetpu_telemetry_exit(struct edgetpu_dev *etdev)
 int edgetpu_telemetry_kci(struct edgetpu_dev *etdev)
 {
 	int ret;
-
-	if (!etdev->telemetry)
-		return -ENODEV;
 
 	/* Core 0 will notify other cores. */
 	ret = telemetry_kci(etdev, &etdev->telemetry[0].log, edgetpu_kci_map_log_buffer);
@@ -440,9 +374,6 @@ int edgetpu_telemetry_set_event(struct edgetpu_dev *etdev,
 {
 	int i, ret;
 
-	if (!etdev->telemetry)
-		return -ENODEV;
-
 	for (i = 0; i < etdev->num_cores; i++) {
 		ret = telemetry_set_event(etdev, select_telemetry(&etdev->telemetry[i], type),
 					  eventfd);
@@ -460,9 +391,6 @@ void edgetpu_telemetry_unset_event(struct edgetpu_dev *etdev,
 {
 	int i;
 
-	if (!etdev->telemetry)
-		return;
-
 	for (i = 0; i < etdev->num_cores; i++)
 		telemetry_unset_event(etdev, select_telemetry(&etdev->telemetry[i], type));
 }
@@ -470,9 +398,6 @@ void edgetpu_telemetry_unset_event(struct edgetpu_dev *etdev,
 void edgetpu_telemetry_irq_handler(struct edgetpu_dev *etdev)
 {
 	int i;
-
-	if (!etdev->telemetry)
-		return;
 
 	for (i = 0; i < etdev->num_cores; i++) {
 		telemetry_irq_handler(etdev, &etdev->telemetry[i].log);
@@ -487,9 +412,6 @@ void edgetpu_telemetry_mappings_show(struct edgetpu_dev *etdev,
 {
 	int i;
 
-	if (!etdev->telemetry)
-		return;
-
 	for (i = 0; i < etdev->num_cores; i++) {
 		telemetry_mappings_show(&etdev->telemetry[i].log, s);
 #if IS_ENABLED(CONFIG_EDGETPU_TELEMETRY_TRACE)
@@ -501,8 +423,6 @@ void edgetpu_telemetry_mappings_show(struct edgetpu_dev *etdev,
 int edgetpu_mmap_telemetry_buffer(struct edgetpu_dev *etdev, enum edgetpu_telemetry_type type,
 				  struct vm_area_struct *vma, int core_id)
 {
-	if (!etdev->telemetry)
-		return -ENODEV;
 	return telemetry_mmap_buffer(etdev, select_telemetry(&etdev->telemetry[core_id], type),
 				     vma);
 }
@@ -510,15 +430,11 @@ int edgetpu_mmap_telemetry_buffer(struct edgetpu_dev *etdev, enum edgetpu_teleme
 void edgetpu_telemetry_inc_mmap_count(struct edgetpu_dev *etdev, enum edgetpu_telemetry_type type,
 				      int core_id)
 {
-	if (!etdev->telemetry)
-		return;
 	telemetry_inc_mmap_count(select_telemetry(&etdev->telemetry[core_id], type), 1);
 }
 
 void edgetpu_telemetry_dec_mmap_count(struct edgetpu_dev *etdev, enum edgetpu_telemetry_type type,
 				      int core_id)
 {
-	if (!etdev->telemetry)
-		return;
 	telemetry_inc_mmap_count(select_telemetry(&etdev->telemetry[core_id], type), -1);
 }

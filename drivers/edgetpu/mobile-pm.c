@@ -21,6 +21,7 @@
 #include "edgetpu-pm.h"
 #include "mobile-firmware.h"
 #include "mobile-pm.h"
+#include "mobile-soc-gsx01.h"
 
 #include "edgetpu-pm.c"
 #include "edgetpu-soc.h"
@@ -301,10 +302,10 @@ static int mobile_power_up(struct edgetpu_pm *etpm)
 		mobile_power_down(etpm);
 	} else {
 #if IS_ENABLED(CONFIG_GOOGLE_BCL)
-		if (!etmdev->bcl_dev)
-			etmdev->bcl_dev = google_retrieve_bcl_handle();
-		if (etmdev->bcl_dev)
-			google_init_tpu_ratio(etmdev->bcl_dev);
+		if (!etdev->soc_data->bcl_dev)
+			etdev->soc_data->bcl_dev = google_retrieve_bcl_handle();
+		if (etdev->soc_data->bcl_dev)
+			google_init_tpu_ratio(etdev->soc_data->bcl_dev);
 #endif
 	}
 
@@ -399,7 +400,6 @@ static int mobile_pm_after_create(struct edgetpu_pm *etpm)
 
 	mutex_init(&platform_pwr->policy_lock);
 	mutex_init(&platform_pwr->state_lock);
-	mutex_init(&platform_pwr->scenario_lock);
 
 	ret = mobile_pwr_state_set(etdev, mobile_get_initial_pwr_state(dev));
 	if (ret)

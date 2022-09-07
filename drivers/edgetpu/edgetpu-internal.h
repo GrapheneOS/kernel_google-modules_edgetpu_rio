@@ -87,6 +87,7 @@ struct edgetpu_coherent_mem {
 struct edgetpu_device_group;
 struct edgetpu_wakelock;
 struct edgetpu_dev_iface;
+struct edgetpu_soc_data;
 
 #define EDGETPU_NUM_PERDIE_EVENTS	2
 #define perdie_event_id_to_num(event_id)				      \
@@ -170,7 +171,6 @@ struct edgetpu_dev {
 	struct device *dev;	   /* platform/pci bus device */
 	uint num_ifaces;		   /* Number of device interfaces */
 	uint num_cores; /* Number of cores */
-	uint num_ssmts; /* Number of SSMTs */
 	/*
 	 * Array of device interfaces
 	 * First element is the default interface
@@ -178,6 +178,8 @@ struct edgetpu_dev {
 	struct edgetpu_dev_iface *etiface;
 	char dev_name[EDGETPU_DEVICE_NAME_MAX];
 	struct edgetpu_mapped_resource regs; /* ioremapped CSRs */
+	/* SoC-specific data */
+	struct edgetpu_soc_data *soc_data;
 	struct dentry *d_entry;    /* debugfs dir for this device */
 	struct mutex state_lock;   /* protects state of this device */
 	enum edgetpu_dev_state state;

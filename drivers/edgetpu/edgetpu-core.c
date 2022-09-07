@@ -29,6 +29,7 @@
 #include "edgetpu-kci.h"
 #include "edgetpu-mailbox.h"
 #include "edgetpu-mmu.h"
+#include "edgetpu-soc.h"
 #include "edgetpu-sw-watchdog.h"
 #include "edgetpu-telemetry.h"
 #include "edgetpu-usage-stats.h"
@@ -430,6 +431,9 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 	etdev->state = ETDEV_STATE_NOFW;
 	etdev->freq_count = 0;
 	mutex_init(&etdev->freq_lock);
+	ret = edgetpu_soc_init(etdev);
+	if (ret)
+		return ret;
 
 	ret = edgetpu_fs_add(etdev, iface_params, num_ifaces);
 	if (ret) {

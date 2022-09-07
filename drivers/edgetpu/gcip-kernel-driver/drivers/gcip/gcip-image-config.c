@@ -38,8 +38,8 @@ static int setup_iommu_mappings(struct gcip_image_config_parser *parser,
 		size = CONFIG_TO_SIZE(config->iommu_mappings[i].image_config_value);
 		paddr = config->iommu_mappings[i].image_config_value & ~SIZE_MASK;
 
-		dev_dbg(parser->dev, "Image config adding IOMMU mapping: %#llx -> %#llx", daddr,
-			paddr);
+		dev_dbg(parser->dev, "Image config adding IOMMU mapping: %pad -> %pap", &daddr,
+			&paddr);
 
 		if (unlikely(daddr + size <= daddr || paddr + size <= paddr)) {
 			ret = -EOVERFLOW;
@@ -49,8 +49,8 @@ static int setup_iommu_mappings(struct gcip_image_config_parser *parser,
 				       GCIP_IMAGE_CONFIG_FLAGS_SECURE);
 		if (ret) {
 			dev_err(parser->dev,
-				"Unable to Map: %d dma_addr: %#llx phys_addr: %#llx size: %#lx\n",
-				ret, daddr, paddr, size);
+				"Unable to Map: %d dma_addr: %pad phys_addr: %pap size: %#lx\n",
+				ret, &daddr, &paddr, size);
 			goto err;
 		}
 	}
@@ -76,7 +76,7 @@ static void clear_iommu_mappings(struct gcip_image_config_parser *parser,
 	for (i = config->num_iommu_mappings - 1; i >= 0; i--) {
 		daddr = config->iommu_mappings[i].virt_address;
 		size = CONFIG_TO_SIZE(config->iommu_mappings[i].image_config_value);
-		dev_dbg(parser->dev, "Image config removing IOMMU mapping: %#llx size=%#lx", daddr,
+		dev_dbg(parser->dev, "Image config removing IOMMU mapping: %pad size=%#lx", &daddr,
 			size);
 		parser->ops->unmap(parser->data, daddr, size, GCIP_IMAGE_CONFIG_FLAGS_SECURE);
 	}
@@ -98,8 +98,8 @@ static int setup_ns_iommu_mappings(struct gcip_image_config_parser *parser,
 			goto err;
 		}
 		size = CONFIG_TO_MBSIZE(config->ns_iommu_mappings[i]);
-		dev_dbg(parser->dev, "Image config adding NS IOMMU mapping: %#llx -> %#llx", daddr,
-			paddr);
+		dev_dbg(parser->dev, "Image config adding NS IOMMU mapping: %pad -> %pap", &daddr,
+			&paddr);
 		if (unlikely(daddr + size <= daddr || paddr + size <= paddr)) {
 			ret = -EOVERFLOW;
 			goto err;
@@ -131,8 +131,8 @@ static void clear_ns_iommu_mappings(struct gcip_image_config_parser *parser,
 	for (i = config->num_ns_iommu_mappings - 1; i >= 0; i--) {
 		size = CONFIG_TO_MBSIZE(config->ns_iommu_mappings[i]);
 		daddr = config->ns_iommu_mappings[i] & ~SIZE_MASK;
-		dev_dbg(parser->dev, "Image config removing NS IOMMU mapping: %#llx size=%#lx",
-			daddr, size);
+		dev_dbg(parser->dev, "Image config removing NS IOMMU mapping: %pad size=%#lx",
+			&daddr, size);
 		parser->ops->unmap(parser->data, daddr, size, 0);
 	}
 }

@@ -655,6 +655,8 @@ static struct page **edgetpu_pin_user_pages(struct edgetpu_device_group *group,
 	}
 	offset = host_addr & (PAGE_SIZE - 1);
 	num_pages = DIV_ROUND_UP((size + offset), PAGE_SIZE);
+	if (num_pages * PAGE_SIZE < size + offset)
+		return ERR_PTR(-EINVAL);
 	etdev_dbg(etdev, "%s: hostaddr=%#llx pages=%u", __func__, host_addr, num_pages);
 	/*
 	 * "num_pages" is decided from user-space arguments, don't show warnings

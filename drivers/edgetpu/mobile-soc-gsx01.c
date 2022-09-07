@@ -24,8 +24,7 @@
 #include "mobile-firmware.h"
 #include "mobile-soc-gsx01.h"
 
-/* TODO(b/199681752): check whether this domain is still correct for Rio */
-#define TPU_ACPM_DOMAIN	7
+#define TPU_ACPM_DOMAIN	9
 
 #define MAX_VOLTAGE_VAL 1250000
 
@@ -68,21 +67,23 @@ static int gsx01_parse_ssmt(struct edgetpu_mobile_platform_dev *etmdev)
 {
 	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
 	struct platform_device *pdev = to_platform_device(etdev->dev);
+	struct edgetpu_soc_data *soc_data = etdev->soc_data;
 	struct resource *res;
 	int ret, i;
 	void __iomem *ssmt_base;
 	char ssmt_name[] = "ssmt_d0";
 
-	etmdev->ssmt_base =
-		devm_kcalloc(etdev->dev, etdev->num_ssmts, sizeof(*etmdev->ssmt_base), GFP_KERNEL);
+	soc_data->num_ssmts = EDGETPU_NUM_SSMTS;
+	soc_data->ssmt_base = devm_kcalloc(etdev->dev, soc_data->num_ssmts,
+					   sizeof(*soc_data->ssmt_base), GFP_KERNEL);
 
-	if (!etmdev->ssmt_base)
+	if (!soc_data->ssmt_base)
 		return -ENOMEM;
 
-	if (unlikely(etdev->num_ssmts > 9))
+	if (unlikely(soc_data->num_ssmts > 9))
 		return -EINVAL;
 
-	for (i = 0; i < etdev->num_ssmts; i++) {
+	for (i = 0; i < soc_data->num_ssmts; i++) {
 		sprintf(ssmt_name, "ssmt_d%d", i);
 
 		res = platform_get_resource_byname(pdev, IORESOURCE_MEM, ssmt_name);
@@ -96,37 +97,45 @@ static int gsx01_parse_ssmt(struct edgetpu_mobile_platform_dev *etmdev)
 			etdev_warn(etdev, "Failed to map SSMT_D%d register base: %d", i, ret);
 			return ret;
 		}
-		etmdev->ssmt_base[i] = ssmt_base;
+		soc_data->ssmt_base[i] = ssmt_base;
 	}
-
 	return 0;
 }
 
-void edgetpu_soc_init(struct edgetpu_dev *etdev)
+int edgetpu_soc_init(struct edgetpu_dev *etdev)
 {
+	struct platform_device *pdev = to_platform_device(etdev->dev);
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	int ret;
 
+	etdev->soc_data = devm_kzalloc(&pdev->dev, sizeof(*etdev->soc_data), GFP_KERNEL);
+	if (!etdev->soc_data)
+		return -ENOMEM;
+
+	mutex_init(&etdev->soc_data->scenario_lock);
 	ret = gsx01_parse_ssmt(etmdev);
 	if (ret)
 		dev_warn(etdev->dev, "SSMT setup failed (%d). Context isolation not enforced", ret);
+	return 0;
 }
 
 static void gsx01_setup_ssmt(struct edgetpu_dev *etdev)
 {
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
+	struct edgetpu_soc_data *soc_data = etdev->soc_data;
 	int i, j;
 
-	for (i = 0; i < etdev->num_ssmts; i++)
-		if (!etmdev->ssmt_base[i])
+	for (i = 0; i < soc_data->num_ssmts; i++)
+		if (!soc_data->ssmt_base[i])
 			return;
 
-	for (i = 0; i < etdev->num_ssmts; i++) {
+	for (i = 0; i < soc_data->num_ssmts; i++) {
 		etdev_dbg(etdev, "Setting up SSMT_D%d to feed-through mode\n", i);
 
 		for (j = 0; j < EDGETPU_MAX_STREAM_ID; j++) {
-			writel(SSMT_BYPASS, SSMT_NS_READ_STREAM_VID_REG(etmdev->ssmt_base[i], j));
-			writel(SSMT_BYPASS, SSMT_NS_WRITE_STREAM_VID_REG(etmdev->ssmt_base[i], j));
+			writel(SSMT_BYPASS,
+			       SSMT_NS_READ_STREAM_VID_REG(soc_data->ssmt_base[i], j));
+			writel(SSMT_BYPASS,
+			       SSMT_NS_WRITE_STREAM_VID_REG(soc_data->ssmt_base[i], j));
 		}
 	}
 }
@@ -139,65 +148,62 @@ int edgetpu_soc_prepare_firmware(struct edgetpu_dev *etdev)
 
 static void gsx01_cleanup_bts_scenario(struct edgetpu_dev *etdev)
 {
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
-	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
-	int performance_scenario = platform_pwr->performance_scenario;
+	struct edgetpu_soc_data *soc_data = etdev->soc_data;
+	int performance_scenario = soc_data->performance_scenario;
 
 	if (!performance_scenario)
 		return;
 
-	mutex_lock(&platform_pwr->scenario_lock);
-	while (platform_pwr->scenario_count) {
+	mutex_lock(&soc_data->scenario_lock);
+	while (soc_data->scenario_count) {
 		int ret = bts_del_scenario(performance_scenario);
 
 		if (ret) {
-			platform_pwr->scenario_count = 0;
+			soc_data->scenario_count = 0;
 			etdev_warn_once(etdev, "error %d in cleaning up BTS scenario %u\n", ret,
 					performance_scenario);
 			break;
 		}
-		platform_pwr->scenario_count--;
+		soc_data->scenario_count--;
 	}
-	mutex_unlock(&platform_pwr->scenario_lock);
+	mutex_unlock(&soc_data->scenario_lock);
 }
 
 static void gsx01_activate_bts_scenario(struct edgetpu_dev *etdev)
 {
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
-	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
-	int performance_scenario = platform_pwr->performance_scenario;
+	struct edgetpu_soc_data *soc_data = etdev->soc_data;
+	int performance_scenario = soc_data->performance_scenario;
 
 	/* bts_add_scenario() keeps track of reference count internally.*/
 	int ret;
 
 	if (!performance_scenario)
 		return;
-	mutex_lock(&platform_pwr->scenario_lock);
+	mutex_lock(&soc_data->scenario_lock);
 	ret = bts_add_scenario(performance_scenario);
 	if (ret)
 		etdev_warn_once(etdev, "error %d adding BTS scenario %u\n", ret,
 				performance_scenario);
 	else
-		platform_pwr->scenario_count++;
+		soc_data->scenario_count++;
 
-	etdev_dbg(etdev, "BTS Scenario activated: %d\n", platform_pwr->scenario_count);
-	mutex_unlock(&platform_pwr->scenario_lock);
+	etdev_dbg(etdev, "BTS Scenario activated: %d\n", soc_data->scenario_count);
+	mutex_unlock(&soc_data->scenario_lock);
 }
 
 static void gsx01_deactivate_bts_scenario(struct edgetpu_dev *etdev)
 {
 	/* bts_del_scenario() keeps track of reference count internally.*/
+	struct edgetpu_soc_data *soc_data = etdev->soc_data;
+	int performance_scenario = soc_data->performance_scenario;
 	int ret;
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
-	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
-	int performance_scenario = platform_pwr->performance_scenario;
 
 	if (!performance_scenario)
 		return;
-	mutex_lock(&platform_pwr->scenario_lock);
-	if (!platform_pwr->scenario_count) {
+	mutex_lock(&soc_data->scenario_lock);
+	if (!soc_data->scenario_count) {
 		etdev_warn(etdev, "Unbalanced bts deactivate\n");
-		mutex_unlock(&platform_pwr->scenario_lock);
+		mutex_unlock(&soc_data->scenario_lock);
 		return;
 	}
 	ret = bts_del_scenario(performance_scenario);
@@ -205,10 +211,10 @@ static void gsx01_deactivate_bts_scenario(struct edgetpu_dev *etdev)
 		etdev_warn_once(etdev, "error %d deleting BTS scenario %u\n", ret,
 				performance_scenario);
 	else
-		platform_pwr->scenario_count--;
+		soc_data->scenario_count--;
 
-	etdev_dbg(etdev, "BTS Scenario deactivated: %d\n", platform_pwr->scenario_count);
-	mutex_unlock(&platform_pwr->scenario_lock);
+	etdev_dbg(etdev, "BTS Scenario deactivated: %d\n", soc_data->scenario_count);
+	mutex_unlock(&soc_data->scenario_lock);
 }
 
 static void gsx01_set_bts(struct edgetpu_dev *etdev, u16 bts_val)
@@ -230,15 +236,13 @@ static void gsx01_set_bts(struct edgetpu_dev *etdev, u16 bts_val)
 
 static void gsx01_set_pm_qos(struct edgetpu_dev *etdev, u32 pm_qos_val)
 {
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
-	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
 	s32 int_val = (pm_qos_val >> PM_QOS_INT_SHIFT) * PM_QOS_FACTOR;
 	s32 mif_val = (pm_qos_val & PM_QOS_MIF_MASK) * PM_QOS_FACTOR;
 
 	etdev_dbg(etdev, "%s: pm_qos request - int = %d mif = %d\n", __func__, int_val, mif_val);
 
-	exynos_pm_qos_update_request(&platform_pwr->int_min, int_val);
-	exynos_pm_qos_update_request(&platform_pwr->mif_min, mif_val);
+	exynos_pm_qos_update_request(&etdev->soc_data->int_min, int_val);
+	exynos_pm_qos_update_request(&etdev->soc_data->mif_min, mif_val);
 }
 
 void edgetpu_soc_handle_reverse_kci(struct edgetpu_dev *etdev,
@@ -427,12 +431,9 @@ DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_vdd_tpu_m, edgetpu_vdd_tpu_m_get, edgetpu_vdd_
 
 void edgetpu_soc_pm_power_down(struct edgetpu_dev *etdev)
 {
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
-	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
-
 	/* Remove our vote for INT/MIF state (if any) */
-	exynos_pm_qos_update_request(&platform_pwr->int_min, 0);
-	exynos_pm_qos_update_request(&platform_pwr->mif_min, 0);
+	exynos_pm_qos_update_request(&etdev->soc_data->int_min, 0);
+	exynos_pm_qos_update_request(&etdev->soc_data->mif_min, 0);
 
 	gsx01_cleanup_bts_scenario(etdev);
 }
@@ -443,13 +444,13 @@ int edgetpu_soc_pm_init(struct edgetpu_dev *etdev)
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
 
-	exynos_pm_qos_add_request(&platform_pwr->int_min, PM_QOS_DEVICE_THROUGHPUT, 0);
-	exynos_pm_qos_add_request(&platform_pwr->mif_min, PM_QOS_BUS_THROUGHPUT, 0);
+	exynos_pm_qos_add_request(&etdev->soc_data->int_min, PM_QOS_DEVICE_THROUGHPUT, 0);
+	exynos_pm_qos_add_request(&etdev->soc_data->mif_min, PM_QOS_BUS_THROUGHPUT, 0);
 
-	platform_pwr->performance_scenario = bts_get_scenindex("tpu_performance");
-	if (!platform_pwr->performance_scenario)
+	etdev->soc_data->performance_scenario = bts_get_scenindex("tpu_performance");
+	if (!etdev->soc_data->performance_scenario)
 		dev_warn(etdev->dev, "tpu_performance BTS scenario not found\n");
-	platform_pwr->scenario_count = 0;
+	etdev->soc_data->scenario_count = 0;
 
 	debugfs_create_file("vdd_tpu", 0660, platform_pwr->debugfs_dir, dev, &fops_tpu_vdd_tpu);
 	debugfs_create_file("vdd_tpu_m", 0660, platform_pwr->debugfs_dir, dev, &fops_tpu_vdd_tpu_m);
@@ -464,12 +465,9 @@ int edgetpu_soc_pm_init(struct edgetpu_dev *etdev)
 
 void edgetpu_soc_pm_exit(struct edgetpu_dev *etdev)
 {
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
-	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
-
 	gsx01_cleanup_bts_scenario(etdev);
-	exynos_pm_qos_remove_request(&platform_pwr->int_min);
-	exynos_pm_qos_remove_request(&platform_pwr->mif_min);
+	exynos_pm_qos_remove_request(&etdev->soc_data->int_min);
+	exynos_pm_qos_remove_request(&etdev->soc_data->mif_min);
 }
 
 static int tpu_pause_callback(enum thermal_pause_state action, void *dev)

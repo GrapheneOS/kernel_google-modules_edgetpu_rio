@@ -14,11 +14,6 @@
 #include <linux/kernel.h>
 #include <linux/mutex.h>
 #include <linux/types.h>
-#include <soc/google/exynos_pm_qos.h>
-
-#if IS_ENABLED(CONFIG_GOOGLE_BCL)
-#include <soc/google/bcl.h>
-#endif
 
 #include "edgetpu-config.h"
 #include "edgetpu-internal.h"
@@ -33,13 +28,6 @@ struct edgetpu_mobile_platform_pwr {
 	struct mutex state_lock;
 	u64 min_state;
 	u64 requested_state;
-	/* INT/MIF requests for memory bandwidth */
-	struct exynos_pm_qos_request int_min;
-	struct exynos_pm_qos_request mif_min;
-	/* BTS */
-	unsigned int performance_scenario;
-	int scenario_count;
-	struct mutex scenario_lock;
 
 	/* LPM callbacks, NULL for chips without LPM */
 	int (*lpm_up)(struct edgetpu_dev *etdev);
@@ -79,15 +67,10 @@ struct edgetpu_mobile_platform_dev {
 	 * May be NULL if the chip does not support firmware authentication
 	 */
 	struct device *gsa_dev;
-	/* Virtual address of the SSMT block for this chip. */
-	void __iomem **ssmt_base;
 	/* Coherent log buffer */
 	struct edgetpu_coherent_mem *log_mem;
 	/* Coherent trace buffer */
 	struct edgetpu_coherent_mem *trace_mem;
-#if IS_ENABLED(CONFIG_GOOGLE_BCL)
-	struct bcl_device *bcl_dev;
-#endif
 	/* subsystem coredump info struct */
 	struct mobile_sscd_info sscd_info;
 	/* Protects TZ Mailbox client pointer */

@@ -309,7 +309,6 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 	platform_set_drvdata(pdev, etdev);
 	etdev->dev = dev;
 	etdev->num_cores = EDGETPU_NUM_CORES;
-	etdev->num_ssmts = EDGETPU_NUM_SSMTS;
 
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (IS_ERR_OR_NULL(r)) {
@@ -324,8 +323,6 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		dev_err(dev, "failed to map registers");
 		return -ENODEV;
 	}
-
-	edgetpu_soc_init(etdev);
 
 	mutex_init(&etmdev->platform_pwr.policy_lock);
 	etmdev->platform_pwr.curr_policy = TPU_POLICY_MAX;

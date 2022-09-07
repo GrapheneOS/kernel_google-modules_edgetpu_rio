@@ -8,6 +8,33 @@
 #ifndef __MOBILE_SOC_GSX01_H__
 #define __MOBILE_SOC_GSX01_H__
 
+#include <linux/kernel.h>
+#include <linux/mutex.h>
+#include <linux/types.h>
+#include <soc/google/exynos_pm_qos.h>
+
+#if IS_ENABLED(CONFIG_GOOGLE_BCL)
+#include <soc/google/bcl.h>
+#endif
+
+/* SoC data for GSx01 platforms */
+struct edgetpu_soc_data {
+	/* Virtual address of the SSMT block for this chip. */
+	void __iomem **ssmt_base;
+	/* Number of SSMTs */
+	uint num_ssmts;
+	/* INT/MIF requests for memory bandwidth */
+	struct exynos_pm_qos_request int_min;
+	struct exynos_pm_qos_request mif_min;
+	/* BTS */
+	unsigned int performance_scenario;
+	int scenario_count;
+	struct mutex scenario_lock;
+#if IS_ENABLED(CONFIG_GOOGLE_BCL)
+	struct bcl_device *bcl_dev;
+#endif
+};
+
 /*
  * Request codes from firmware
  * Values must match with firmware code base

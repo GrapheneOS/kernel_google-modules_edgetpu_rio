@@ -17,7 +17,7 @@
 /* SoC-specific calls for the following functions. */
 
 /* Probe-time init */
-void edgetpu_soc_init(struct edgetpu_dev *etdev);
+int edgetpu_soc_init(struct edgetpu_dev *etdev);
 
 /* Prep for running firmware: set access control, etc. */
 int edgetpu_soc_prepare_firmware(struct edgetpu_dev *etdev);
