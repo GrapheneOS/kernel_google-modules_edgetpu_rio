@@ -121,9 +121,6 @@ struct edgetpu_firmware_chip_data {
 	 */
 	int (*setup_buffer)(struct edgetpu_firmware *et_fw,
 			    struct edgetpu_firmware_buffer *fw_buf);
-	/* Release the resources previously allocated by setup_buffer(). */
-	void (*teardown_buffer)(struct edgetpu_firmware *et_fw,
-				struct edgetpu_firmware_buffer *fw_buf);
 	/*
 	 * Platform-specific handling after firmware loaded, before running
 	 * the firmware, such as validating the firmware or resetting the
@@ -138,17 +135,6 @@ struct edgetpu_firmware_chip_data {
 	 */
 	int (*restart)(struct edgetpu_firmware *et_fw, bool force_reset);
 };
-
-/*
- * Chip-dependent (actually chip family dependent) calls for loading/unloading
- * firmware images.  Used by the common firmware layer.
- */
-int edgetpu_firmware_chip_load_locked(
-		struct edgetpu_firmware *et_fw,
-		struct edgetpu_firmware_desc *fw_desc, const char *name);
-void edgetpu_firmware_chip_unload_locked(
-		struct edgetpu_firmware *et_fw,
-		struct edgetpu_firmware_desc *fw_desc);
 
 /*
  * Returns the chip-specific IOVA where the firmware is mapped.

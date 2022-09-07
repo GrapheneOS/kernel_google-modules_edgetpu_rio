@@ -104,12 +104,6 @@ static int rio_parse_set_dt_property(struct edgetpu_mobile_platform_dev *etmdev)
 	struct device *dev = etdev->dev;
 	int ret;
 
-	ret = edgetpu_mobile_platform_set_fw_ctx_memory(etmdev);
-	if (ret) {
-		etdev_err(etdev, "Failed to initialize fw context memory: %d", ret);
-		return ret;
-	}
-
 	ret = rio_mmu_set_shareability(dev);
 	if (ret)
 		etdev_warn(etdev, "failed to enable shareability: %d", ret);

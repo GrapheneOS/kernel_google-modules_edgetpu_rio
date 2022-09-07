@@ -15,6 +15,8 @@
 #include <linux/slab.h>
 #include <linux/string.h> /* memcpy */
 
+#include <gcip/gcip-telemetry.h>
+
 #include "edgetpu-firmware.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-iremap-pool.h"
@@ -347,30 +349,30 @@ static int edgetpu_kci_send_cmd_with_data(struct edgetpu_kci *etkci,
 	return ret;
 }
 
-int edgetpu_kci_map_log_buffer(struct edgetpu_kci *etkci, tpu_addr_t tpu_addr, u32 size)
+int edgetpu_kci_map_log_buffer(struct gcip_telemetry_kci_args *args)
 {
 	struct gcip_kci_command_element cmd = {
 		.code = GCIP_KCI_CODE_MAP_LOG_BUFFER,
 		.dma = {
-			.address = tpu_addr,
-			.size = size,
+			.address = args->addr,
+			.size = args->size,
 		},
 	};
 
-	return gcip_kci_send_cmd(etkci->kci, &cmd);
+	return gcip_kci_send_cmd(args->kci, &cmd);
 }
 
-int edgetpu_kci_map_trace_buffer(struct edgetpu_kci *etkci, tpu_addr_t tpu_addr, u32 size)
+int edgetpu_kci_map_trace_buffer(struct gcip_telemetry_kci_args *args)
 {
 	struct gcip_kci_command_element cmd = {
 		.code = GCIP_KCI_CODE_MAP_TRACE_BUFFER,
 		.dma = {
-			.address = tpu_addr,
-			.size = size,
+			.address = args->addr,
+			.size = args->size,
 		},
 	};
 
-	return gcip_kci_send_cmd(etkci->kci, &cmd);
+	return gcip_kci_send_cmd(args->kci, &cmd);
 }
 
 enum gcip_fw_flavor edgetpu_kci_fw_info(struct edgetpu_kci *etkci, struct gcip_fw_info *fw_info)

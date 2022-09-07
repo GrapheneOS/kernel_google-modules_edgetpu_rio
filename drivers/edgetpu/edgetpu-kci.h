@@ -132,19 +132,21 @@ int edgetpu_kci_update_usage(struct edgetpu_dev *etdev);
  */
 int edgetpu_kci_update_usage_locked(struct edgetpu_dev *etdev);
 
+struct gcip_telemetry_kci_args;
+
 /*
  * Sends the "Map Log Buffer" command and waits for remote response.
  *
  * Returns the code of response, or a negative errno on error.
  */
-int edgetpu_kci_map_log_buffer(struct edgetpu_kci *etkci, tpu_addr_t tpu_addr, u32 size);
+int edgetpu_kci_map_log_buffer(struct gcip_telemetry_kci_args *args);
 
 /*
  * Sends the "Map Trace Buffer" command and waits for remote response.
  *
  * Returns the code of response, or a negative errno on error.
  */
-int edgetpu_kci_map_trace_buffer(struct edgetpu_kci *etkci, tpu_addr_t tpu_addr, u32 size);
+int edgetpu_kci_map_trace_buffer(struct gcip_telemetry_kci_args *args);
 
 /* debugfs mappings dump */
 void edgetpu_kci_mappings_show(struct edgetpu_dev *etdev, struct seq_file *s);

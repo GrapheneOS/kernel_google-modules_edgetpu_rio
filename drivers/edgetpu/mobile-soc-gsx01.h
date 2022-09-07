@@ -11,11 +11,8 @@
 #include <linux/kernel.h>
 #include <linux/mutex.h>
 #include <linux/types.h>
-#include <soc/google/exynos_pm_qos.h>
-
-#if IS_ENABLED(CONFIG_GOOGLE_BCL)
 #include <soc/google/bcl.h>
-#endif
+#include <soc/google/exynos_pm_qos.h>
 
 /* SoC data for GSx01 platforms */
 struct edgetpu_soc_data {
@@ -30,9 +27,7 @@ struct edgetpu_soc_data {
 	unsigned int performance_scenario;
 	int scenario_count;
 	struct mutex scenario_lock;
-#if IS_ENABLED(CONFIG_GOOGLE_BCL)
 	struct bcl_device *bcl_dev;
-#endif
 };
 
 /*

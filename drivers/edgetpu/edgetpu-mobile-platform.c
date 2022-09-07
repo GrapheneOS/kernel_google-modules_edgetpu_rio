@@ -32,11 +32,11 @@
 	 EDGETPU_NUM_CORES)
 
 static void get_telemetry_mem(struct edgetpu_mobile_platform_dev *etmdev,
-			      enum edgetpu_telemetry_type type, struct edgetpu_coherent_mem *mem)
+			      enum gcip_telemetry_type type, struct edgetpu_coherent_mem *mem)
 {
-	int i, offset = type == EDGETPU_TELEMETRY_TRACE ? EDGETPU_TELEMETRY_LOG_BUFFER_SIZE : 0;
-	const size_t size = type == EDGETPU_TELEMETRY_LOG ? EDGETPU_TELEMETRY_LOG_BUFFER_SIZE :
-								EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE;
+	int i, offset = type == GCIP_TELEMETRY_TRACE ? EDGETPU_TELEMETRY_LOG_BUFFER_SIZE : 0;
+	const size_t size = type == GCIP_TELEMETRY_LOG ? EDGETPU_TELEMETRY_LOG_BUFFER_SIZE :
+							 EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE;
 
 	for (i = 0; i < etmdev->edgetpu_dev.num_cores; i++) {
 		mem[i].vaddr = etmdev->shared_mem_vaddr + offset;
@@ -50,8 +50,8 @@ static void get_telemetry_mem(struct edgetpu_mobile_platform_dev *etmdev,
 
 static void edgetpu_mobile_get_telemetry_mem(struct edgetpu_mobile_platform_dev *etmdev)
 {
-	get_telemetry_mem(etmdev, EDGETPU_TELEMETRY_LOG, etmdev->log_mem);
-	get_telemetry_mem(etmdev, EDGETPU_TELEMETRY_TRACE, etmdev->trace_mem);
+	get_telemetry_mem(etmdev, GCIP_TELEMETRY_LOG, etmdev->log_mem);
+	get_telemetry_mem(etmdev, GCIP_TELEMETRY_TRACE, etmdev->trace_mem);
 }
 
 static int edgetpu_platform_setup_fw_region(struct edgetpu_mobile_platform_dev *etmdev)
@@ -259,10 +259,8 @@ static void edgetpu_platform_remove_irq(struct edgetpu_mobile_platform_dev *etmd
 
 /*
  * Fetch and set the firmware context region from device tree.
- *
- * Maybe be unused since not all chips need this.
  */
-static int __maybe_unused
+static int
 edgetpu_mobile_platform_set_fw_ctx_memory(struct edgetpu_mobile_platform_dev *etmdev)
 {
 	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
@@ -391,6 +389,11 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 
 	etdev_dbg(etdev, "Creating thermal device");
 	etdev->thermal = devm_tpu_thermal_create(etdev->dev, etdev);
+	ret = edgetpu_mobile_platform_set_fw_ctx_memory(etmdev);
+	if (ret) {
+		etdev_err(etdev, "Failed to initialize fw context memory: %d", ret);
+		goto out_destroy_fw;
+	}
 
 	if (etmdev->after_probe) {
 		ret = etmdev->after_probe(etmdev);

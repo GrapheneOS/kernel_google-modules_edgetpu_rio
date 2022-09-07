@@ -5,7 +5,6 @@
  * Copyright (C) 2022 Google LLC
  */
 
-#include <linux/acpm_dvfs.h>
 #include <linux/device.h>
 #include <linux/gsa/gsa_tpu.h>
 #include <linux/platform_device.h>
@@ -14,6 +13,9 @@
 #include <soc/google/bts.h>
 #include <soc/google/exynos_pm_qos.h>
 #include <soc/google/gs_tmu.h>
+
+/* TODO(b/240363978): Use system ACPM header once it's ready. */
+#include "include/linux/acpm_dvfs.h"
 
 #include "edgetpu-internal.h"
 #include "edgetpu-firmware.h"

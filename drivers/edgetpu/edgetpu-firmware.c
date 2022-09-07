@@ -49,6 +49,49 @@ void *edgetpu_firmware_get_data(struct edgetpu_firmware *et_fw)
 	return et_fw->p->data;
 }
 
+/* Request firmware and copy to carveout. */
+static int edgetpu_firmware_carveout_load_locked(struct edgetpu_firmware *et_fw,
+						 struct edgetpu_firmware_desc *fw_desc,
+						 const char *name)
+{
+	int ret;
+	struct edgetpu_dev *etdev = et_fw->etdev;
+	struct device *dev = etdev->dev;
+	const struct firmware *fw;
+	size_t aligned_size;
+
+	ret = request_firmware(&fw, name, dev);
+	if (ret) {
+		etdev_err(etdev, "request firmware '%s' failed: %d\n", name, ret);
+		return ret;
+	}
+
+	aligned_size = ALIGN(fw->size, fw_desc->buf.used_size_align);
+	if (aligned_size > fw_desc->buf.alloc_size) {
+		etdev_err(etdev,
+			  "firmware buffer too small: alloc size=%#zx, required size=%#zx\n",
+			  fw_desc->buf.alloc_size, aligned_size);
+		ret = -ENOSPC;
+		goto out_release_firmware;
+	}
+
+	memcpy(fw_desc->buf.vaddr, fw->data, fw->size);
+	fw_desc->buf.used_size = aligned_size;
+	/* May return NULL on out of memory, driver must handle properly */
+	fw_desc->buf.name = devm_kstrdup(dev, name, GFP_KERNEL);
+
+out_release_firmware:
+	release_firmware(fw);
+	return ret;
+}
+
+static void edgetpu_firmware_carveout_unload_locked(struct edgetpu_firmware *et_fw,
+						    struct edgetpu_firmware_desc *fw_desc)
+{
+	fw_desc->buf.name = NULL;
+	fw_desc->buf.used_size = 0;
+}
+
 static int edgetpu_firmware_load_locked(
 		struct edgetpu_firmware *et_fw,
 		struct edgetpu_firmware_desc *fw_desc, const char *name,
@@ -69,11 +112,9 @@ static int edgetpu_firmware_load_locked(
 		}
 	}
 
-	ret = edgetpu_firmware_chip_load_locked(et_fw, fw_desc, name);
-	if (ret) {
-		etdev_err(etdev, "firmware request failed: %d\n", ret);
+	ret = edgetpu_firmware_carveout_load_locked(et_fw, fw_desc, name);
+	if (ret)
 		goto out_free_buffer;
-	}
 
 	if (chip_fw->setup_buffer) {
 		ret = chip_fw->setup_buffer(et_fw, &fw_desc->buf);
@@ -87,7 +128,7 @@ static int edgetpu_firmware_load_locked(
 	return 0;
 
 out_unload_locked:
-	edgetpu_firmware_chip_unload_locked(et_fw, fw_desc);
+	edgetpu_firmware_carveout_unload_locked(et_fw, fw_desc);
 out_free_buffer:
 	if (chip_fw->free_buffer)
 		chip_fw->free_buffer(et_fw, &fw_desc->buf);
@@ -100,7 +141,7 @@ static void edgetpu_firmware_unload_locked(
 {
 	const struct edgetpu_firmware_chip_data *chip_fw = et_fw->p->chip_fw;
 
-	edgetpu_firmware_chip_unload_locked(et_fw, fw_desc);
+	edgetpu_firmware_carveout_unload_locked(et_fw, fw_desc);
 	/*
 	 * Platform specific implementation for freeing allocated buffer.
 	 */

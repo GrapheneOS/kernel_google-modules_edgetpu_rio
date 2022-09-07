@@ -10,7 +10,6 @@
 #include <linux/gsa/gsa_tpu.h>
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
-#include <soc/google/bcl.h>
 
 #include "edgetpu-config.h"
 #include "edgetpu-firmware.h"
@@ -21,7 +20,6 @@
 #include "edgetpu-pm.h"
 #include "mobile-firmware.h"
 #include "mobile-pm.h"
-#include "mobile-soc-gsx01.h"
 
 #include "edgetpu-pm.c"
 #include "edgetpu-soc.h"
@@ -301,14 +299,9 @@ static int mobile_power_up(struct edgetpu_pm *etpm)
 	if (ret) {
 		mobile_power_down(etpm);
 	} else {
-#if IS_ENABLED(CONFIG_GOOGLE_BCL)
-		if (!etdev->soc_data->bcl_dev)
-			etdev->soc_data->bcl_dev = google_retrieve_bcl_handle();
-		if (etdev->soc_data->bcl_dev)
-			google_init_tpu_ratio(etdev->soc_data->bcl_dev);
-#endif
+		if (platform_pwr->post_fw_start)
+			platform_pwr->post_fw_start(etdev);
 	}
-
 	return ret;
 }
 
@@ -408,18 +401,15 @@ static int mobile_pm_after_create(struct edgetpu_pm *etpm)
 	if (IS_ERR_OR_NULL(platform_pwr->debugfs_dir)) {
 		dev_warn(etdev->dev, "Failed to create debug FS power");
 		/* don't fail the procedure on debug FS creation fails */
-		return 0;
+	} else {
+		debugfs_create_file("state", 0660, platform_pwr->debugfs_dir, etdev,
+				    &fops_tpu_pwr_state);
+		debugfs_create_file("min_state", 0660, platform_pwr->debugfs_dir, etdev,
+				    &fops_tpu_min_pwr_state);
+		debugfs_create_file("policy", 0660, platform_pwr->debugfs_dir, etdev,
+				    &fops_tpu_pwr_policy);
 	}
-	debugfs_create_file("state", 0660, platform_pwr->debugfs_dir, etdev, &fops_tpu_pwr_state);
-	debugfs_create_file("min_state", 0660, platform_pwr->debugfs_dir, etdev,
-			    &fops_tpu_min_pwr_state);
-	debugfs_create_file("policy", 0660, platform_pwr->debugfs_dir, etdev, &fops_tpu_pwr_policy);
-	edgetpu_soc_pm_init(etdev);
-
-	if (platform_pwr->after_create)
-		ret = platform_pwr->after_create(etdev);
-
-	return ret;
+	return edgetpu_soc_pm_init(etdev);
 }
 
 static void mobile_pm_before_destroy(struct edgetpu_pm *etpm)
@@ -427,9 +417,6 @@ static void mobile_pm_before_destroy(struct edgetpu_pm *etpm)
 	struct edgetpu_dev *etdev = etpm->etdev;
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
-
-	if (platform_pwr->before_destroy)
-		platform_pwr->before_destroy(etdev);
 
 	debugfs_remove_recursive(platform_pwr->debugfs_dir);
 	pm_runtime_disable(etpm->etdev->dev);

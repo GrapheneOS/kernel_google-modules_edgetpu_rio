@@ -7,11 +7,13 @@
 
 #include <linux/delay.h>
 #include <linux/iopoll.h>
+#include <soc/google/bcl.h>
 
 #include "edgetpu-config.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-mobile-platform.h"
 #include "edgetpu-soc.h"
+#include "mobile-soc-gsx01.h"
 #include "mobile-pm.h"
 
 #define TPU_DEFAULT_POWER_STATE TPU_ACTIVE_NOM
@@ -159,6 +161,14 @@ static void rio_block_down(struct edgetpu_dev *etdev)
 		etdev_warn(etdev, "blk_shutdown timeout\n");
 }
 
+static void rio_post_fw_start(struct edgetpu_dev *etdev)
+{
+	if (!etdev->soc_data->bcl_dev)
+		etdev->soc_data->bcl_dev = google_retrieve_bcl_handle();
+	if (etdev->soc_data->bcl_dev)
+		google_init_tpu_ratio(etdev->soc_data->bcl_dev);
+}
+
 int edgetpu_chip_pm_create(struct edgetpu_dev *etdev)
 {
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
@@ -167,6 +177,7 @@ int edgetpu_chip_pm_create(struct edgetpu_dev *etdev)
 	platform_pwr->lpm_up = rio_lpm_up;
 	platform_pwr->lpm_down = rio_lpm_down;
 	platform_pwr->block_down = rio_block_down;
+	platform_pwr->post_fw_start = rio_post_fw_start;
 
 	return edgetpu_mobile_pm_create(etdev);
 }

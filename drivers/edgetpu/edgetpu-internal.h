@@ -55,9 +55,6 @@
 #define etdev_warn_once(etdev, fmt, ...)                                       \
 	dev_warn_once(get_dev_for_logging(etdev), fmt, ##__VA_ARGS__)
 
-/* The number of TPU tiles in an edgetpu chip */
-#define EDGETPU_NTILES	16
-
 /*
  * Common-layer context IDs for non-secure TPU access, translated to chip-
  * specific values in the mmu driver.
@@ -241,18 +238,6 @@ enum edgetpu_fw_crash_type {
 	EDGETPU_FW_CRASH_UNDEF_EXCEPT = 3,
 	EDGETPU_FW_CRASH_UNRECOV_FAULT = 4,
 };
-
-extern const struct file_operations edgetpu_fops;
-
-/* Status regs dump. */
-struct edgetpu_dumpregs_range {
-	u32 firstreg;
-	u32 lastreg;
-};
-extern struct edgetpu_dumpregs_range edgetpu_chip_statusregs_ranges[];
-extern int edgetpu_chip_statusregs_nranges;
-extern struct edgetpu_dumpregs_range edgetpu_chip_tile_statusregs_ranges[];
-extern int edgetpu_chip_tile_statusregs_nranges;
 
 static inline const char *edgetpu_dma_dir_rw_s(enum dma_data_direction dir)
 {

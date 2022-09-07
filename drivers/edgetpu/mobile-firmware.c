@@ -313,52 +313,6 @@ out:
 	return ret;
 }
 
-/* Load firmware for chips that use carveout memory for a single chip. */
-int edgetpu_firmware_chip_load_locked(
-		struct edgetpu_firmware *et_fw,
-		struct edgetpu_firmware_desc *fw_desc, const char *name)
-{
-	int ret;
-	struct edgetpu_dev *etdev = et_fw->etdev;
-	struct device *dev = etdev->dev;
-	const struct firmware *fw;
-	size_t aligned_size;
-
-	ret = request_firmware(&fw, name, dev);
-	if (ret) {
-		etdev_dbg(etdev,
-			  "%s: request '%s' failed: %d\n", __func__, name, ret);
-		return ret;
-	}
-
-	aligned_size = ALIGN(fw->size, fw_desc->buf.used_size_align);
-	if (aligned_size > fw_desc->buf.alloc_size) {
-		etdev_dbg(etdev,
-			   "%s: firmware buffer too small: alloc size=%#zx, required size=%#zx\n",
-			  __func__, fw_desc->buf.alloc_size, aligned_size);
-		ret = -ENOSPC;
-		goto out_release_firmware;
-	}
-
-	memcpy(fw_desc->buf.vaddr, fw->data, fw->size);
-	fw_desc->buf.used_size = aligned_size;
-	/* May return NULL on out of memory, driver must handle properly */
-	fw_desc->buf.name = kstrdup(name, GFP_KERNEL);
-
-out_release_firmware:
-	release_firmware(fw);
-	return ret;
-}
-
-void edgetpu_firmware_chip_unload_locked(
-		struct edgetpu_firmware *et_fw,
-		struct edgetpu_firmware_desc *fw_desc)
-{
-	kfree(fw_desc->buf.name);
-	fw_desc->buf.name = NULL;
-	fw_desc->buf.used_size = 0;
-}
-
 int edgetpu_mobile_firmware_reset_cpu(struct edgetpu_dev *etdev, bool assert_reset)
 {
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);

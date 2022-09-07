@@ -5,15 +5,9 @@
  * Copyright (C) 2019-2020 Google, Inc.
  */
 
-#include <linux/delay.h>
-#include <linux/dma-mapping.h>
-#include <linux/errno.h>
-#include <linux/kernel.h>
-#include <linux/mm.h>
-#include <linux/mutex.h>
-#include <linux/slab.h>
-#include <linux/spinlock.h>
-#include <linux/workqueue.h>
+#include <linux/mm_types.h>
+
+#include <gcip/gcip-telemetry.h>
 
 #include "edgetpu-internal.h"
 #include "edgetpu-iremap-pool.h"
@@ -21,17 +15,13 @@
 #include "edgetpu-telemetry.h"
 #include "edgetpu.h"
 
-/* When log data arrives, recheck for more log data after this delay. */
-#define TELEMETRY_LOG_RECHECK_DELAY	200	/* ms */
-
-static struct edgetpu_telemetry *
-select_telemetry(struct edgetpu_telemetry_ctx *ctx,
-		 enum edgetpu_telemetry_type type)
+static struct gcip_telemetry *select_telemetry(struct edgetpu_telemetry_ctx *ctx,
+					       enum gcip_telemetry_type type)
 {
 	switch (type) {
-	case EDGETPU_TELEMETRY_TRACE:
+	case GCIP_TELEMETRY_TRACE:
 		return &ctx->trace;
-	case EDGETPU_TELEMETRY_LOG:
+	case GCIP_TELEMETRY_LOG:
 		return &ctx->log;
 	default:
 		WARN_ONCE(1, "Unrecognized EdgeTPU telemetry type: %d", type);
@@ -40,276 +30,19 @@ select_telemetry(struct edgetpu_telemetry_ctx *ctx,
 	}
 }
 
-static int telemetry_kci(struct edgetpu_dev *etdev, struct edgetpu_telemetry *tel,
-			 int (*send_kci)(struct edgetpu_kci *, u64, u32))
+static struct edgetpu_coherent_mem *select_telemetry_mem(struct edgetpu_telemetry_ctx *ctx,
+							 enum gcip_telemetry_type type)
 {
-	int err;
-
-	etdev_dbg(etdev, "Sending KCI %s", tel->name);
-	err = send_kci(etdev->etkci, tel->coherent_mem.tpu_addr, tel->coherent_mem.size);
-
-	if (err < 0) {
-		etdev_err(etdev, "KCI %s failed :( - %d", tel->name, err);
-		return err;
+	switch (type) {
+	case GCIP_TELEMETRY_TRACE:
+		return &ctx->trace_mem;
+	case GCIP_TELEMETRY_LOG:
+		return &ctx->log_mem;
+	default:
+		WARN_ONCE(1, "Unrecognized EdgeTPU telemetry type: %d", type);
+		/* return a valid object, don't crash the kernel */
+		return &ctx->log_mem;
 	}
-
-	if (err > 0) {
-		etdev_err(etdev, "KCI %s returned %d", tel->name, err);
-		return -EBADMSG;
-	}
-	etdev_dbg(etdev, "KCI %s Succeeded :)", tel->name);
-	return 0;
-}
-
-static int telemetry_set_event(struct edgetpu_dev *etdev,
-			       struct edgetpu_telemetry *tel, u32 eventfd)
-{
-	struct eventfd_ctx *ctx;
-	ulong flags;
-
-	ctx = eventfd_ctx_fdget(eventfd);
-	if (IS_ERR(ctx))
-		return PTR_ERR(ctx);
-
-	write_lock_irqsave(&tel->ctx_lock, flags);
-	if (tel->ctx)
-		eventfd_ctx_put(tel->ctx);
-	tel->ctx = ctx;
-	write_unlock_irqrestore(&tel->ctx_lock, flags);
-
-	return 0;
-}
-
-static void telemetry_unset_event(struct edgetpu_dev *etdev,
-				  struct edgetpu_telemetry *tel)
-{
-	ulong flags;
-
-	write_lock_irqsave(&tel->ctx_lock, flags);
-	if (tel->ctx)
-		eventfd_ctx_put(tel->ctx);
-	tel->ctx = NULL;
-	write_unlock_irqrestore(&tel->ctx_lock, flags);
-
-	return;
-}
-
-/* Copy data out of the log buffer with wrapping */
-static void copy_with_wrap(struct edgetpu_telemetry_header *header, void *dest,
-			   u32 length, u32 size, void *start)
-{
-	const u32 wrap_bit = size + sizeof(*header);
-	u32 remaining = 0;
-	u32 head = header->head & (wrap_bit - 1);
-
-	if (head + length < size) {
-		memcpy(dest, start + head, length);
-		header->head += length;
-	} else {
-		remaining = size - head;
-		memcpy(dest, start + head, remaining);
-		memcpy(dest + remaining, start, length - remaining);
-		header->head = (header->head & wrap_bit) ^ wrap_bit;
-		header->head |= length - remaining;
-	}
-}
-
-/* Log messages from TPU CPU to dmesg */
-static void edgetpu_fw_log(struct edgetpu_telemetry *log)
-{
-	struct edgetpu_dev *etdev = log->etdev;
-	struct edgetpu_telemetry_header *header = log->header;
-	struct edgetpu_log_entry_header entry;
-	u8 *start;
-	const size_t queue_size = log->coherent_mem.size - sizeof(*header);
-	const size_t max_length = queue_size - sizeof(entry);
-	char *buffer = kmalloc(max_length + 1, GFP_ATOMIC);
-
-	if (!buffer) {
-		header->head = header->tail;
-		etdev_err_ratelimited(etdev, "failed to allocate log buffer");
-		return;
-	}
-	start = (u8 *)header + sizeof(*header);
-
-	while (header->head != header->tail) {
-		copy_with_wrap(header, &entry, sizeof(entry), queue_size,
-			       start);
-		if (entry.length == 0 || entry.length > max_length) {
-			header->head = header->tail;
-			etdev_err_ratelimited(etdev, "log queue is corrupted");
-			break;
-		}
-		copy_with_wrap(header, buffer, entry.length, queue_size, start);
-		buffer[entry.length] = 0;
-
-		if (entry.code > EDGETPU_FW_DMESG_LOG_LEVEL)
-			continue;
-
-		switch (entry.code) {
-		case EDGETPU_FW_LOG_LEVEL_VERBOSE:
-		case EDGETPU_FW_LOG_LEVEL_DEBUG:
-			etdev_dbg_ratelimited(etdev, "%s", buffer);
-			break;
-		case EDGETPU_FW_LOG_LEVEL_WARN:
-			etdev_warn_ratelimited(etdev, "%s", buffer);
-			break;
-		case EDGETPU_FW_LOG_LEVEL_ERROR:
-			etdev_err_ratelimited(etdev, "%s", buffer);
-			break;
-		case EDGETPU_FW_LOG_LEVEL_INFO:
-		default:
-			etdev_info_ratelimited(etdev, "%s", buffer);
-			break;
-		}
-	}
-	kfree(buffer);
-}
-
-/* Consumes the queue buffer. */
-static void edgetpu_fw_trace(struct edgetpu_telemetry *trace)
-{
-	struct edgetpu_telemetry_header *header = trace->header;
-
-	header->head = header->tail;
-}
-
-/* Worker for processing log/trace buffers. */
-
-static void telemetry_worker(struct work_struct *work)
-{
-	struct edgetpu_telemetry *tel =
-		container_of(work, struct edgetpu_telemetry, work);
-	u32 prev_head;
-	ulong flags;
-
-	/*
-	 * Loop while telemetry enabled, there is data to be consumed,
-	 * and the previous iteration made progress.  If another IRQ arrives
-	 * just after the last head != tail check we should get another worker
-	 * schedule.
-	 */
-	do {
-		spin_lock_irqsave(&tel->state_lock, flags);
-		if (tel->state != EDGETPU_TELEMETRY_ENABLED) {
-			spin_unlock_irqrestore(&tel->state_lock, flags);
-			return;
-		}
-
-		prev_head = tel->header->head;
-		if (tel->header->head != tel->header->tail) {
-			read_lock(&tel->ctx_lock);
-			if (tel->ctx)
-				eventfd_signal(tel->ctx, 1);
-			else
-				tel->fallback_fn(tel);
-			read_unlock(&tel->ctx_lock);
-		}
-
-		spin_unlock_irqrestore(&tel->state_lock, flags);
-		msleep(TELEMETRY_LOG_RECHECK_DELAY);
-	} while (tel->header->head != tel->header->tail &&
-		 tel->header->head != prev_head);
-}
-
-
-/* If the buffer queue is not empty, schedules worker. */
-static void telemetry_irq_handler(struct edgetpu_dev *etdev,
-				  struct edgetpu_telemetry *tel)
-{
-	spin_lock(&tel->state_lock);
-
-	if (tel->state == EDGETPU_TELEMETRY_ENABLED &&
-	    tel->header->head != tel->header->tail) {
-		schedule_work(&tel->work);
-	}
-
-	spin_unlock(&tel->state_lock);
-}
-
-static void telemetry_mappings_show(struct edgetpu_telemetry *tel,
-				    struct seq_file *s)
-{
-	seq_printf(s, "  %#llx %lu %s %#llx %pad\n",
-		   tel->coherent_mem.tpu_addr,
-		   DIV_ROUND_UP(tel->coherent_mem.size, PAGE_SIZE), tel->name,
-		   tel->coherent_mem.host_addr, &tel->coherent_mem.dma_addr);
-}
-
-static void telemetry_inc_mmap_count(struct edgetpu_telemetry *tel, int dif)
-{
-	mutex_lock(&tel->mmap_lock);
-	tel->mmapped_count += dif;
-	mutex_unlock(&tel->mmap_lock);
-}
-
-static int telemetry_mmap_buffer(struct edgetpu_dev *etdev,
-				 struct edgetpu_telemetry *tel,
-				 struct vm_area_struct *vma)
-{
-	int ret;
-
-	mutex_lock(&tel->mmap_lock);
-
-	if (!tel->mmapped_count) {
-		ret = edgetpu_iremap_mmap(etdev, vma, &tel->coherent_mem);
-
-		if (!ret) {
-			tel->coherent_mem.host_addr = vma->vm_start;
-			tel->mmapped_count = 1;
-		}
-	} else {
-		ret = -EBUSY;
-		etdev_warn(etdev, "%s is already mmapped %ld times", tel->name,
-			   tel->mmapped_count);
-	}
-
-	mutex_unlock(&tel->mmap_lock);
-
-	return ret;
-}
-
-static int telemetry_init(struct edgetpu_dev *etdev, struct edgetpu_telemetry *tel,
-			  const char *name, struct edgetpu_coherent_mem *mem, const size_t size,
-			  void (*fallback)(struct edgetpu_telemetry *))
-{
-	rwlock_init(&tel->ctx_lock);
-	tel->name = name;
-	tel->etdev = etdev;
-	tel->coherent_mem = *mem;
-
-	tel->header = (struct edgetpu_telemetry_header *)mem->vaddr;
-	tel->header->head = 0;
-	tel->header->size = 0;
-	tel->header->tail = 0;
-	tel->header->entries_dropped = 0;
-
-	tel->ctx = NULL;
-
-	spin_lock_init(&tel->state_lock);
-	INIT_WORK(&tel->work, telemetry_worker);
-	tel->fallback_fn = fallback;
-	tel->state = EDGETPU_TELEMETRY_ENABLED;
-	mutex_init(&tel->mmap_lock);
-	tel->mmapped_count = 0;
-
-	return 0;
-}
-
-static void telemetry_exit(struct edgetpu_dev *etdev,
-			   struct edgetpu_telemetry *tel)
-{
-	ulong flags;
-
-	spin_lock_irqsave(&tel->state_lock, flags);
-	/* Prevent racing with the IRQ handler or worker */
-	tel->state = EDGETPU_TELEMETRY_INVALID;
-	spin_unlock_irqrestore(&tel->state_lock, flags);
-	cancel_work_sync(&tel->work);
-
-	if (tel->ctx)
-		eventfd_ctx_put(tel->ctx);
-	tel->ctx = NULL;
 }
 
 int edgetpu_telemetry_init(struct edgetpu_dev *etdev,
@@ -319,17 +52,22 @@ int edgetpu_telemetry_init(struct edgetpu_dev *etdev,
 	int ret, i;
 
 	for (i = 0; i < etdev->num_cores; i++) {
-		ret = telemetry_init(etdev, &etdev->telemetry[i].log, "telemetry_log",
-				     log_mem ? &log_mem[i] : NULL,
-				     EDGETPU_TELEMETRY_LOG_BUFFER_SIZE, edgetpu_fw_log);
+		ret = gcip_telemetry_init(etdev->dev, &etdev->telemetry[i].log, "telemetry_log",
+					  log_mem[i].vaddr, EDGETPU_TELEMETRY_LOG_BUFFER_SIZE,
+					  gcip_telemetry_fw_log);
 		if (ret)
 			break;
+
+		etdev->telemetry[i].log_mem = log_mem[i];
+
 #if IS_ENABLED(CONFIG_EDGETPU_TELEMETRY_TRACE)
-		ret = telemetry_init(etdev, &etdev->telemetry[i].trace, "telemetry_trace",
-				     trace_mem ? &trace_mem[i] : NULL,
-				     EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE, edgetpu_fw_trace);
+		ret = gcip_telemetry_init(etdev->dev, &etdev->telemetry[i].trace, "telemetry_trace",
+					  trace_mem[i].vaddr, EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE,
+					  gcip_telemetry_fw_trace);
 		if (ret)
 			break;
+
+		etdev->telemetry[i].trace_mem = trace_mem[i];
 #endif
 	}
 
@@ -345,23 +83,34 @@ void edgetpu_telemetry_exit(struct edgetpu_dev *etdev)
 
 	for (i = 0; i < etdev->num_cores; i++) {
 #if IS_ENABLED(CONFIG_EDGETPU_TELEMETRY_TRACE)
-		telemetry_exit(etdev, &etdev->telemetry[i].trace);
+		gcip_telemetry_exit(&etdev->telemetry[i].trace);
 #endif
-		telemetry_exit(etdev, &etdev->telemetry[i].log);
+		gcip_telemetry_exit(&etdev->telemetry[i].log);
 	}
 }
 
 int edgetpu_telemetry_kci(struct edgetpu_dev *etdev)
 {
+	struct gcip_telemetry_kci_args log_args = {
+		.kci = etdev->etkci->kci,
+		.addr = etdev->telemetry[0].log_mem.tpu_addr,
+		.size = etdev->telemetry[0].log_mem.size,
+	};
+	struct gcip_telemetry_kci_args trace_args = {
+		.kci = etdev->etkci->kci,
+		.addr = etdev->telemetry[0].trace_mem.tpu_addr,
+		.size = etdev->telemetry[0].trace_mem.size,
+	};
 	int ret;
 
 	/* Core 0 will notify other cores. */
-	ret = telemetry_kci(etdev, &etdev->telemetry[0].log, edgetpu_kci_map_log_buffer);
+	ret = gcip_telemetry_kci(&etdev->telemetry[0].log, edgetpu_kci_map_log_buffer, &log_args);
 	if (ret)
 		return ret;
 
 #if IS_ENABLED(CONFIG_EDGETPU_TELEMETRY_TRACE)
-	ret = telemetry_kci(etdev, &etdev->telemetry[0].trace, edgetpu_kci_map_trace_buffer);
+	ret = gcip_telemetry_kci(&etdev->telemetry[0].trace, edgetpu_kci_map_trace_buffer,
+				 &trace_args);
 	if (ret)
 		return ret;
 #endif
@@ -369,14 +118,14 @@ int edgetpu_telemetry_kci(struct edgetpu_dev *etdev)
 	return 0;
 }
 
-int edgetpu_telemetry_set_event(struct edgetpu_dev *etdev,
-				enum edgetpu_telemetry_type type, u32 eventfd)
+int edgetpu_telemetry_set_event(struct edgetpu_dev *etdev, enum gcip_telemetry_type type,
+				u32 eventfd)
 {
 	int i, ret;
 
 	for (i = 0; i < etdev->num_cores; i++) {
-		ret = telemetry_set_event(etdev, select_telemetry(&etdev->telemetry[i], type),
-					  eventfd);
+		ret = gcip_telemetry_set_event(select_telemetry(&etdev->telemetry[i], type),
+					       eventfd);
 		if (ret) {
 			edgetpu_telemetry_unset_event(etdev, type);
 			return ret;
@@ -386,13 +135,12 @@ int edgetpu_telemetry_set_event(struct edgetpu_dev *etdev,
 	return 0;
 }
 
-void edgetpu_telemetry_unset_event(struct edgetpu_dev *etdev,
-				   enum edgetpu_telemetry_type type)
+void edgetpu_telemetry_unset_event(struct edgetpu_dev *etdev, enum gcip_telemetry_type type)
 {
 	int i;
 
 	for (i = 0; i < etdev->num_cores; i++)
-		telemetry_unset_event(etdev, select_telemetry(&etdev->telemetry[i], type));
+		gcip_telemetry_unset_event(select_telemetry(&etdev->telemetry[i], type));
 }
 
 void edgetpu_telemetry_irq_handler(struct edgetpu_dev *etdev)
@@ -400,11 +148,18 @@ void edgetpu_telemetry_irq_handler(struct edgetpu_dev *etdev)
 	int i;
 
 	for (i = 0; i < etdev->num_cores; i++) {
-		telemetry_irq_handler(etdev, &etdev->telemetry[i].log);
+		gcip_telemetry_irq_handler(&etdev->telemetry[i].log);
 #if IS_ENABLED(CONFIG_EDGETPU_TELEMETRY_TRACE)
-		telemetry_irq_handler(etdev, &etdev->telemetry[i].trace);
+		gcip_telemetry_irq_handler(&etdev->telemetry[i].trace);
 #endif
 	}
+}
+
+static void telemetry_mappings_show(struct gcip_telemetry *tel, struct edgetpu_coherent_mem *mem,
+				    struct seq_file *s)
+{
+	seq_printf(s, "  %#llx %lu %s %#llx %pad\n", mem->tpu_addr,
+		   DIV_ROUND_UP(mem->size, PAGE_SIZE), tel->name, mem->host_addr, &mem->dma_addr);
 }
 
 void edgetpu_telemetry_mappings_show(struct edgetpu_dev *etdev,
@@ -413,28 +168,54 @@ void edgetpu_telemetry_mappings_show(struct edgetpu_dev *etdev,
 	int i;
 
 	for (i = 0; i < etdev->num_cores; i++) {
-		telemetry_mappings_show(&etdev->telemetry[i].log, s);
+		telemetry_mappings_show(&etdev->telemetry[i].log, &etdev->telemetry[i].log_mem, s);
 #if IS_ENABLED(CONFIG_EDGETPU_TELEMETRY_TRACE)
-		telemetry_mappings_show(&etdev->telemetry[i].trace, s);
+		telemetry_mappings_show(&etdev->telemetry[i].trace, &etdev->telemetry[i].trace_mem,
+					s);
 #endif
 	}
 }
 
-int edgetpu_mmap_telemetry_buffer(struct edgetpu_dev *etdev, enum edgetpu_telemetry_type type,
+struct edgetpu_telemetry_mmap_args {
+	struct edgetpu_dev *etdev;
+	struct edgetpu_coherent_mem *mem;
+	struct vm_area_struct *vma;
+};
+
+static int telemetry_mmap_buffer(void *args)
+{
+	struct edgetpu_telemetry_mmap_args *data = args;
+	int ret;
+
+	ret = edgetpu_iremap_mmap(data->etdev, data->vma, data->mem);
+
+	if (!ret)
+		data->mem->host_addr = data->vma->vm_start;
+
+	return ret;
+}
+
+int edgetpu_mmap_telemetry_buffer(struct edgetpu_dev *etdev, enum gcip_telemetry_type type,
 				  struct vm_area_struct *vma, int core_id)
 {
-	return telemetry_mmap_buffer(etdev, select_telemetry(&etdev->telemetry[core_id], type),
-				     vma);
+	struct edgetpu_telemetry_mmap_args args = {
+		.etdev = etdev,
+		.mem = select_telemetry_mem(&etdev->telemetry[core_id], type),
+		.vma = vma,
+	};
+
+	return gcip_telemetry_mmap_buffer(select_telemetry(&etdev->telemetry[core_id], type),
+					  telemetry_mmap_buffer, &args);
 }
 
-void edgetpu_telemetry_inc_mmap_count(struct edgetpu_dev *etdev, enum edgetpu_telemetry_type type,
+void edgetpu_telemetry_inc_mmap_count(struct edgetpu_dev *etdev, enum gcip_telemetry_type type,
 				      int core_id)
 {
-	telemetry_inc_mmap_count(select_telemetry(&etdev->telemetry[core_id], type), 1);
+	gcip_telemetry_inc_mmap_count(select_telemetry(&etdev->telemetry[core_id], type), 1);
 }
 
-void edgetpu_telemetry_dec_mmap_count(struct edgetpu_dev *etdev, enum edgetpu_telemetry_type type,
+void edgetpu_telemetry_dec_mmap_count(struct edgetpu_dev *etdev, enum gcip_telemetry_type type,
 				      int core_id)
 {
-	telemetry_inc_mmap_count(select_telemetry(&etdev->telemetry[core_id], type), -1);
+	gcip_telemetry_inc_mmap_count(select_telemetry(&etdev->telemetry[core_id], type), -1);
 }

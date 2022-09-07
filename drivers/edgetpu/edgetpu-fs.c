@@ -72,11 +72,6 @@ static struct dentry *edgetpu_debugfs_dir;
 		}                                                              \
 	} while (0)
 
-bool is_edgetpu_file(struct file *file)
-{
-	return file->f_op == &edgetpu_fops;
-}
-
 int edgetpu_open(struct edgetpu_dev_iface *etiface, struct file *file)
 {
 	struct edgetpu_client *client;
@@ -178,11 +173,9 @@ edgetpu_ioctl_set_perdie_eventfd(struct edgetpu_client *client,
 
 	switch (eventreg.event_id) {
 	case EDGETPU_PERDIE_EVENT_LOGS_AVAILABLE:
-		return edgetpu_telemetry_set_event(etdev, EDGETPU_TELEMETRY_LOG,
-						   eventreg.eventfd);
+		return edgetpu_telemetry_set_event(etdev, GCIP_TELEMETRY_LOG, eventreg.eventfd);
 	case EDGETPU_PERDIE_EVENT_TRACES_AVAILABLE:
-		return edgetpu_telemetry_set_event(
-			etdev, EDGETPU_TELEMETRY_TRACE, eventreg.eventfd);
+		return edgetpu_telemetry_set_event(etdev, GCIP_TELEMETRY_TRACE, eventreg.eventfd);
 	default:
 		return -EINVAL;
 	}
@@ -199,10 +192,10 @@ static int edgetpu_ioctl_unset_perdie_eventfd(struct edgetpu_client *client,
 
 	switch (event_id) {
 	case EDGETPU_PERDIE_EVENT_LOGS_AVAILABLE:
-		edgetpu_telemetry_unset_event(etdev, EDGETPU_TELEMETRY_LOG);
+		edgetpu_telemetry_unset_event(etdev, GCIP_TELEMETRY_LOG);
 		break;
 	case EDGETPU_PERDIE_EVENT_TRACES_AVAILABLE:
-		edgetpu_telemetry_unset_event(etdev, EDGETPU_TELEMETRY_TRACE);
+		edgetpu_telemetry_unset_event(etdev, GCIP_TELEMETRY_TRACE);
 		break;
 	default:
 		return -EINVAL;
@@ -960,7 +953,7 @@ static const struct attribute_group edgetpu_attr_group = {
 	.attrs = edgetpu_dev_attrs,
 };
 
-const struct file_operations edgetpu_fops = {
+static const struct file_operations edgetpu_fops = {
 	.owner = THIS_MODULE,
 	.llseek = no_llseek,
 	.mmap = edgetpu_fs_mmap,
@@ -968,6 +961,11 @@ const struct file_operations edgetpu_fops = {
 	.release = edgetpu_fs_release,
 	.unlocked_ioctl = edgetpu_fs_ioctl,
 };
+
+bool is_edgetpu_file(struct file *file)
+{
+	return file->f_op == &edgetpu_fops;
+}
 
 static int edgeptu_fs_add_interface(struct edgetpu_dev *etdev, struct edgetpu_dev_iface *etiface,
 				    const struct edgetpu_iface_params *etiparams)

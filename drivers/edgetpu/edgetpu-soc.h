@@ -22,7 +22,11 @@ int edgetpu_soc_init(struct edgetpu_dev *etdev);
 /* Prep for running firmware: set access control, etc. */
 int edgetpu_soc_prepare_firmware(struct edgetpu_dev *etdev);
 
-/* Power management get TPU clock rate */
+/*
+ * Power management get TPU clock rate.
+ * @flags can be used by platform-specific code to pass additional flags to the SoC
+ *        handler; for calls from generic code this value must be zero.
+ */
 long edgetpu_soc_pm_get_rate(int flags);
 
 /* Power management set TPU clock rate */

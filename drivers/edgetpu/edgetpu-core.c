@@ -206,11 +206,11 @@ static void edgetpu_vma_open(struct vm_area_struct *vma)
 	/* handle telemetry types */
 	switch (type) {
 	case VMA_LOG:
-		edgetpu_telemetry_inc_mmap_count(etdev, EDGETPU_TELEMETRY_LOG,
+		edgetpu_telemetry_inc_mmap_count(etdev, GCIP_TELEMETRY_LOG,
 						 VMA_DATA_GET(pvt->flag));
 		break;
 	case VMA_TRACE:
-		edgetpu_telemetry_inc_mmap_count(etdev, EDGETPU_TELEMETRY_TRACE,
+		edgetpu_telemetry_inc_mmap_count(etdev, GCIP_TELEMETRY_TRACE,
 						 VMA_DATA_GET(pvt->flag));
 		break;
 	default:
@@ -233,11 +233,11 @@ static void edgetpu_vma_close(struct vm_area_struct *vma)
 	/* handle telemetry types */
 	switch (type) {
 	case VMA_LOG:
-		edgetpu_telemetry_dec_mmap_count(etdev, EDGETPU_TELEMETRY_LOG,
+		edgetpu_telemetry_dec_mmap_count(etdev, GCIP_TELEMETRY_LOG,
 						 VMA_DATA_GET(pvt->flag));
 		break;
 	case VMA_TRACE:
-		edgetpu_telemetry_dec_mmap_count(etdev, EDGETPU_TELEMETRY_TRACE,
+		edgetpu_telemetry_dec_mmap_count(etdev, GCIP_TELEMETRY_TRACE,
 						 VMA_DATA_GET(pvt->flag));
 		break;
 	default:
@@ -299,12 +299,12 @@ int edgetpu_mmap(struct edgetpu_client *client, struct vm_area_struct *vma)
 
 	/* Allow mapping log and telemetry buffers without a group */
 	if (type == VMA_LOG) {
-		ret = edgetpu_mmap_telemetry_buffer(client->etdev, EDGETPU_TELEMETRY_LOG, vma,
+		ret = edgetpu_mmap_telemetry_buffer(client->etdev, GCIP_TELEMETRY_LOG, vma,
 						    VMA_DATA_GET(flag));
 		goto out_set_op;
 	}
 	if (type == VMA_TRACE) {
-		ret = edgetpu_mmap_telemetry_buffer(client->etdev, EDGETPU_TELEMETRY_TRACE, vma,
+		ret = edgetpu_mmap_telemetry_buffer(client->etdev, GCIP_TELEMETRY_TRACE, vma,
 						    VMA_DATA_GET(flag));
 		goto out_set_op;
 	}
@@ -598,10 +598,10 @@ void edgetpu_client_remove(struct edgetpu_client *client)
 	/* Clean up all the per die event fds registered by the client */
 	if (client->perdie_events &
 	    1 << perdie_event_id_to_num(EDGETPU_PERDIE_EVENT_LOGS_AVAILABLE))
-		edgetpu_telemetry_unset_event(etdev, EDGETPU_TELEMETRY_LOG);
+		edgetpu_telemetry_unset_event(etdev, GCIP_TELEMETRY_LOG);
 	if (client->perdie_events &
 	    1 << perdie_event_id_to_num(EDGETPU_PERDIE_EVENT_TRACES_AVAILABLE))
-		edgetpu_telemetry_unset_event(etdev, EDGETPU_TELEMETRY_TRACE);
+		edgetpu_telemetry_unset_event(etdev, GCIP_TELEMETRY_TRACE);
 
 	edgetpu_client_put(client);
 }
