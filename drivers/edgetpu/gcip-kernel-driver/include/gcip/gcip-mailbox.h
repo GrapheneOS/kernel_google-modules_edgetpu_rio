@@ -346,6 +346,12 @@ struct gcip_mailbox {
 	const struct gcip_mailbox_ops *ops;
 	/* User-defined data. */
 	void *data;
+
+	/*
+	 * The flag to specify sequence numbers of command responses are not
+	 * required to be in order.
+	 */
+	bool ignore_seq_order;
 };
 
 /* Arguments for gcip_mailbox_init. See struct gcip_mailbox for details. */
@@ -362,6 +368,8 @@ struct gcip_mailbox_args {
 	u32 timeout;
 	const struct gcip_mailbox_ops *ops;
 	void *data;
+
+	bool ignore_seq_order;
 };
 
 /* Initializes a mailbox object. */

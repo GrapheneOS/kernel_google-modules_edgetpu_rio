@@ -8,6 +8,7 @@
 #include <linux/delay.h>
 #include <linux/dev_printk.h>
 #include <linux/eventfd.h>
+#include <linux/log2.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
@@ -100,7 +101,6 @@ void gcip_telemetry_fw_log(struct gcip_telemetry *log)
 
 	if (!buffer) {
 		header->head = header->tail;
-		dev_err(dev, "failed to allocate log buffer");
 		return;
 	}
 	start = (u8 *)header + sizeof(*header);
@@ -222,6 +222,13 @@ int gcip_telemetry_init(struct device *dev, struct gcip_telemetry *tel, const ch
 			void *vaddr, const size_t size,
 			void (*fallback_fn)(struct gcip_telemetry *))
 {
+	if (!is_power_of_2(size) || size <= sizeof(struct gcip_telemetry_header)) {
+		dev_err(dev,
+			"Size of GCIP telemetry buffer must be a power of 2 and greater than %zu.",
+			sizeof(struct gcip_telemetry_header));
+		return -EINVAL;
+	}
+
 	rwlock_init(&tel->ctx_lock);
 	tel->name = name;
 	tel->dev = dev;

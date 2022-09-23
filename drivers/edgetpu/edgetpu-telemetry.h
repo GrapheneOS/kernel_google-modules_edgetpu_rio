@@ -29,9 +29,6 @@ struct edgetpu_telemetry_ctx {
 /*
  * Allocates resources needed for @etdev->telemetry.
  *
- * Optionally provide arrays of etdev->num_cores coherent_mem buffers for log and trace.
- * If any of these are NULL, they will be allocated and freed by telemetry code.
- *
  * Returns 0 on success, or a negative errno on error.
  */
 int edgetpu_telemetry_init(struct edgetpu_dev *etdev,

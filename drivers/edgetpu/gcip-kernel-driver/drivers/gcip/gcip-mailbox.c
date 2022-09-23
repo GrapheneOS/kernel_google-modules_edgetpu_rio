@@ -186,10 +186,11 @@ out:
  * 2. #seq == @resp->seq:
  *   - Copy @resp, pop the head and we're done.
  * 3. #seq < @resp->seq:
- *   - Should not happen, this implies the sequence number of either entries in wait_list or
- *     responses are out-of-order, or remote didn't respond to a command. In this case, the status
- *     of response will be set to GCIP_MAILBOX_STATUS_NO_RESPONSE if the command is sync request.
- *   - Pop until case 1. or 2.
+ *   - If @mailbox->ignore_seq_order is specified, this is a normal case and the entry is skipped.
+ *   - Otherwise, it *should* not happen, this implies the sequence number of either entries in
+ *     wait_list or responses are out-of-order, or remote didn't respond to a command. In this
+ *     case, the status of response will be set to GCIP_MAILBOX_STATUS_NO_RESPONSE. Then pop until
+ *     case 1. or 2.
  */
 static void gcip_mailbox_handle_response(struct gcip_mailbox *mailbox, void *resp)
 {
@@ -235,10 +236,11 @@ static void gcip_mailbox_handle_response(struct gcip_mailbox *mailbox, void *res
 			kfree(cur);
 			break;
 		}
-		/* cur_seq < seq */
-		SET_RESP_ELEM_STATUS(cur->resp, GCIP_MAILBOX_STATUS_NO_RESPONSE);
-		list_del(&cur->list);
-		kfree(cur);
+		if (!mailbox->ignore_seq_order && cur_seq < seq) {
+			SET_RESP_ELEM_STATUS(cur->resp, GCIP_MAILBOX_STATUS_NO_RESPONSE);
+			list_del(&cur->list);
+			kfree(cur);
+		}
 	}
 
 	RELEASE_WAIT_LIST_LOCK(true, flags);
@@ -485,6 +487,7 @@ int gcip_mailbox_init(struct gcip_mailbox *mailbox, const struct gcip_mailbox_ar
 	mailbox->resp_elem_size = args->resp_elem_size;
 	mailbox->timeout = args->timeout;
 	mailbox->cur_seq = 0;
+	mailbox->ignore_seq_order = args->ignore_seq_order;
 	gcip_mailbox_set_data(mailbox, args->data);
 
 	ret = gcip_mailbox_set_ops(mailbox, args->ops);

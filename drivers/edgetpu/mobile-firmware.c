@@ -188,27 +188,6 @@ static int mobile_firmware_gsa_authenticate(struct edgetpu_mobile_platform_dev *
 	return ret;
 }
 
-/* TODO(b/197074886): remove once rio has GSA support */
-static void program_iremap_csr(struct edgetpu_dev *etdev)
-{
-	const int ctx_id = 0, sid0 = 0x30, sid1 = 0x34;
-	phys_addr_t fw_paddr = EDGETPU_INSTRUCTION_REMAP_BASE;
-
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_SECURITY, (ctx_id << 16) | sid0);
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_SECURITY + 8,
-			     (ctx_id << 16) | sid1);
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_NEW_BASE, fw_paddr);
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_NEW_BASE + 8, fw_paddr);
-
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_LIMIT,
-			     EDGETPU_INSTRUCTION_REMAP_BASE + SZ_32M);
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_LIMIT + 8,
-			     EDGETPU_INSTRUCTION_REMAP_BASE + SZ_32M);
-
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_CONTROL, 1);
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_CONTROL + 8, 1);
-}
-
 static int mobile_firmware_prepare_run(struct edgetpu_firmware *et_fw,
 				       struct edgetpu_firmware_buffer *fw_buf)
 {
@@ -216,9 +195,6 @@ static int mobile_firmware_prepare_run(struct edgetpu_firmware *et_fw,
 
 	/* Reset KCI mailbox before starting f/w, don't process anything old.*/
 	edgetpu_mailbox_reset(etdev->etkci->mailbox);
-
-	if (IS_ENABLED(CONFIG_RIO))
-		program_iremap_csr(etdev);
 
 	edgetpu_soc_prepare_firmware(etdev);
 
@@ -313,6 +289,27 @@ out:
 	return ret;
 }
 
+/* TODO: Get the SIDs and CSRs form chip config. */
+static void program_iremap_csr(struct edgetpu_dev *etdev)
+{
+	const int ctx_id = 0, sid0 = 0x30, sid1 = 0x34;
+	phys_addr_t fw_paddr = EDGETPU_INSTRUCTION_REMAP_BASE;
+
+	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_SECURITY, (ctx_id << 16) | sid0);
+	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_SECURITY + 8,
+			     (ctx_id << 16) | sid1);
+	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_NEW_BASE, fw_paddr);
+	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_NEW_BASE + 8, fw_paddr);
+
+	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_LIMIT,
+			     EDGETPU_INSTRUCTION_REMAP_BASE + SZ_32M);
+	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_LIMIT + 8,
+			     EDGETPU_INSTRUCTION_REMAP_BASE + SZ_32M);
+
+	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_CONTROL, 1);
+	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_CONTROL + 8, 1);
+}
+
 int edgetpu_mobile_firmware_reset_cpu(struct edgetpu_dev *etdev, bool assert_reset)
 {
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
@@ -322,6 +319,8 @@ int edgetpu_mobile_firmware_reset_cpu(struct edgetpu_dev *etdev, bool assert_res
 	if (gcip_image_config_is_ns(image_config)) {
 		int i;
 
+		if (!assert_reset)
+			program_iremap_csr(etdev);
 		for (i = 0; i < EDGETPU_NUM_CORES; i++)
 			edgetpu_dev_write_32_sync(etdev, EDGETPU_REG_RESET_CONTROL + i * 8,
 						  assert_reset ? 1 : 0);

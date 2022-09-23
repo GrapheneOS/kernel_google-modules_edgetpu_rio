@@ -465,6 +465,8 @@ int edgetpu_kci_update_usage(struct edgetpu_dev *etdev)
 fw_unlock:
 	edgetpu_firmware_unlock(etdev);
 
+	if (ret)
+		etdev_warn_once(etdev, "get firmware usage stats failed: %d", ret);
 	return ret;
 }
 
