@@ -64,15 +64,23 @@ int edgetpu_telemetry_init(struct edgetpu_dev *etdev,
 		ret = gcip_telemetry_init(etdev->dev, &etdev->telemetry[i].trace, "telemetry_trace",
 					  trace_mem[i].vaddr, EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE,
 					  gcip_telemetry_fw_trace);
-		if (ret)
+		if (ret) {
+			gcip_telemetry_exit(&etdev->telemetry[i].log);
 			break;
+		}
 
 		etdev->telemetry[i].trace_mem = trace_mem[i];
 #endif
 	}
 
 	if (ret)
-		edgetpu_telemetry_exit(etdev);
+		while (i--) {
+#if IS_ENABLED(CONFIG_EDGETPU_TELEMETRY_TRACE)
+			gcip_telemetry_exit(&etdev->telemetry[i].trace);
+#endif
+			gcip_telemetry_exit(&etdev->telemetry[i].log);
+
+		}
 
 	return ret;
 }
