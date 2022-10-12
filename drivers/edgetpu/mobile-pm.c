@@ -24,10 +24,6 @@
 #include "edgetpu-pm.c"
 #include "edgetpu-soc.h"
 
-static int power_state = TPU_DEFAULT_POWER_STATE;
-
-module_param(power_state, int, 0660);
-
 enum edgetpu_pwr_state edgetpu_active_states[EDGETPU_NUM_STATES] = {
 	TPU_ACTIVE_UUD,
 	TPU_ACTIVE_SUD,
@@ -37,46 +33,16 @@ enum edgetpu_pwr_state edgetpu_active_states[EDGETPU_NUM_STATES] = {
 
 uint32_t *edgetpu_states_display = edgetpu_active_states;
 
-static int mobile_pwr_state_init(struct device *dev)
-{
-	int ret;
-	int curr_state;
-
-	pm_runtime_enable(dev);
-	curr_state = edgetpu_soc_pm_get_rate(0);
-
-	if (curr_state > TPU_OFF) {
-		ret = pm_runtime_get_sync(dev);
-		if (ret) {
-			pm_runtime_put_noidle(dev);
-			dev_err(dev, "pm_runtime_get_sync returned %d\n", ret);
-			return ret;
-		}
-	}
-
-	ret = edgetpu_soc_pm_set_init_freq(curr_state);
-	if (ret) {
-		dev_err(dev, "error initializing tpu state: %d\n", ret);
-		if (curr_state > TPU_OFF)
-			pm_runtime_put_sync(dev);
-		return ret;
-	}
-
-	return ret;
-}
-
 static int mobile_pwr_state_set_locked(struct edgetpu_mobile_platform_dev *etmdev, u64 val)
 {
 	int ret;
-	int curr_state;
+	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
 	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
 	struct device *dev = etdev->dev;
 
-	curr_state = edgetpu_soc_pm_get_rate(0);
+	dev_dbg(dev, "Power state to %llu\n", val);
 
-	dev_dbg(dev, "Power state %d -> %llu\n", curr_state, val);
-
-	if (curr_state == TPU_OFF && val > TPU_OFF) {
+	if (val > TPU_OFF && (!platform_pwr->is_block_down || platform_pwr->is_block_down(etdev))) {
 		ret = pm_runtime_get_sync(dev);
 		if (ret) {
 			pm_runtime_put_noidle(dev);
@@ -92,7 +58,8 @@ static int mobile_pwr_state_set_locked(struct edgetpu_mobile_platform_dev *etmde
 		return ret;
 	}
 
-	if (curr_state != TPU_OFF && val == TPU_OFF) {
+	if (val == TPU_OFF &&
+	    (!platform_pwr->is_block_down || !platform_pwr->is_block_down(etdev))) {
 		ret = pm_runtime_put_sync(dev);
 		if (ret) {
 			dev_err(dev, "%s: pm_runtime_put_sync returned %d\n", __func__, ret);
@@ -108,7 +75,7 @@ static int mobile_pwr_state_get_locked(void *data, u64 *val)
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 	struct device *dev = etdev->dev;
 
-	*val = edgetpu_soc_pm_get_rate(0);
+	*val = edgetpu_soc_pm_get_rate(etdev, 0);
 	dev_dbg(dev, "current tpu state: %llu\n", *val);
 
 	return 0;
@@ -212,27 +179,6 @@ DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_pwr_state, mobile_pwr_state_get, mobile_pwr_st
 DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_min_pwr_state, mobile_min_pwr_state_get, mobile_min_pwr_state_set,
 			"%llu\n");
 
-static int mobile_get_initial_pwr_state(struct device *dev)
-{
-	switch (power_state) {
-	case TPU_ACTIVE_UUD:
-	case TPU_ACTIVE_SUD:
-	case TPU_ACTIVE_UD:
-	case TPU_ACTIVE_NOM:
-		dev_info(dev, "Initial power state: %d\n", power_state);
-		break;
-	case TPU_OFF:
-		dev_warn(dev, "Power state %d prevents control core booting", power_state);
-		fallthrough;
-	default:
-		dev_warn(dev, "Power state %d is invalid\n", power_state);
-		dev_warn(dev, "defaulting to active nominal\n");
-		power_state = TPU_ACTIVE_NOM;
-		break;
-	}
-	return power_state;
-}
-
 static int mobile_power_down(struct edgetpu_pm *etpm);
 
 static int mobile_power_up(struct edgetpu_pm *etpm)
@@ -245,12 +191,14 @@ static int mobile_power_up(struct edgetpu_pm *etpm)
 	if (platform_pwr->is_block_down && !platform_pwr->is_block_down(etdev))
 		return -EAGAIN;
 
-	ret = mobile_pwr_state_set(etpm->etdev, mobile_get_initial_pwr_state(etdev->dev));
-
 	etdev_info(etpm->etdev, "Powering up\n");
 
-	if (ret)
+	ret = pm_runtime_get_sync(etdev->dev);
+	if (ret) {
+		pm_runtime_put_noidle(etdev->dev);
+		etdev_err(etdev, "pm_runtime_get_sync returned %d\n", ret);
 		return ret;
+	}
 
 	if (platform_pwr->lpm_up)
 		platform_pwr->lpm_up(etdev);
@@ -320,7 +268,6 @@ static int mobile_power_down(struct edgetpu_pm *etpm)
 	struct edgetpu_dev *etdev = etpm->etdev;
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
-	u64 val;
 	int res = 0;
 	int min_state = platform_pwr->min_state;
 
@@ -331,11 +278,7 @@ static int mobile_power_down(struct edgetpu_pm *etpm)
 		return 0;
 	}
 
-	if (mobile_pwr_state_get(etdev, &val)) {
-		etdev_warn(etdev, "Failed to read current power state\n");
-		val = TPU_ACTIVE_NOM;
-	}
-	if (val == TPU_OFF) {
+	if (platform_pwr->is_block_down && platform_pwr->is_block_down(etdev)) {
 		etdev_dbg(etdev, "Device already off, skipping shutdown\n");
 		return 0;
 	}
@@ -366,7 +309,11 @@ static int mobile_power_down(struct edgetpu_pm *etpm)
 			etdev_warn(etdev, "CPU reset request failed (%d)\n", res);
 	}
 
-	mobile_pwr_state_set(etdev, TPU_OFF);
+	res = pm_runtime_put_sync(etdev->dev);
+	if (res) {
+		etdev_err(etdev, "pm_runtime_put_sync returned %d\n", res);
+		return res;
+	}
 
 	edgetpu_soc_pm_power_down(etdev);
 
@@ -389,16 +336,18 @@ static int mobile_pm_after_create(struct edgetpu_pm *etpm)
 	struct device *dev = etdev->dev;
 	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
 
-	ret = mobile_pwr_state_init(dev);
-	if (ret)
+	pm_runtime_enable(dev);
+
+	ret = pm_runtime_get_sync(dev);
+	if (ret) {
+		pm_runtime_put_noidle(dev);
+		dev_err(dev, "pm_runtime_get_sync returned %d\n", ret);
 		return ret;
+	}
 
 	mutex_init(&platform_pwr->policy_lock);
 	mutex_init(&platform_pwr->state_lock);
 
-	ret = mobile_pwr_state_set(etdev, mobile_get_initial_pwr_state(dev));
-	if (ret)
-		return ret;
 	platform_pwr->debugfs_dir = debugfs_create_dir("power", edgetpu_fs_debugfs_dir());
 	if (IS_ERR_OR_NULL(platform_pwr->debugfs_dir)) {
 		dev_warn(etdev->dev, "Failed to create debug FS power");

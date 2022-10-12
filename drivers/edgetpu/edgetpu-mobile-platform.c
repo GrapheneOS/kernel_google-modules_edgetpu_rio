@@ -231,7 +231,9 @@ static void edgetpu_platform_parse_pmu(struct edgetpu_mobile_platform_dev *etmde
 	    !of_property_read_u32_index(dev->of_node, "pmu-status-base", 0, &reg)) {
 		etmdev->pmu_status = devm_ioremap(dev, reg, 0x4);
 		if (!etmdev->pmu_status)
-			etdev_info(etdev, "Using ACPM for blk status query\n");
+			etdev_err(etdev, "Using ACPM for blk status query\n");
+	} else {
+		etdev_warn(etdev, "Failed to find PMU register base\n");
 	}
 }
 
@@ -363,6 +365,12 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		goto out_cleanup_fw;
 	}
 
+	/*
+	 * Parses PMU before edgetpu_device_add so edgetpu_chip_pm_create can know whether to set
+	 * the is_block_down op.
+	 */
+	edgetpu_platform_parse_pmu(etmdev);
+
 	ret = edgetpu_device_add(etdev, &regs, iface_params, ARRAY_SIZE(iface_params));
 	if (ret) {
 		dev_err(dev, "edgetpu setup failed: %d", ret);
@@ -374,8 +382,6 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		dev_err(dev, "IRQ setup failed: %d", ret);
 		goto out_remove_device;
 	}
-
-	edgetpu_platform_parse_pmu(etmdev);
 
 	etmdev->log_mem = devm_kcalloc(dev, etdev->num_cores, sizeof(*etmdev->log_mem), GFP_KERNEL);
 	if (!etmdev->log_mem) {

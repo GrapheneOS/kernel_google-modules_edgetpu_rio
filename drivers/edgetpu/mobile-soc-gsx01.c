@@ -6,6 +6,7 @@
  */
 
 #include <linux/device.h>
+#include <linux/errno.h>
 #include <linux/gsa/gsa_tpu.h>
 #include <linux/platform_device.h>
 #include <linux/thermal.h>
@@ -55,6 +56,11 @@
 
 #define SSMT_BYPASS	(1 << 31)
 
+#define PLL_CON3_OFFSET 0x10c
+#define PLL_DIV_M_POS 16
+#define PLL_DIV_M_WIDTH 10
+#define TO_PLL_DIV_M(val) (((val) >> PLL_DIV_M_POS) & (BIT(PLL_DIV_M_WIDTH) - 1))
+
 static int gsx01_parse_ssmt(struct edgetpu_mobile_platform_dev *etmdev)
 {
 	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
@@ -94,6 +100,31 @@ static int gsx01_parse_ssmt(struct edgetpu_mobile_platform_dev *etmdev)
 	return 0;
 }
 
+static int gsx01_parse_cmu(struct edgetpu_mobile_platform_dev *etmdev)
+{
+	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
+	struct platform_device *pdev = to_platform_device(etdev->dev);
+	struct edgetpu_soc_data *soc_data = etdev->soc_data;
+	struct resource *res;
+	void __iomem *cmu_base;
+	int ret;
+
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "cmu");
+	if (!res) {
+		etdev_warn(etdev, "Failed to find CMU register base");
+		return -EINVAL;
+	}
+	cmu_base = devm_ioremap_resource(&pdev->dev, res);
+	if (IS_ERR(cmu_base)) {
+		ret = PTR_ERR(cmu_base);
+		etdev_warn(etdev, "Failed to map CMU register base: %d", ret);
+		return ret;
+	}
+	soc_data->cmu_base = cmu_base;
+
+	return 0;
+}
+
 int edgetpu_soc_init(struct edgetpu_dev *etdev)
 {
 	struct platform_device *pdev = to_platform_device(etdev->dev);
@@ -108,6 +139,11 @@ int edgetpu_soc_init(struct edgetpu_dev *etdev)
 	ret = gsx01_parse_ssmt(etmdev);
 	if (ret)
 		dev_warn(etdev->dev, "SSMT setup failed (%d). Context isolation not enforced", ret);
+
+	ret = gsx01_parse_cmu(etmdev);
+	if (ret)
+		dev_warn(etdev->dev, "CMU setup failed (%d). Can't query TPU core frequency.", ret);
+
 	return 0;
 }
 
@@ -261,21 +297,62 @@ void edgetpu_soc_handle_reverse_kci(struct edgetpu_dev *etdev,
 
 static unsigned long edgetpu_pm_rate;
 
-long edgetpu_soc_pm_get_rate(int flags)
+long edgetpu_soc_pm_get_rate(struct edgetpu_dev *etdev, int flags)
 {
-	return edgetpu_pm_rate;
+	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
+	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
+	void __iomem *cmu_base = etdev->soc_data->cmu_base;
+	long curr_state;
+	u32 pll_con3;
+
+	if (IS_ENABLED(CONFIG_EDGETPU_TEST))
+		return edgetpu_pm_rate;
+
+	if (!cmu_base)
+		return -EINVAL;
+
+	if (!platform_pwr->is_block_down)
+		etdev_warn(etdev,
+			   "Querying the CMU PLL register when TPU_OFF might lead to crash.");
+	else if (platform_pwr->is_block_down(etdev))
+		return 0;
+
+	pll_con3 = readl(cmu_base + PLL_CON3_OFFSET);
+
+	/*
+	 * Below values must match the CMU PLL (pll_con3_pll_tpu) values in the spec and firmware.
+	 * See https://drive.google.com/file/d/16S9yxmGwkOltdO2w4dC8tpAt99chn-aq/view and
+	 * power_manager.cc for more details.
+	 */
+	switch (TO_PLL_DIV_M(pll_con3)) {
+	case 221:
+		curr_state = TPU_ACTIVE_UUD;
+		break;
+	case 153:
+		curr_state = TPU_ACTIVE_SUD;
+		break;
+	case 206:
+		curr_state = TPU_ACTIVE_UD;
+		break;
+	case 182:
+		curr_state = TPU_ACTIVE_NOM;
+		break;
+	default:
+		etdev_err(etdev, "Invalid DIV_M read from PLL: %lu\n", TO_PLL_DIV_M(pll_con3));
+		curr_state = -EINVAL;
+	}
+
+	etdev_dbg(etdev, "current tpu state: %ld\n", curr_state);
+
+	return curr_state;
 }
 
 int edgetpu_soc_pm_set_rate(unsigned long rate)
 {
-	edgetpu_pm_rate = rate;
+	if (IS_ENABLED(CONFIG_EDGETPU_TEST))
+		edgetpu_pm_rate = rate;
 
-	return 0;
-}
-
-int edgetpu_soc_pm_set_init_freq(unsigned long freq)
-{
-	return 0;
+	return -EOPNOTSUPP;
 }
 
 int edgetpu_soc_pm_set_policy(u64 val)
@@ -285,7 +362,10 @@ int edgetpu_soc_pm_set_policy(u64 val)
 
 static int edgetpu_core_rate_get(void *data, u64 *val)
 {
-	*val = edgetpu_soc_pm_get_rate(TPU_DEBUG_REQ | TPU_CLK_CORE_DEBUG);
+	struct edgetpu_dev *etdev = (typeof(etdev))data;
+
+	*val = edgetpu_soc_pm_get_rate(etdev, TPU_DEBUG_REQ | TPU_CLK_CORE_DEBUG);
+
 	return 0;
 }
 
@@ -301,7 +381,10 @@ static int edgetpu_core_rate_set(void *data, u64 val)
 
 static int edgetpu_ctl_rate_get(void *data, u64 *val)
 {
-	*val = edgetpu_soc_pm_get_rate(TPU_DEBUG_REQ | TPU_CLK_CTL_DEBUG);
+	struct edgetpu_dev *etdev = (typeof(etdev))data;
+
+	*val = edgetpu_soc_pm_get_rate(etdev, TPU_DEBUG_REQ | TPU_CLK_CTL_DEBUG);
+
 	return 0;
 }
 
@@ -317,7 +400,10 @@ static int edgetpu_ctl_rate_set(void *data, u64 val)
 
 static int edgetpu_axi_rate_get(void *data, u64 *val)
 {
-	*val = edgetpu_soc_pm_get_rate(TPU_DEBUG_REQ | TPU_CLK_AXI_DEBUG);
+	struct edgetpu_dev *etdev = (typeof(etdev))data;
+
+	*val = edgetpu_soc_pm_get_rate(etdev, TPU_DEBUG_REQ | TPU_CLK_AXI_DEBUG);
+
 	return 0;
 }
 
@@ -333,23 +419,29 @@ static int edgetpu_axi_rate_set(void *data, u64 val)
 
 static int edgetpu_apb_rate_get(void *data, u64 *val)
 {
-	*val = edgetpu_soc_pm_get_rate(TPU_DEBUG_REQ | TPU_CLK_APB_DEBUG);
+	struct edgetpu_dev *etdev = (typeof(etdev))data;
+
+	*val = edgetpu_soc_pm_get_rate(etdev, TPU_DEBUG_REQ | TPU_CLK_APB_DEBUG);
+
 	return 0;
 }
 
 static int edgetpu_uart_rate_get(void *data, u64 *val)
 {
-	*val = edgetpu_soc_pm_get_rate(TPU_DEBUG_REQ | TPU_CLK_UART_DEBUG);
+	struct edgetpu_dev *etdev = (typeof(etdev))data;
+
+	*val = edgetpu_soc_pm_get_rate(etdev, TPU_DEBUG_REQ | TPU_CLK_UART_DEBUG);
+
 	return 0;
 }
 
 static int edgetpu_vdd_int_m_set(void *data, u64 val)
 {
-	struct device *dev = (struct device *)data;
+	struct edgetpu_dev *etdev = (typeof(etdev))data;
 	unsigned long dbg_rate_req;
 
 	if (val > MAX_VOLTAGE_VAL) {
-		dev_err(dev, "Preventing INT_M voltage > %duV", MAX_VOLTAGE_VAL);
+		etdev_err(etdev, "Preventing INT_M voltage > %duV", MAX_VOLTAGE_VAL);
 		return -EINVAL;
 	}
 
@@ -361,18 +453,21 @@ static int edgetpu_vdd_int_m_set(void *data, u64 val)
 
 static int edgetpu_vdd_int_m_get(void *data, u64 *val)
 {
-	*val = edgetpu_soc_pm_get_rate(TPU_DEBUG_REQ | TPU_VDD_INT_M_DEBUG);
+	struct edgetpu_dev *etdev = (typeof(etdev))data;
+
+	*val = edgetpu_soc_pm_get_rate(etdev, TPU_DEBUG_REQ | TPU_VDD_INT_M_DEBUG);
+
 	return 0;
 }
 
 static int edgetpu_vdd_tpu_set(void *data, u64 val)
 {
 	int ret;
-	struct device *dev = (struct device *)data;
+	struct edgetpu_dev *etdev = (typeof(etdev))data;
 	unsigned long dbg_rate_req;
 
 	if (val > MAX_VOLTAGE_VAL) {
-		dev_err(dev, "Preventing VDD_TPU voltage > %duV", MAX_VOLTAGE_VAL);
+		etdev_err(etdev, "Preventing VDD_TPU voltage > %duV", MAX_VOLTAGE_VAL);
 		return -EINVAL;
 	}
 
@@ -385,18 +480,21 @@ static int edgetpu_vdd_tpu_set(void *data, u64 val)
 
 static int edgetpu_vdd_tpu_get(void *data, u64 *val)
 {
-	*val = edgetpu_soc_pm_get_rate(TPU_DEBUG_REQ | TPU_VDD_TPU_DEBUG);
+	struct edgetpu_dev *etdev = (typeof(etdev))data;
+
+	*val = edgetpu_soc_pm_get_rate(etdev, TPU_DEBUG_REQ | TPU_VDD_TPU_DEBUG);
+
 	return 0;
 }
 
 static int edgetpu_vdd_tpu_m_set(void *data, u64 val)
 {
 	int ret;
-	struct device *dev = (struct device *)data;
+	struct edgetpu_dev *etdev = (typeof(etdev))data;
 	unsigned long dbg_rate_req;
 
 	if (val > MAX_VOLTAGE_VAL) {
-		dev_err(dev, "Preventing VDD_TPU voltage > %duV", MAX_VOLTAGE_VAL);
+		etdev_err(etdev, "Preventing VDD_TPU voltage > %duV", MAX_VOLTAGE_VAL);
 		return -EINVAL;
 	}
 
@@ -409,7 +507,10 @@ static int edgetpu_vdd_tpu_m_set(void *data, u64 val)
 
 static int edgetpu_vdd_tpu_m_get(void *data, u64 *val)
 {
-	*val = edgetpu_soc_pm_get_rate(TPU_DEBUG_REQ | TPU_VDD_TPU_M_DEBUG);
+	struct edgetpu_dev *etdev = (typeof(etdev))data;
+
+	*val = edgetpu_soc_pm_get_rate(etdev, TPU_DEBUG_REQ | TPU_VDD_TPU_M_DEBUG);
+
 	return 0;
 }
 
@@ -436,7 +537,6 @@ void edgetpu_soc_pm_power_down(struct edgetpu_dev *etdev)
 
 int edgetpu_soc_pm_init(struct edgetpu_dev *etdev)
 {
-	struct device *dev = etdev->dev;
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
 
@@ -448,14 +548,18 @@ int edgetpu_soc_pm_init(struct edgetpu_dev *etdev)
 		dev_warn(etdev->dev, "tpu_performance BTS scenario not found\n");
 	etdev->soc_data->scenario_count = 0;
 
-	debugfs_create_file("vdd_tpu", 0660, platform_pwr->debugfs_dir, dev, &fops_tpu_vdd_tpu);
-	debugfs_create_file("vdd_tpu_m", 0660, platform_pwr->debugfs_dir, dev, &fops_tpu_vdd_tpu_m);
-	debugfs_create_file("vdd_int_m", 0660, platform_pwr->debugfs_dir, dev, &fops_tpu_vdd_int_m);
-	debugfs_create_file("core_rate", 0660, platform_pwr->debugfs_dir, dev, &fops_tpu_core_rate);
-	debugfs_create_file("ctl_rate", 0660, platform_pwr->debugfs_dir, dev, &fops_tpu_ctl_rate);
-	debugfs_create_file("axi_rate", 0660, platform_pwr->debugfs_dir, dev, &fops_tpu_axi_rate);
-	debugfs_create_file("apb_rate", 0440, platform_pwr->debugfs_dir, dev, &fops_tpu_apb_rate);
-	debugfs_create_file("uart_rate", 0440, platform_pwr->debugfs_dir, dev, &fops_tpu_uart_rate);
+	debugfs_create_file("vdd_tpu", 0660, platform_pwr->debugfs_dir, etdev, &fops_tpu_vdd_tpu);
+	debugfs_create_file("vdd_tpu_m", 0660, platform_pwr->debugfs_dir, etdev,
+			    &fops_tpu_vdd_tpu_m);
+	debugfs_create_file("vdd_int_m", 0660, platform_pwr->debugfs_dir, etdev,
+			    &fops_tpu_vdd_int_m);
+	debugfs_create_file("core_rate", 0660, platform_pwr->debugfs_dir, etdev,
+			    &fops_tpu_core_rate);
+	debugfs_create_file("ctl_rate", 0660, platform_pwr->debugfs_dir, etdev, &fops_tpu_ctl_rate);
+	debugfs_create_file("axi_rate", 0660, platform_pwr->debugfs_dir, etdev, &fops_tpu_axi_rate);
+	debugfs_create_file("apb_rate", 0440, platform_pwr->debugfs_dir, etdev, &fops_tpu_apb_rate);
+	debugfs_create_file("uart_rate", 0440, platform_pwr->debugfs_dir, etdev,
+			    &fops_tpu_uart_rate);
 	return 0;
 }
 

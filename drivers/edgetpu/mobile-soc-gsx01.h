@@ -20,6 +20,8 @@ struct edgetpu_soc_data {
 	void __iomem **ssmt_base;
 	/* Number of SSMTs */
 	uint num_ssmts;
+	/* Virtual address of the CMU block for this chip. */
+	void __iomem *cmu_base;
 	/* INT/MIF requests for memory bandwidth */
 	struct exynos_pm_qos_request int_min;
 	struct exynos_pm_qos_request mif_min;

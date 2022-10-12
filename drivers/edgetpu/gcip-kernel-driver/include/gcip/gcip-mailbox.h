@@ -88,7 +88,7 @@ static inline bool gcip_valid_circ_queue_size(u32 size, u32 wrap_bit)
 struct gcip_mailbox;
 
 /* Wrapper struct for responses consumed by a thread other than the one which sent the command. */
-struct gcip_mailbox_async_response {
+struct gcip_mailbox_resp_awaiter {
 	/* Response. */
 	void *resp;
 	/* The work which will be executed when the timeout occurs. */
@@ -102,7 +102,7 @@ struct gcip_mailbox_async_response {
 	void *data;
 	/*
 	 * The callback for releasing the @data.
-	 * It will be set as @release_async_resp_data of struct gcip_mailbox_ops.
+	 * It will be set as @release_awaiter_data of struct gcip_mailbox_ops.
 	 */
 	void (*release_data)(void *data);
 };
@@ -282,39 +282,39 @@ struct gcip_mailbox_ops {
 	bool (*before_handle_resp)(struct gcip_mailbox *mailbox, const void *resp);
 	/*
 	 * Handles the asynchronous response which arrives well. How to handle it depends on the
-	 * chip implementation. However, @async_resp should be released by calling the
-	 * `gcip_mailbox_release_async_resp` function when the kernel driver doesn't need
-	 * @async_resp anymore. This is called with the `wait_list_lock` being held.
+	 * chip implementation. However, @awaiter should be released by calling the
+	 * `gcip_mailbox_release_awaiter` function when the kernel driver doesn't need
+	 * @awaiter anymore. This is called with the `wait_list_lock` being held.
 	 * Context: normal and in_interrupt().
 	 */
-	void (*handle_async_resp_arrived)(struct gcip_mailbox *mailbox,
-					  struct gcip_mailbox_async_response *async_resp);
+	void (*handle_awaiter_arrived)(struct gcip_mailbox *mailbox,
+				       struct gcip_mailbox_resp_awaiter *awaiter);
 	/*
 	 * Handles the timed out asynchronous response. How to handle it depends on the chip
-	 * implementation. However, @async_resp should be released by calling the
-	 * `gcip_mailbox_release_async_resp` function when the kernel driver doesn't need
-	 * @async_resp anymore. This is called without holding any locks.
+	 * implementation. However, @awaiter should be released by calling the
+	 * `gcip_mailbox_release_awaiter` function when the kernel driver doesn't need
+	 * @awaiter anymore. This is called without holding any locks.
 	 * Context: normal and in_interrupt().
 	 */
-	void (*handle_async_resp_timedout)(struct gcip_mailbox *mailbox,
-					   struct gcip_mailbox_async_response *async_resp);
+	void (*handle_awaiter_timedout)(struct gcip_mailbox *mailbox,
+					struct gcip_mailbox_resp_awaiter *awaiter);
 	/*
 	 * Cleans up asynchronous response which is not arrived yet, but also not timed out.
-	 * The @async_resp should be marked as unprocessable to make it not to be processed by
-	 * the `handle_async_resp_arrived` or `handle_async_resp_timedout` callbacks in race
-	 * conditions. Don't have to release @async_resp of this function by calling the
-	 * `gcip_mailbox_release_async_resp` function. It will be released internally. This is
+	 * The @awaiter should be marked as unprocessable to make it not to be processed by
+	 * the `handle_awaiter_arrived` or `handle_awaiter_timedout` callbacks in race
+	 * conditions. Don't have to release @awaiter of this function by calling the
+	 * `gcip_mailbox_release_awaiter` function. It will be released internally. This is
 	 * called with the `wait_list_lock` being held.
 	 * Context: normal.
 	 */
-	void (*flush_async_resp)(struct gcip_mailbox *mailbox,
-				 struct gcip_mailbox_async_response *async_resp);
+	void (*flush_awaiter)(struct gcip_mailbox *mailbox,
+			      struct gcip_mailbox_resp_awaiter *awaiter);
 	/*
 	 * Releases the @data which was passed to the `gcip_mailbox_put_cmd` function. This is
 	 * called without holding any locks.
 	 * Context: normal and in_interrupt().
 	 */
-	void (*release_async_resp_data)(void *data);
+	void (*release_awaiter_data)(void *data);
 };
 
 struct gcip_mailbox {
@@ -399,35 +399,35 @@ int gcip_mailbox_send_cmd(struct gcip_mailbox *mailbox, void *cmd, void *resp);
 
 /*
  * Executes @cmd command asynchronously. This function returns an instance of
- * `struct gcip_mailbox_async_response` which handles the arrival and time-out of the response.
+ * `struct gcip_mailbox_resp_awaiter` which handles the arrival and time-out of the response.
  * The implementation side can cancel the asynchronous response by calling the
- * `gcip_mailbox_cancel_async_resp_timeout` function with it.
+ * `gcip_mailbox_cancel_awaiter_timeout` function with it.
  *
- * Arrived asynchronous response will be handled by `handle_async_resp` callback and timed out
- * asynchronous response will be handled by `handle_async_resp_timedout` callback. Those callbacks
- * will pass the @async_resp as a parameter which is the same with the return of this function.
+ * Arrived asynchronous response will be handled by `handle_awaiter_arrived` callback and timed out
+ * asynchronous response will be handled by `handle_awaiter_timedout` callback. Those callbacks
+ * will pass the @awaiter as a parameter which is the same with the return of this function.
  * The response can be accessed from `resp` member of it. Also, the @data passed to this function
- * can be accessed from `data` member variable of it. The @async_resp must be released by calling
- * the `gcip_mailbox_release_async_resp` function when it is not needed anymore.
+ * can be accessed from `data` member variable of it. The @awaiter must be released by calling
+ * the `gcip_mailbox_release_awaiter` function when it is not needed anymore.
  *
  * If the mailbox is released before the response arrives, all the waiting asynchronous responses
- * will be flushed. In this case, the `flush_async_resp` callback will be called for that response
- * and @async_resp don't have to be released by the implementation side.
- * (i.e, the `gcip_mailbox_release_async_resp` function will be called internally.)
+ * will be flushed. In this case, the `flush_awaiter` callback will be called for that response
+ * and @awaiter don't have to be released by the implementation side.
+ * (i.e, the `gcip_mailbox_release_awaiter` function will be called internally.)
  *
- * The caller defines the way of cleaning up the @data to the `release_async_resp_data` callback.
- * This callback will be called when the `gcip_mailbox_release_async_resp` function is called or
+ * The caller defines the way of cleaning up the @data to the `release_awaiter_data` callback.
+ * This callback will be called when the `gcip_mailbox_release_awaiter` function is called or
  * the response is flushed.
  *
  * If this function fails to request the command, it will return the error pointer. In this case,
- * the caller should free @data explicitly. (i.e, the callback `release_async_resp_data` will not
+ * the caller should free @data explicitly. (i.e, the callback `release_awaiter_data` will not
  * be.)
  *
  * Note: the asynchronous responses fetched from @resp_queue should be released by calling the
- * `gcip_mailbox_release_async_resp` function.
+ * `gcip_mailbox_release_awaiter` function.
  */
-struct gcip_mailbox_async_response *gcip_mailbox_put_cmd(struct gcip_mailbox *mailbox, void *cmd,
-							 void *resp, void *data);
+struct gcip_mailbox_resp_awaiter *gcip_mailbox_put_cmd(struct gcip_mailbox *mailbox, void *cmd,
+						       void *resp, void *data);
 
 /*
  * Cancels the timeout work of the asynchronous response. In normally, the response arrives and
@@ -439,13 +439,13 @@ struct gcip_mailbox_async_response *gcip_mailbox_put_cmd(struct gcip_mailbox *ma
  *
  * Note: this function will cancel the timeout work synchronously.
  */
-void gcip_mailbox_cancel_async_resp_timeout(struct gcip_mailbox_async_response *async_resp);
+void gcip_mailbox_cancel_awaiter_timeout(struct gcip_mailbox_resp_awaiter *awaiter);
 
 /*
- * Releases @async_resp. Every fetched (arrived or timed out) asynchronous responses should be
- * released by calling this. It will call the `release_async_resp_data` callback internally.
+ * Releases @awaiter. Every fetched (arrived or timed out) asynchronous responses should be
+ * released by calling this. It will call the `release_awaiter_data` callback internally.
  */
-void gcip_mailbox_release_async_resp(struct gcip_mailbox_async_response *async_resp);
+void gcip_mailbox_release_awaiter(struct gcip_mailbox_resp_awaiter *awaiter);
 
 /*
  * Consume one response and handle it. This can be used for consuming one response quickly and then

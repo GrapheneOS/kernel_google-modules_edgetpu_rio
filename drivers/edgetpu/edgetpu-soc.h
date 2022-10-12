@@ -27,13 +27,10 @@ int edgetpu_soc_prepare_firmware(struct edgetpu_dev *etdev);
  * @flags can be used by platform-specific code to pass additional flags to the SoC
  *        handler; for calls from generic code this value must be zero.
  */
-long edgetpu_soc_pm_get_rate(int flags);
+long edgetpu_soc_pm_get_rate(struct edgetpu_dev *etdev, int flags);
 
 /* Power management set TPU clock rate */
 int edgetpu_soc_pm_set_rate(unsigned long rate);
-
-/* Set initial TPU freq */
-int edgetpu_soc_pm_set_init_freq(unsigned long freq);
 
 /* Set PM policy */
 int edgetpu_soc_pm_set_policy(u64 val);

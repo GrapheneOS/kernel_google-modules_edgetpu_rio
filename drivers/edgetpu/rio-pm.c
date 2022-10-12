@@ -16,8 +16,6 @@
 #include "mobile-soc-gsx01.h"
 #include "mobile-pm.h"
 
-#define TPU_DEFAULT_POWER_STATE TPU_ACTIVE_NOM
-
 #include "mobile-pm.c"
 
 #define SHUTDOWN_DELAY_US_MIN 20
@@ -149,10 +147,6 @@ static bool rio_is_block_down(struct edgetpu_dev *etdev)
 	int timeout_cnt = 0;
 	int curr_state;
 
-	if (!etmdev->pmu_status)
-		/* Rely on pm_runtime for now */
-		return true;
-
 	do {
 		/* Delay 20us per retry till blk shutdown finished */
 		usleep_range(SHUTDOWN_DELAY_US_MIN, SHUTDOWN_DELAY_US_MAX);
@@ -180,7 +174,8 @@ int edgetpu_chip_pm_create(struct edgetpu_dev *etdev)
 
 	platform_pwr->lpm_up = rio_lpm_up;
 	platform_pwr->lpm_down = rio_lpm_down;
-	platform_pwr->is_block_down = rio_is_block_down;
+	if (etmdev->pmu_status)
+		platform_pwr->is_block_down = rio_is_block_down;
 	platform_pwr->post_fw_start = rio_post_fw_start;
 
 	return edgetpu_mobile_pm_create(etdev);
