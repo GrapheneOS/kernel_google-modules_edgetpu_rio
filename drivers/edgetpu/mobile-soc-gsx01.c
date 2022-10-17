@@ -14,9 +14,6 @@
 #include <soc/google/exynos_pm_qos.h>
 #include <soc/google/gs_tmu.h>
 
-/* TODO(b/240363978): Use system ACPM header once it's ready. */
-#include "include/linux/acpm_dvfs.h"
-
 #include "edgetpu-internal.h"
 #include "edgetpu-firmware.h"
 #include "edgetpu-kci.h"
@@ -25,8 +22,6 @@
 #include "edgetpu-thermal.h"
 #include "mobile-firmware.h"
 #include "mobile-soc-gsx01.h"
-
-#define TPU_ACPM_DOMAIN	9
 
 #define MAX_VOLTAGE_VAL 1250000
 
@@ -59,11 +54,6 @@
 #define SSMT_NS_WRITE_STREAM_VID_REG(base, n) ((base) + SSMT_NS_WRITE_STREAM_VID_OFFSET(n))
 
 #define SSMT_BYPASS	(1 << 31)
-
-/* TODO(b/240363978): Remove once ACPM is ready. */
-#if !IS_ENABLED(CONFIG_EDGETPU_TEST)
-unsigned long exynos_acpm_rate = 0;
-#endif /* IS_ENABLED(CONFIG_EDGETPU_TEST) */
 
 static int gsx01_parse_ssmt(struct edgetpu_mobile_platform_dev *etmdev)
 {
@@ -269,24 +259,28 @@ void edgetpu_soc_handle_reverse_kci(struct edgetpu_dev *etdev,
 	}
 }
 
+static unsigned long edgetpu_pm_rate;
+
 long edgetpu_soc_pm_get_rate(int flags)
 {
-	return exynos_acpm_get_rate(TPU_ACPM_DOMAIN, flags);
+	return edgetpu_pm_rate;
 }
 
 int edgetpu_soc_pm_set_rate(unsigned long rate)
 {
-	return exynos_acpm_set_rate(TPU_ACPM_DOMAIN, rate);
+	edgetpu_pm_rate = rate;
+
+	return 0;
 }
 
 int edgetpu_soc_pm_set_init_freq(unsigned long freq)
 {
-	return exynos_acpm_set_init_freq(TPU_ACPM_DOMAIN, freq);
+	return 0;
 }
 
 int edgetpu_soc_pm_set_policy(u64 val)
 {
-	return exynos_acpm_set_policy(TPU_ACPM_DOMAIN, val);
+	return 0;
 }
 
 static int edgetpu_core_rate_get(void *data, u64 *val)

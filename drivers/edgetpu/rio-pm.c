@@ -143,22 +143,26 @@ static int rio_lpm_up(struct edgetpu_dev *etdev)
 	return 0;
 }
 
-static void rio_block_down(struct edgetpu_dev *etdev)
+static bool rio_is_block_down(struct edgetpu_dev *etdev)
 {
+	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	int timeout_cnt = 0;
 	int curr_state;
+
+	if (!etmdev->pmu_status)
+		/* Rely on pm_runtime for now */
+		return true;
 
 	do {
 		/* Delay 20us per retry till blk shutdown finished */
 		usleep_range(SHUTDOWN_DELAY_US_MIN, SHUTDOWN_DELAY_US_MAX);
-		/* Only poll for BLK status instead of CLK rate */
-		curr_state = edgetpu_soc_pm_get_rate(1);
+		curr_state = readl(etmdev->pmu_status);
 		if (!curr_state)
-			break;
+			return true;
 		timeout_cnt++;
 	} while (timeout_cnt < SHUTDOWN_MAX_DELAY_COUNT);
-	if (timeout_cnt == SHUTDOWN_MAX_DELAY_COUNT)
-		etdev_warn(etdev, "blk_shutdown timeout\n");
+
+	return false;
 }
 
 static void rio_post_fw_start(struct edgetpu_dev *etdev)
@@ -176,7 +180,7 @@ int edgetpu_chip_pm_create(struct edgetpu_dev *etdev)
 
 	platform_pwr->lpm_up = rio_lpm_up;
 	platform_pwr->lpm_down = rio_lpm_down;
-	platform_pwr->block_down = rio_block_down;
+	platform_pwr->is_block_down = rio_is_block_down;
 	platform_pwr->post_fw_start = rio_post_fw_start;
 
 	return edgetpu_mobile_pm_create(etdev);

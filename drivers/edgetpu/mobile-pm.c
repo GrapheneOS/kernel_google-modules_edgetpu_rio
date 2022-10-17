@@ -70,7 +70,6 @@ static int mobile_pwr_state_set_locked(struct edgetpu_mobile_platform_dev *etmde
 	int ret;
 	int curr_state;
 	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
-	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
 	struct device *dev = etdev->dev;
 
 	curr_state = edgetpu_soc_pm_get_rate(0);
@@ -99,8 +98,6 @@ static int mobile_pwr_state_set_locked(struct edgetpu_mobile_platform_dev *etmde
 			dev_err(dev, "%s: pm_runtime_put_sync returned %d\n", __func__, ret);
 			return ret;
 		}
-		if (platform_pwr->block_down)
-			platform_pwr->block_down(etdev);
 	}
 
 	return ret;
@@ -243,7 +240,12 @@ static int mobile_power_up(struct edgetpu_pm *etpm)
 	struct edgetpu_dev *etdev = etpm->etdev;
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
-	int ret = mobile_pwr_state_set(etpm->etdev, mobile_get_initial_pwr_state(etdev->dev));
+	int ret;
+
+	if (platform_pwr->is_block_down && !platform_pwr->is_block_down(etdev))
+		return -EAGAIN;
+
+	ret = mobile_pwr_state_set(etpm->etdev, mobile_get_initial_pwr_state(etdev->dev));
 
 	etdev_info(etpm->etdev, "Powering up\n");
 

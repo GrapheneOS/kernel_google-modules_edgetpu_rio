@@ -281,7 +281,7 @@ struct gcip_kci_args {
 };
 
 /* Initializes a KCI object. */
-int gcip_kci_init(struct gcip_kci *kci, struct gcip_kci_args *args);
+int gcip_kci_init(struct gcip_kci *kci, const struct gcip_kci_args *args);
 
 /* Cancels KCI and reverse KCI workers and workers that may send KCIs. */
 void gcip_kci_cancel_work_queues(struct gcip_kci *kci);

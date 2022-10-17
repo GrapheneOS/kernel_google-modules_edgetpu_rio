@@ -221,6 +221,20 @@ void edgetpu_chip_remove_mmu(struct edgetpu_dev *etdev)
 	edgetpu_mmu_detach(etdev);
 }
 
+static void edgetpu_platform_parse_pmu(struct edgetpu_mobile_platform_dev *etmdev)
+{
+	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
+	struct device *dev = etdev->dev;
+	u32 reg;
+
+	if (of_find_property(dev->of_node, "pmu-status-base", NULL) &&
+	    !of_property_read_u32_index(dev->of_node, "pmu-status-base", 0, &reg)) {
+		etmdev->pmu_status = devm_ioremap(dev, reg, 0x4);
+		if (!etmdev->pmu_status)
+			etdev_info(etdev, "Using ACPM for blk status query\n");
+	}
+}
+
 static int edgetpu_platform_setup_irq(struct edgetpu_mobile_platform_dev *etmdev)
 {
 	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
@@ -360,6 +374,8 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		dev_err(dev, "IRQ setup failed: %d", ret);
 		goto out_remove_device;
 	}
+
+	edgetpu_platform_parse_pmu(etmdev);
 
 	etmdev->log_mem = devm_kcalloc(dev, etdev->num_cores, sizeof(*etmdev->log_mem), GFP_KERNEL);
 	if (!etmdev->log_mem) {
