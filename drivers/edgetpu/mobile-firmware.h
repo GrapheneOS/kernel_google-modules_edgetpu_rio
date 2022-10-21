@@ -21,26 +21,43 @@
 
 /* mobile FW header size */
 #define MOBILE_FW_HEADER_SIZE SZ_4K
-/* The offset to the signed firmware header. */
-#define MOBILE_HEADER_OFFSET 0x400
-/* The offset to image configuration. */
-#define MOBILE_IMAGE_CONFIG_OFFSET (MOBILE_HEADER_OFFSET + 0x160)
 
 /*
  * Mobile firmware header.
  */
-struct mobile_image_header {
-	char sig[512];
-	char pub[512];
+
+struct mobile_image_sub_header_common {
 	int Magic;
 	int Generation;
 	int RollbackInfo;
 	int Length;
 	char Flags[16];
+};
+
+struct mobile_image_sub_header_gen1 {
 	char BodyHash[32];
 	char ChipId[32];
 	char AuthConfig[256];
 	struct gcip_image_config ImageConfig;
+};
+
+struct mobile_image_sub_header_gen2 {
+	char BodyHash[64];
+	char ChipId[32];
+	char AuthConfig[256];
+	struct gcip_image_config ImageConfig;
+};
+
+struct mobile_image_header {
+	char sig[512];
+	char pub[512];
+	struct {
+		struct mobile_image_sub_header_common common;
+		union {
+			struct mobile_image_sub_header_gen1 gen1;
+			struct mobile_image_sub_header_gen2 gen2;
+		};
+	};
 };
 
 /* Value of Magic field above: 'TPUF' as a 32-bit LE int */

@@ -5,6 +5,7 @@
  * Copyright (C) 2022 Google LLC
  */
 
+#include <linux/acpm_dvfs.h>
 #include <linux/device.h>
 #include <linux/errno.h>
 #include <linux/gsa/gsa_tpu.h>
@@ -23,6 +24,8 @@
 #include "edgetpu-thermal.h"
 #include "mobile-firmware.h"
 #include "mobile-soc-gsx01.h"
+
+#define TPU_ACPM_DOMAIN 9
 
 #define MAX_VOLTAGE_VAL 1250000
 
@@ -364,7 +367,7 @@ static int edgetpu_core_rate_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 
-	*val = edgetpu_soc_pm_get_rate(etdev, TPU_DEBUG_REQ | TPU_CLK_CORE_DEBUG);
+	*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_CLK_CORE_DEBUG);
 
 	return 0;
 }
@@ -383,7 +386,7 @@ static int edgetpu_ctl_rate_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 
-	*val = edgetpu_soc_pm_get_rate(etdev, TPU_DEBUG_REQ | TPU_CLK_CTL_DEBUG);
+	*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_CLK_CTL_DEBUG);
 
 	return 0;
 }
@@ -402,7 +405,7 @@ static int edgetpu_axi_rate_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 
-	*val = edgetpu_soc_pm_get_rate(etdev, TPU_DEBUG_REQ | TPU_CLK_AXI_DEBUG);
+	*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_CLK_AXI_DEBUG);
 
 	return 0;
 }
@@ -421,7 +424,7 @@ static int edgetpu_apb_rate_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 
-	*val = edgetpu_soc_pm_get_rate(etdev, TPU_DEBUG_REQ | TPU_CLK_APB_DEBUG);
+	*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_CLK_APB_DEBUG);
 
 	return 0;
 }
@@ -430,7 +433,7 @@ static int edgetpu_uart_rate_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 
-	*val = edgetpu_soc_pm_get_rate(etdev, TPU_DEBUG_REQ | TPU_CLK_UART_DEBUG);
+	*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_CLK_UART_DEBUG);
 
 	return 0;
 }
@@ -455,7 +458,7 @@ static int edgetpu_vdd_int_m_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 
-	*val = edgetpu_soc_pm_get_rate(etdev, TPU_DEBUG_REQ | TPU_VDD_INT_M_DEBUG);
+	*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_VDD_INT_M_DEBUG);
 
 	return 0;
 }
@@ -482,7 +485,7 @@ static int edgetpu_vdd_tpu_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 
-	*val = edgetpu_soc_pm_get_rate(etdev, TPU_DEBUG_REQ | TPU_VDD_TPU_DEBUG);
+	*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_VDD_TPU_DEBUG);
 
 	return 0;
 }
@@ -509,7 +512,7 @@ static int edgetpu_vdd_tpu_m_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 
-	*val = edgetpu_soc_pm_get_rate(etdev, TPU_DEBUG_REQ | TPU_VDD_TPU_M_DEBUG);
+	*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_VDD_TPU_M_DEBUG);
 
 	return 0;
 }
