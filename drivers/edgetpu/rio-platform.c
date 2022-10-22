@@ -15,6 +15,7 @@
 #include "edgetpu-config.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-mobile-platform.h"
+#include "edgetpu-pm.h"
 #include "rio-platform.h"
 
 #include "edgetpu-mobile-platform.c"
@@ -144,6 +145,7 @@ static struct platform_driver edgetpu_platform_driver = {
 	.driver = {
 			.name = "edgetpu_platform",
 			.of_match_table = edgetpu_of_match,
+			.pm = &edgetpu_pm_ops,
 		},
 };
 

@@ -8,6 +8,8 @@
 #ifndef __EDGETPU_PM_H__
 #define __EDGETPU_PM_H__
 
+#include <linux/pm.h>
+
 #include "edgetpu-internal.h"
 
 struct edgetpu_pm_private;
@@ -28,6 +30,8 @@ struct edgetpu_pm {
 	struct edgetpu_dev *etdev;
 	struct edgetpu_pm_private *p;
 };
+
+extern const struct dev_pm_ops edgetpu_pm_ops;
 
 /*
  * These mimic the pm_runtime_{get|put} functions to keep a reference count
@@ -91,13 +95,5 @@ void edgetpu_pm_shutdown(struct edgetpu_dev *etdev, bool force);
 
 /* Check if device is powered on. power_up_count is not protected by a lock */
 bool edgetpu_is_powered(struct edgetpu_dev *etdev);
-
-#if IS_ENABLED(CONFIG_PM_SLEEP)
-
-int edgetpu_pm_suspend(struct edgetpu_dev *etdev);
-
-int edgetpu_pm_resume(struct edgetpu_dev *etdev);
-
-#endif /* IS_ENABLED(CONFIG_PM_SLEEP) */
 
 #endif /* __EDGETPU_PM_H__ */

@@ -179,7 +179,7 @@ static int edgetpu_get_requested_power(struct thermal_cooling_device *cdev,
 	unsigned long state_original;
 	struct edgetpu_thermal *cooling = cdev->devdata;
 
-	state_original = edgetpu_soc_pm_get_rate(0);
+	state_original = edgetpu_soc_pm_get_rate(cooling->etdev, 0);
 	return edgetpu_state2power_internal(state_original, power, cooling);
 }
 

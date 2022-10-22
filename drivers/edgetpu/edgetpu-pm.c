@@ -7,6 +7,7 @@
 
 #include <linux/iopoll.h>
 #include <linux/mutex.h>
+#include <linux/pm.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 
@@ -253,10 +254,9 @@ bool edgetpu_is_powered(struct edgetpu_dev *etdev)
 	return etpm->p->power_up_count;
 }
 
-#if IS_ENABLED(CONFIG_PM_SLEEP)
-
-int edgetpu_pm_suspend(struct edgetpu_dev *etdev)
+static int __maybe_unused edgetpu_pm_suspend(struct device *dev)
 {
+	struct edgetpu_dev *etdev = dev_get_drvdata(dev);
 	struct edgetpu_pm *etpm = etdev->pm;
 	struct edgetpu_list_device_client *lc;
 
@@ -282,8 +282,9 @@ int edgetpu_pm_suspend(struct edgetpu_dev *etdev)
 	return -EAGAIN;
 }
 
-int edgetpu_pm_resume(struct edgetpu_dev *etdev)
+static int __maybe_unused edgetpu_pm_resume(struct device *dev)
 {
+	struct edgetpu_dev *etdev = dev_get_drvdata(dev);
 	struct edgetpu_pm *etpm = etdev->pm;
 
 	if (etpm && etpm->p->power_up_count)
@@ -294,4 +295,6 @@ int edgetpu_pm_resume(struct edgetpu_dev *etdev)
 	return 0;
 }
 
-#endif /* IS_ENABLED(CONFIG_PM_SLEEP) */
+const struct dev_pm_ops edgetpu_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(edgetpu_pm_suspend, edgetpu_pm_resume)
+};

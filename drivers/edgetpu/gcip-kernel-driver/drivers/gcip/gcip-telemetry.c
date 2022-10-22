@@ -233,7 +233,7 @@ int gcip_telemetry_init(struct device *dev, struct gcip_telemetry *tel, const ch
 	tel->name = name;
 	tel->dev = dev;
 
-	tel->header = (struct gcip_telemetry_header *)vaddr;
+	tel->header = vaddr;
 	tel->header->head = 0;
 	tel->header->tail = 0;
 	tel->header->size = size;

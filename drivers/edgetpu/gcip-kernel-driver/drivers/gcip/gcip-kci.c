@@ -245,8 +245,9 @@ static bool gcip_kci_before_handle_resp(struct gcip_mailbox *mailbox, const void
 		int ret = gcip_reverse_kci_add_resp(kci, elem);
 
 		if (ret)
-			dev_warn(kci->dev, "Failed to handle reverse KCI code %u (%d)\n",
-				 elem->code, ret);
+			dev_warn_ratelimited(kci->dev,
+					     "Failed to handle reverse KCI code %u (%d)\n",
+					     elem->code, ret);
 		return false;
 	}
 
@@ -448,7 +449,7 @@ static inline void gcip_kci_set_data(struct gcip_kci *kci, void *data)
 	kci->data = data;
 }
 
-int gcip_kci_init(struct gcip_kci *kci, struct gcip_kci_args *args)
+int gcip_kci_init(struct gcip_kci *kci, const struct gcip_kci_args *args)
 {
 	int ret;
 	struct gcip_mailbox_args mailbox_args;

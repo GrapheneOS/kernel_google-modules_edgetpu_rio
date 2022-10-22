@@ -221,6 +221,22 @@ void edgetpu_chip_remove_mmu(struct edgetpu_dev *etdev)
 	edgetpu_mmu_detach(etdev);
 }
 
+static void edgetpu_platform_parse_pmu(struct edgetpu_mobile_platform_dev *etmdev)
+{
+	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
+	struct device *dev = etdev->dev;
+	u32 reg;
+
+	if (of_find_property(dev->of_node, "pmu-status-base", NULL) &&
+	    !of_property_read_u32_index(dev->of_node, "pmu-status-base", 0, &reg)) {
+		etmdev->pmu_status = devm_ioremap(dev, reg, 0x4);
+		if (!etmdev->pmu_status)
+			etdev_err(etdev, "Using ACPM for blk status query\n");
+	} else {
+		etdev_warn(etdev, "Failed to find PMU register base\n");
+	}
+}
+
 static int edgetpu_platform_setup_irq(struct edgetpu_mobile_platform_dev *etmdev)
 {
 	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
@@ -348,6 +364,12 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		dev_err(dev, "failed to initialize remapped memory pool: %d", ret);
 		goto out_cleanup_fw;
 	}
+
+	/*
+	 * Parses PMU before edgetpu_device_add so edgetpu_chip_pm_create can know whether to set
+	 * the is_block_down op.
+	 */
+	edgetpu_platform_parse_pmu(etmdev);
 
 	ret = edgetpu_device_add(etdev, &regs, iface_params, ARRAY_SIZE(iface_params));
 	if (ret) {
