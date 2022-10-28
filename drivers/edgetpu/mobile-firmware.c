@@ -243,16 +243,32 @@ static int mobile_firmware_setup_buffer(struct edgetpu_firmware *et_fw,
 	}
 
 	hdr = (struct mobile_image_header *)fw_buf->vaddr;
-	if (hdr->Magic != EDGETPU_MOBILE_FW_MAGIC)
-		etdev_warn(etdev, "Invalid firmware header magic value %#08x\n",
-			   hdr->Magic);
+	if (hdr->common.Magic != EDGETPU_MOBILE_FW_MAGIC) {
+		etdev_err(etdev, "Invalid firmware header magic value %#08x\n", hdr->common.Magic);
+		ret = -EINVAL;
+		goto out;
+	}
 
-	/* fetch the firmware versions */
-	image_config = fw_buf->vaddr + MOBILE_IMAGE_CONFIG_OFFSET;
-	memcpy(&etdev->fw_version, &image_config->firmware_versions,
-	       sizeof(etdev->fw_version));
+	switch (hdr->common.Generation) {
+	case 1:
+		image_config = &hdr->gen1.ImageConfig;
+		break;
+	case 2:
+		image_config = &hdr->gen2.ImageConfig;
+		break;
+	default:
+		etdev_err(etdev, "Invalid header generation identifier (%d)\n",
+			  hdr->common.Generation);
+		goto out;
+	}
 
-	if (etmdev->gsa_dev) {
+	memcpy(&etdev->fw_version, &image_config->firmware_versions, sizeof(etdev->fw_version));
+
+	/*
+	 * TODO(b/244103549) re-enable authentication of non-secure images when
+	 * GSA and TPU updates for Zuma land
+	 */
+	if (etmdev->gsa_dev && !gcip_image_config_is_ns(image_config)) {
 		ret = mobile_firmware_gsa_authenticate(etmdev, fw_buf, image_vaddr);
 	} else if (gcip_image_config_is_ns(image_config)) {
 		etdev_dbg(etdev, "Loading unauthenticated non-secure firmware\n");
