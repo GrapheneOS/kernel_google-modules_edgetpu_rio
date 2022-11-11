@@ -109,6 +109,9 @@ struct edgetpu_device_group {
 	/* Mask of errors set for this group. */
 	uint fatal_errors;
 
+	/* List of DMA fences owned by this group */
+	struct list_head dma_fence_list;
+
 	/* end of fields protected by @lock */
 
 	/* TPU IOVA mapped to host DRAM space */

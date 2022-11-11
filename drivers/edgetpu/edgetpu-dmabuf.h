@@ -26,11 +26,17 @@ int edgetpu_map_dmabuf(struct edgetpu_device_group *group,
 int edgetpu_unmap_dmabuf(struct edgetpu_device_group *group,
 			 tpu_addr_t tpu_addr);
 /* Create a DMA sync fence via ioctl */
-int edgetpu_sync_fence_create(struct edgetpu_create_sync_fence_data *datap);
+int edgetpu_sync_fence_create(struct edgetpu_device_group *group,
+			      struct edgetpu_create_sync_fence_data *datap);
 /* Signal a DMA sync fence, optionally specifying error status */
 int edgetpu_sync_fence_signal(struct edgetpu_signal_sync_fence_data *datap);
 /* Return DMA sync fence status */
 int edgetpu_sync_fence_status(struct edgetpu_sync_fence_status *datap);
+/*
+ * Send error signal to any remaining unsignalled DMA sync fences in a group being disbanded.
+ * Caller holds group lock.
+ */
+void edgetpu_sync_fence_group_shutdown(struct edgetpu_device_group *group);
 /* Dump sync fence info from debugfs */
 int edgetpu_sync_fence_debugfs_show(struct seq_file *s, void *unused);
 

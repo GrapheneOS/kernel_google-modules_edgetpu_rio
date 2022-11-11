@@ -60,6 +60,9 @@ struct edgetpu_dmabuf_map {
  * @fence:		the base DMA fence
  * @lock:		spinlock protecting updates to @fence
  * @timeline_name:	name of the timeline associated with the fence
+ * @group:		owning device group
+ * @etfence_list:	global list of all edgetpu DMA fences
+ * @group_list:		list of DMA fences owned by the same group
  *
  * It is likely timelines will become a separate object in the future,
  * but for now there's a unique named timeline associated with each fence.
@@ -68,7 +71,9 @@ struct edgetpu_dma_fence {
 	struct dma_fence fence;
 	spinlock_t lock;
 	char timeline_name[EDGETPU_SYNC_TIMELINE_NAME_LEN];
+	struct edgetpu_device_group *group;
 	struct list_head etfence_list;
+	struct list_head group_list;
 };
 
 /* List of all edgetpu fence objects for debugging. */
@@ -480,6 +485,7 @@ static const char *edgetpu_dma_fence_get_timeline_name(struct dma_fence *fence)
 static void edgetpu_dma_fence_release(struct dma_fence *fence)
 {
 	struct edgetpu_dma_fence *etfence = to_etfence(fence);
+	struct edgetpu_device_group *group;
 	unsigned long flags;
 
 	if (!etfence)
@@ -488,6 +494,17 @@ static void edgetpu_dma_fence_release(struct dma_fence *fence)
 	spin_lock_irqsave(&etfence_list_lock, flags);
 	list_del(&etfence->etfence_list);
 	spin_unlock_irqrestore(&etfence_list_lock, flags);
+
+	/* TODO(b/258868303): Don't remove this check when group required, might not yet be set. */
+	group = etfence->group;
+	if (group) {
+		mutex_lock(&group->lock);
+		list_del(&etfence->group_list);
+		mutex_unlock(&group->lock);
+		/* Release this fence's reference on the owning group. */
+		edgetpu_device_group_put(group);
+	}
+
 	kfree(etfence);
 }
 
@@ -511,7 +528,8 @@ static const struct dma_fence_ops edgetpu_dma_fence_ops = {
 #define SEQ_FMT "%llu"
 #endif
 
-int edgetpu_sync_fence_create(struct edgetpu_create_sync_fence_data *datap)
+int edgetpu_sync_fence_create(struct edgetpu_device_group *group,
+			      struct edgetpu_create_sync_fence_data *datap)
 {
 	int fd = get_unused_fd_flags(O_CLOEXEC);
 	int ret;
@@ -533,6 +551,7 @@ int edgetpu_sync_fence_create(struct edgetpu_create_sync_fence_data *datap)
 	 * list_head is needed for list_del().
 	 */
 	INIT_LIST_HEAD(&etfence->etfence_list);
+	INIT_LIST_HEAD(&etfence->group_list);
 	memcpy(&etfence->timeline_name, &datap->timeline_name,
 	       EDGETPU_SYNC_TIMELINE_NAME_LEN - 1);
 
@@ -552,12 +571,43 @@ int edgetpu_sync_fence_create(struct edgetpu_create_sync_fence_data *datap)
 	list_add_tail(&etfence->etfence_list, &etfence_list_head);
 	spin_unlock_irqrestore(&etfence_list_lock, flags);
 
+	/* TODO(b/258868303): Make group required, disallow creating fence we can't track. */
+	if (group) {
+		etfence->group = edgetpu_device_group_get(group);
+		mutex_lock(&group->lock);
+		list_add_tail(&etfence->group_list, &group->dma_fence_list);
+		mutex_unlock(&group->lock);
+	}
+
 	fd_install(fd, sync_file->file);
 	datap->fence = fd;
 	return 0;
 
 err_put_fd:
 	put_unused_fd(fd);
+	return ret;
+}
+
+static int _edgetpu_sync_fence_signal(struct dma_fence *fence, int errno, bool ignore_signaled)
+{
+	int ret;
+
+	spin_lock_irq(fence->lock);
+	/* don't signal fence twice */
+	if (unlikely(test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags))) {
+		ret = ignore_signaled ? 0 : -EINVAL;
+		goto out_unlock;
+	}
+	pr_debug("%s: %s-%s%llu-" SEQ_FMT " errno=%d\n", __func__,
+		 fence->ops->get_driver_name(fence),
+		 fence->ops->get_timeline_name(fence), fence->context,
+		 fence->seqno, errno);
+	if (errno)
+		dma_fence_set_error(fence, errno);
+	ret = dma_fence_signal_locked(fence);
+
+out_unlock:
+	spin_unlock_irq(fence->lock);
 	return ret;
 }
 
@@ -577,24 +627,30 @@ int edgetpu_sync_fence_signal(struct edgetpu_signal_sync_fence_data *datap)
 	if (!fence)
 		return -EINVAL;
 
-	spin_lock_irq(fence->lock);
-	/* don't signal fence twice */
-	if (unlikely(test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags))) {
-		ret = -EINVAL;
-		goto out_unlock;
-	}
-	pr_debug("%s: %s-%s%llu-" SEQ_FMT " errno=%d\n", __func__,
-		 fence->ops->get_driver_name(fence),
-		 fence->ops->get_timeline_name(fence), fence->context,
-		 fence->seqno, errno);
-	if (errno)
-		dma_fence_set_error(fence, errno);
-	ret = dma_fence_signal_locked(fence);
-
-out_unlock:
-	spin_unlock_irq(fence->lock);
+	ret = _edgetpu_sync_fence_signal(fence, errno, false);
 	dma_fence_put(fence);
 	return ret;
+}
+
+/* Caller holds group lock. */
+void edgetpu_sync_fence_group_shutdown(struct edgetpu_device_group *group)
+{
+	struct list_head *pos;
+	int ret;
+
+	lockdep_assert_held(&group->lock);
+	list_for_each(pos, &group->dma_fence_list) {
+		struct edgetpu_dma_fence *etfence =
+			container_of(pos, struct edgetpu_dma_fence, group_list);
+		struct dma_fence *fence = &etfence->fence;
+
+		ret = _edgetpu_sync_fence_signal(fence, -EPIPE, true);
+		if (ret)
+			etdev_warn(group->etdev, "error %d signaling fence %s-%s %llu-" SEQ_FMT,
+				   ret, fence->ops->get_driver_name(fence),
+				   fence->ops->get_timeline_name(fence),
+				   fence->context, fence->seqno);
+	}
 }
 
 int edgetpu_sync_fence_status(struct edgetpu_sync_fence_status *datap)
@@ -649,7 +705,9 @@ int edgetpu_sync_fence_debugfs_show(struct seq_file *s, void *unused)
 
 		if (fence->error)
 			seq_printf(s, " err=%d", fence->error);
-
+		/* TODO(b/258868303): Remove check when group is required. */
+		if (etfence->group)
+			seq_printf(s, " group=%u", etfence->group->workload_id);
 		seq_putc(s, '\n');
 		spin_unlock_irq(&etfence->lock);
 	}

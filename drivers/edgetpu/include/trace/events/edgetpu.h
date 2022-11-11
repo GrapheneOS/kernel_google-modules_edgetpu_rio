@@ -128,4 +128,8 @@ TRACE_EVENT(edgetpu_map_dmabuf_end,
 #endif /* _TRACE_EDGETPU_H */
 
 /* This part must be outside protection */
+#undef TRACE_INCLUDE_PATH
+#define TRACE_INCLUDE_PATH .
+#define TRACE_INCLUDE_FILE trace/events/edgetpu
+
 #include <trace/define_trace.h>

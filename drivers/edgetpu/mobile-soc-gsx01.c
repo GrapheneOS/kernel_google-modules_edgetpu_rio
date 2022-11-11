@@ -14,12 +14,13 @@
 #include <linux/types.h>
 #include <soc/google/bts.h>
 #include <soc/google/exynos_pm_qos.h>
-#include <soc/google/gs_tmu.h>
+#include <soc/google/gs_tmu_v3.h>
 
 #include "edgetpu-internal.h"
 #include "edgetpu-firmware.h"
 #include "edgetpu-kci.h"
 #include "edgetpu-mobile-platform.h"
+#include "edgetpu-pm.h"
 #include "edgetpu-soc.h"
 #include "edgetpu-thermal.h"
 #include "mobile-firmware.h"
@@ -302,8 +303,6 @@ static unsigned long edgetpu_pm_rate;
 
 long edgetpu_soc_pm_get_rate(struct edgetpu_dev *etdev, int flags)
 {
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
-	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
 	void __iomem *cmu_base = etdev->soc_data->cmu_base;
 	long curr_state;
 	u32 pll_con3;
@@ -314,13 +313,11 @@ long edgetpu_soc_pm_get_rate(struct edgetpu_dev *etdev, int flags)
 	if (!cmu_base)
 		return -EINVAL;
 
-	if (!platform_pwr->is_block_down)
-		etdev_warn(etdev,
-			   "Querying the CMU PLL register when TPU_OFF might lead to crash.");
-	else if (platform_pwr->is_block_down(etdev))
+	/* We need to keep TPU being powered to ensure CMU read is valid. */
+	if (!edgetpu_pm_get_if_powered(etdev->pm))
 		return 0;
-
 	pll_con3 = readl(cmu_base + PLL_CON3_OFFSET);
+	edgetpu_pm_put(etdev->pm);
 
 	/*
 	 * Below values must match the CMU PLL (pll_con3_pll_tpu) values in the spec and firmware.

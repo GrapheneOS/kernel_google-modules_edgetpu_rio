@@ -377,6 +377,7 @@ edgetpu_ioctl_unmap_dmabuf(struct edgetpu_client *client,
 }
 
 static int edgetpu_ioctl_sync_fence_create(
+	struct edgetpu_client *client,
 	struct edgetpu_create_sync_fence_data __user *datap)
 {
 	struct edgetpu_create_sync_fence_data data;
@@ -384,7 +385,13 @@ static int edgetpu_ioctl_sync_fence_create(
 
 	if (copy_from_user(&data, (void __user *)datap, sizeof(data)))
 		return -EFAULT;
-	ret = edgetpu_sync_fence_create(&data);
+	LOCK(client);
+	if (!client->group)
+		/* TODO(b/258868303): Require a group, disallow creating a fence we can't track. */
+		etdev_warn(client->etdev,
+			   "client creating sync fence not joined to a device group");
+	ret = edgetpu_sync_fence_create(client->group, &data);
+	UNLOCK(client);
 	if (ret)
 		return ret;
 	if (copy_to_user((void __user *)datap, &data, sizeof(data)))
@@ -687,7 +694,7 @@ long edgetpu_ioctl(struct file *file, uint cmd, ulong arg)
 		ret = edgetpu_ioctl_allocate_device_buffer(client, (u64)argp);
 		break;
 	case EDGETPU_CREATE_SYNC_FENCE:
-		ret = edgetpu_ioctl_sync_fence_create(argp);
+		ret = edgetpu_ioctl_sync_fence_create(client, argp);
 		break;
 	case EDGETPU_SIGNAL_SYNC_FENCE:
 		ret = edgetpu_ioctl_sync_fence_signal(argp);
