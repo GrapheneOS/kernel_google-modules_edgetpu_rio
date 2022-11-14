@@ -18,8 +18,8 @@
 
 #include "mobile-pm.c"
 
-#define SHUTDOWN_DELAY_US_MIN 20
-#define SHUTDOWN_DELAY_US_MAX 20
+#define SHUTDOWN_DELAY_US_MIN 200
+#define SHUTDOWN_DELAY_US_MAX 200
 #define BOOTUP_DELAY_US_MIN 100
 #define BOOTUP_DELAY_US_MAX 150
 #define SHUTDOWN_MAX_DELAY_COUNT 20
@@ -45,7 +45,7 @@ static void rio_lpm_down(struct edgetpu_dev *etdev)
 	u32 val;
 
 	do {
-		/* Manually delay 20us per retry till LPM shutdown finished */
+		/* Manually delay 200us per retry till LPM shutdown finished */
 		usleep_range(SHUTDOWN_DELAY_US_MIN, SHUTDOWN_DELAY_US_MAX);
 		val = edgetpu_dev_read_32_sync(etdev, EDGETPU_REG_LPM_CONTROL);
 		if ((val & 0x100) || (val == 0))

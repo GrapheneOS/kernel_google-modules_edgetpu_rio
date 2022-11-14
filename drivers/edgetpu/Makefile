@@ -34,6 +34,9 @@ include $(KERNEL_SRC)/../private/google-modules/soc/gs/Makefile.include
 
 GCIP_DIR=gcip-kernel-driver/drivers/gcip
 
+KERNEL_SRC ?= /lib/modules/$(shell uname -r)/build
+M ?= $(shell pwd)
+
 modules modules_install:
 	$(MAKE) -C $(KERNEL_SRC) M=$(M)/$(GCIP_DIR) W=1 gcip.o
 	$(MAKE) -C $(KERNEL_SRC) M=$(M) W=1 $(KBUILD_OPTIONS) \
