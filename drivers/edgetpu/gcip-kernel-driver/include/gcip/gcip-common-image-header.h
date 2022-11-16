@@ -8,35 +8,37 @@
 #ifndef __GCIP_COMMON_IMAGE_HEADER_H__
 #define __GCIP_COMMON_IMAGE_HEADER_H__
 
+#include <linux/types.h>
+
 #include "gcip-image-config.h"
 
 #define GCIP_FW_HEADER_SIZE (0x1000)
 
 struct gcip_common_image_sub_header_common {
-	int magic;
-	int generation;
-	int rollback_info;
-	int length;
-	char flags[16];
+	uint32_t magic;
+	uint32_t generation;
+	uint32_t rollback_info;
+	uint32_t length;
+	uint8_t flags[16];
 };
 
 struct gcip_common_image_sub_header_gen1 {
-	char body_hash[32];
-	char chip_id[32];
-	char auth_config[256];
+	uint8_t body_hash[32];
+	uint8_t chip_id[32];
+	uint8_t auth_config[256];
 	struct gcip_image_config image_config;
 };
 
 struct gcip_common_image_sub_header_gen2 {
-	char body_hash[64];
-	char chip_id[32];
-	char auth_config[256];
+	uint8_t body_hash[64];
+	uint8_t chip_id[32];
+	uint8_t auth_config[256];
 	struct gcip_image_config image_config;
 };
 
 struct gcip_common_image_header {
-	char sig[512];
-	char pub[512];
+	uint8_t sig[512];
+	uint8_t pub[512];
 	struct {
 		struct gcip_common_image_sub_header_common common;
 		union {
