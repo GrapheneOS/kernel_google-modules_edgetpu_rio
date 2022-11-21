@@ -19,6 +19,14 @@
 #include "edgetpu-internal.h"
 #include "mobile-debug-dump.h"
 
+/*
+ * Log and trace buffers at the beginning of the remapped region,
+ * pool memory afterwards.
+ */
+#define EDGETPU_POOL_MEM_OFFSET                                                                    \
+	((EDGETPU_TELEMETRY_LOG_BUFFER_SIZE + EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE) *               \
+	 EDGETPU_NUM_CORES)
+
 #define to_mobile_dev(etdev) container_of(etdev, struct edgetpu_mobile_platform_dev, edgetpu_dev)
 
 struct edgetpu_mobile_platform_pwr {
@@ -49,6 +57,10 @@ struct edgetpu_mobile_platform_dev {
 	phys_addr_t fw_region_paddr;
 	/* Size of the firmware region */
 	size_t fw_region_size;
+	/* TPU address from which the TPU CPU can access data in the remapped region */
+	tpu_addr_t remapped_data_addr;
+	/* Size of remapped DRAM data region */
+	size_t remapped_data_size;
 	/* Virtual address of the memory region shared with firmware */
 	void *shared_mem_vaddr;
 	/* Physical address of the memory region shared with firmware */
@@ -93,5 +105,8 @@ struct edgetpu_mobile_platform_dev {
 	 */
 	int (*after_probe)(struct edgetpu_mobile_platform_dev *etmdev);
 };
+
+/* Sets up telemetry buffer address and size. */
+void edgetpu_mobile_set_telemetry_mem(struct edgetpu_mobile_platform_dev *etmdev);
 
 #endif /* __EDGETPU_MOBILE_PLATFORM_H__ */

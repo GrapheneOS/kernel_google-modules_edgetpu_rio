@@ -213,10 +213,12 @@ int edgetpu_kci_init(struct edgetpu_mailbox_manager *mgr, struct edgetpu_kci *et
 	if (IS_ERR(mailbox))
 		return PTR_ERR(mailbox);
 
-	etkci->kci = devm_kzalloc(mgr->etdev->dev, sizeof(*etkci->kci), GFP_KERNEL);
 	if (!etkci->kci) {
-		ret = -ENOMEM;
-		goto err_mailbox_remove;
+		etkci->kci = devm_kzalloc(mgr->etdev->dev, sizeof(*etkci->kci), GFP_KERNEL);
+		if (!etkci->kci) {
+			ret = -ENOMEM;
+			goto err_mailbox_remove;
+		}
 	}
 
 	ret = edgetpu_kci_alloc_queue(mgr->etdev, mailbox, GCIP_MAILBOX_CMD_QUEUE, cmd_queue_mem);

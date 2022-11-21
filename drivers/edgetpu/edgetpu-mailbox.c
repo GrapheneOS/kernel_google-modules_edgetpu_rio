@@ -244,8 +244,8 @@ edgetpu_mailbox_vii_add(struct edgetpu_mailbox_manager *mgr, uint id)
 
 /*
  * Every mailbox manager can allocate one mailbox for KCI to use.
- * -EBUSY is returned if the KCI mailbox is allocated and hasn't been removed
- * via edgetpu_mailbox_remove().
+ * Previously allocated KCI mailbox is returned if it hasn't been removed via
+ * edgetpu_mailbox_remove().
  */
 struct edgetpu_mailbox *edgetpu_mailbox_kci(struct edgetpu_mailbox_manager *mgr)
 {
@@ -254,7 +254,7 @@ struct edgetpu_mailbox *edgetpu_mailbox_kci(struct edgetpu_mailbox_manager *mgr)
 
 	write_lock_irqsave(&mgr->mailboxes_lock, flags);
 	if (mgr->mailboxes[KERNEL_MAILBOX_INDEX]) {
-		mailbox = ERR_PTR(-EBUSY);
+		mailbox = mgr->mailboxes[KERNEL_MAILBOX_INDEX];
 		goto out;
 	}
 

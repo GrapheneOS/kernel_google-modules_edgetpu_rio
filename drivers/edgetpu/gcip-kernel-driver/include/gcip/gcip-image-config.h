@@ -11,7 +11,7 @@
 #include <linux/types.h>
 
 #define GCIP_FW_NUM_VERSIONS 4
-#define GCIP_IMG_CFG_MAX_IOMMU_MAPPINGS 23
+#define GCIP_IMG_CFG_MAX_IOMMU_MAPPINGS 22
 #define GCIP_IMG_CFG_MAX_NS_IOMMU_MAPPINGS 5
 
 #define GCIP_FW_PRIV_LEVEL_GSA 0
@@ -40,6 +40,8 @@ struct gcip_image_config {
 		 */
 		__u32 image_config_value;
 	} iommu_mappings[GCIP_IMG_CFG_MAX_IOMMU_MAPPINGS];
+	__u32 remapped_data_start;
+	__u32 remapped_data_size;
 	__u32 num_ns_iommu_mappings;
 	__u32 ns_iommu_mappings[GCIP_IMG_CFG_MAX_NS_IOMMU_MAPPINGS];
 } __packed;
