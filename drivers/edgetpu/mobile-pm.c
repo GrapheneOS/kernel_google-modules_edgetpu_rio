@@ -24,6 +24,10 @@
 #include "edgetpu-pm.c"
 #include "edgetpu-soc.h"
 
+#define BLOCK_DOWN_RETRY_TIMES 50
+#define BLOCK_DOWN_MIN_DELAY_US 1000
+#define BLOCK_DOWN_MAX_DELAY_US 1500
+
 enum edgetpu_pwr_state edgetpu_active_states[EDGETPU_NUM_STATES] = {
 	TPU_ACTIVE_UUD,
 	TPU_ACTIVE_SUD,
@@ -188,8 +192,17 @@ static int mobile_power_up(struct edgetpu_pm *etpm)
 	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
 	int ret;
 
-	if (platform_pwr->is_block_down && !platform_pwr->is_block_down(etdev))
-		return -EAGAIN;
+	if (platform_pwr->is_block_down) {
+		int times = 0;
+
+		do {
+			if (platform_pwr->is_block_down(etdev))
+				break;
+			usleep_range(BLOCK_DOWN_MIN_DELAY_US, BLOCK_DOWN_MAX_DELAY_US);
+		} while (++times < BLOCK_DOWN_RETRY_TIMES);
+		if (times >= BLOCK_DOWN_RETRY_TIMES && !platform_pwr->is_block_down(etdev))
+			return -EAGAIN;
+	}
 
 	etdev_info(etpm->etdev, "Powering up\n");
 
