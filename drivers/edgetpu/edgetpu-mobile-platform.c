@@ -23,15 +23,7 @@
 #include "mobile-firmware.h"
 #include "mobile-pm.h"
 
-/*
- * Log and trace buffers at the beginning of the remapped region,
- * pool memory afterwards.
- */
-#define EDGETPU_POOL_MEM_OFFSET                                                                    \
-	((EDGETPU_TELEMETRY_LOG_BUFFER_SIZE + EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE) *               \
-	 EDGETPU_NUM_CORES)
-
-static void get_telemetry_mem(struct edgetpu_mobile_platform_dev *etmdev,
+static void set_telemetry_mem(struct edgetpu_mobile_platform_dev *etmdev,
 			      enum gcip_telemetry_type type, struct edgetpu_coherent_mem *mem)
 {
 	int i, offset = type == GCIP_TELEMETRY_TRACE ? EDGETPU_TELEMETRY_LOG_BUFFER_SIZE : 0;
@@ -40,18 +32,18 @@ static void get_telemetry_mem(struct edgetpu_mobile_platform_dev *etmdev,
 
 	for (i = 0; i < etmdev->edgetpu_dev.num_cores; i++) {
 		mem[i].vaddr = etmdev->shared_mem_vaddr + offset;
-		mem[i].dma_addr = EDGETPU_REMAPPED_DATA_ADDR + offset;
-		mem[i].tpu_addr = EDGETPU_REMAPPED_DATA_ADDR + offset;
+		mem[i].dma_addr = etmdev->remapped_data_addr + offset;
+		mem[i].tpu_addr = etmdev->remapped_data_addr + offset;
 		mem[i].host_addr = 0;
 		mem[i].size = size;
 		offset += EDGETPU_TELEMETRY_LOG_BUFFER_SIZE + EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE;
 	}
 }
 
-static void edgetpu_mobile_get_telemetry_mem(struct edgetpu_mobile_platform_dev *etmdev)
+void edgetpu_mobile_set_telemetry_mem(struct edgetpu_mobile_platform_dev *etmdev)
 {
-	get_telemetry_mem(etmdev, GCIP_TELEMETRY_LOG, etmdev->log_mem);
-	get_telemetry_mem(etmdev, GCIP_TELEMETRY_TRACE, etmdev->trace_mem);
+	set_telemetry_mem(etmdev, GCIP_TELEMETRY_LOG, etmdev->log_mem);
+	set_telemetry_mem(etmdev, GCIP_TELEMETRY_TRACE, etmdev->trace_mem);
 }
 
 static int edgetpu_platform_setup_fw_region(struct edgetpu_mobile_platform_dev *etmdev)
@@ -62,7 +54,7 @@ static int edgetpu_platform_setup_fw_region(struct edgetpu_mobile_platform_dev *
 	struct resource r;
 	struct device_node *np;
 	int err;
-	size_t region_map_size = EDGETPU_FW_SIZE_MAX + EDGETPU_REMAPPED_DATA_SIZE;
+	size_t region_map_size = EDGETPU_DEFAULT_FW_SIZE_MAX + EDGETPU_DEFAULT_REMAPPED_DATA_SIZE;
 
 	np = of_parse_phandle(dev->of_node, "memory-region", 0);
 	if (!np) {
@@ -99,17 +91,20 @@ static int edgetpu_platform_setup_fw_region(struct edgetpu_mobile_platform_dev *
 	}
 
 	etmdev->fw_region_paddr = r.start;
-	etmdev->fw_region_size = EDGETPU_FW_SIZE_MAX;
+	etmdev->fw_region_size = EDGETPU_DEFAULT_FW_SIZE_MAX;
 
-	etmdev->shared_mem_vaddr = memremap(r.start + EDGETPU_REMAPPED_DATA_OFFSET,
-					    EDGETPU_REMAPPED_DATA_SIZE, MEMREMAP_WC);
+	etmdev->remapped_data_addr = EDGETPU_INSTRUCTION_REMAP_BASE + etmdev->fw_region_size;
+	etmdev->remapped_data_size = EDGETPU_DEFAULT_REMAPPED_DATA_SIZE;
+
+	etmdev->shared_mem_vaddr = memremap(etmdev->fw_region_paddr + etmdev->fw_region_size,
+					    etmdev->remapped_data_size, MEMREMAP_WC);
 	if (!etmdev->shared_mem_vaddr) {
 		dev_err(dev, "Shared memory remap failed");
 		if (etmdev->gsa_dev)
 			put_device(etmdev->gsa_dev);
 		return -EINVAL;
 	}
-	etmdev->shared_mem_paddr = r.start + EDGETPU_REMAPPED_DATA_OFFSET;
+	etmdev->shared_mem_paddr = etmdev->fw_region_paddr + etmdev->fw_region_size;
 
 	return 0;
 }
@@ -124,6 +119,8 @@ static void edgetpu_platform_cleanup_fw_region(struct edgetpu_mobile_platform_de
 		return;
 	memunmap(etmdev->shared_mem_vaddr);
 	etmdev->shared_mem_vaddr = NULL;
+	etmdev->remapped_data_addr = 0;
+	etmdev->remapped_data_size = 0;
 }
 
 static int mobile_check_ext_mailbox_args(const char *func, struct edgetpu_dev *etdev,
@@ -351,13 +348,13 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 					 /* Base virtual address (kernel address space) */
 					 etmdev->shared_mem_vaddr + EDGETPU_POOL_MEM_OFFSET,
 					 /* Base DMA address */
-					 EDGETPU_REMAPPED_DATA_ADDR + EDGETPU_POOL_MEM_OFFSET,
+					 etmdev->remapped_data_addr + EDGETPU_POOL_MEM_OFFSET,
 					 /* Base TPU address */
-					 EDGETPU_REMAPPED_DATA_ADDR + EDGETPU_POOL_MEM_OFFSET,
+					 etmdev->remapped_data_addr + EDGETPU_POOL_MEM_OFFSET,
 					 /* Base physical address */
 					 etmdev->shared_mem_paddr + EDGETPU_POOL_MEM_OFFSET,
 					 /* Size */
-					 EDGETPU_REMAPPED_DATA_SIZE - EDGETPU_POOL_MEM_OFFSET,
+					 etmdev->remapped_data_size - EDGETPU_POOL_MEM_OFFSET,
 					 /* Granularity */
 					 PAGE_SIZE);
 	if (ret) {
@@ -398,7 +395,7 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 	}
 #endif
 
-	edgetpu_mobile_get_telemetry_mem(etmdev);
+	edgetpu_mobile_set_telemetry_mem(etmdev);
 	ret = edgetpu_telemetry_init(etdev, etmdev->log_mem, etmdev->trace_mem);
 	if (ret)
 		goto out_remove_irq;

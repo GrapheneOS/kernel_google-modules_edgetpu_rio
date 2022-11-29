@@ -20,11 +20,13 @@
 #include "edgetpu-firmware.h"
 #include "edgetpu-firmware-util.h"
 #include "edgetpu-internal.h"
+#include "edgetpu-iremap-pool.h"
 #include "edgetpu-kci.h"
 #include "edgetpu-mailbox.h"
 #include "edgetpu-mmu.h"
 #include "edgetpu-mobile-platform.h"
 #include "edgetpu-soc.h"
+#include "edgetpu-telemetry.h"
 #include "mobile-firmware.h"
 
 static int image_config_map(void *data, dma_addr_t daddr, phys_addr_t paddr, size_t size,
@@ -188,13 +190,104 @@ static int mobile_firmware_gsa_authenticate(struct edgetpu_mobile_platform_dev *
 	return ret;
 }
 
+static int mobile_firmware_update_remapped_data_region(struct edgetpu_dev *etdev)
+{
+	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
+	struct gcip_image_config *config = mobile_firmware_get_image_config(etdev);
+	tpu_addr_t remapped_data_addr = EDGETPU_INSTRUCTION_REMAP_BASE + etmdev->fw_region_size;
+	size_t remapped_data_size = config->remapped_data_size ? config->remapped_data_size :
+								 EDGETPU_DEFAULT_REMAPPED_DATA_SIZE;
+	int ret;
+
+	if (etmdev->remapped_data_addr == remapped_data_addr &&
+	    etmdev->remapped_data_size == remapped_data_size)
+		return 0;
+
+	if (remapped_data_addr < EDGETPU_INSTRUCTION_REMAP_BASE + config->firmware_size ||
+	    config->firmware_base + etmdev->fw_region_size + remapped_data_size >
+		    config->remapped_region_start)
+		return -EINVAL;
+
+	etdev_dbg(etdev, "Moving remapped data from %#llx to %#llx\n", etmdev->remapped_data_addr,
+		  remapped_data_addr);
+
+	if (etmdev->shared_mem_vaddr) {
+		/* No need to free the VII queues since allocated groups will block fw loading. */
+		edgetpu_kci_release(etdev, etdev->etkci);
+		edgetpu_telemetry_exit(etdev);
+		edgetpu_iremap_pool_destroy(etdev);
+		memunmap(etmdev->shared_mem_vaddr);
+	}
+
+	etmdev->remapped_data_addr = remapped_data_addr;
+	etmdev->remapped_data_size = remapped_data_size;
+
+	etmdev->shared_mem_paddr = etmdev->fw_region_paddr + etmdev->fw_region_size;
+	etmdev->shared_mem_vaddr =
+		memremap(etmdev->shared_mem_paddr, etmdev->remapped_data_size, MEMREMAP_WC);
+	if (!etmdev->shared_mem_vaddr) {
+		etdev_err(etdev, "Shared memory remap failed\n");
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = edgetpu_iremap_pool_create(etdev,
+					 /* Base virtual address (kernel address space) */
+					 etmdev->shared_mem_vaddr + EDGETPU_POOL_MEM_OFFSET,
+					 /* Base DMA address */
+					 etmdev->remapped_data_addr + EDGETPU_POOL_MEM_OFFSET,
+					 /* Base TPU address */
+					 etmdev->remapped_data_addr + EDGETPU_POOL_MEM_OFFSET,
+					 /* Base physical address */
+					 etmdev->shared_mem_paddr + EDGETPU_POOL_MEM_OFFSET,
+					 /* Size */
+					 etmdev->remapped_data_size - EDGETPU_POOL_MEM_OFFSET,
+					 /* Granularity */
+					 PAGE_SIZE);
+	if (ret) {
+		etdev_err(etdev, "failed to initialize remapped memory pool: %d", ret);
+		goto out_memunmap;
+	}
+
+	edgetpu_mobile_set_telemetry_mem(etmdev);
+	ret = edgetpu_telemetry_init(etdev, etmdev->log_mem, etmdev->trace_mem);
+	if (ret)
+		goto out_iremap_pool_destroy;
+
+	ret = edgetpu_kci_init(etdev->mailbox_manager, etdev->etkci);
+	if (ret)
+		goto out_telemetry_exit;
+
+	return 0;
+
+out_telemetry_exit:
+	edgetpu_telemetry_exit(etdev);
+out_iremap_pool_destroy:
+	edgetpu_iremap_pool_destroy(etdev);
+out_memunmap:
+	memunmap(etmdev->shared_mem_vaddr);
+
+out:
+	etmdev->remapped_data_addr = 0;
+	etmdev->remapped_data_size = 0;
+	etmdev->shared_mem_paddr = 0;
+	etmdev->shared_mem_vaddr = NULL;
+
+	return ret;
+}
+
 static int mobile_firmware_prepare_run(struct edgetpu_firmware *et_fw,
 				       struct edgetpu_firmware_buffer *fw_buf)
 {
 	struct edgetpu_dev *etdev = et_fw->etdev;
+	int ret;
 
 	/* Reset KCI mailbox before starting f/w, don't process anything old.*/
 	edgetpu_mailbox_reset(etdev->etkci->mailbox);
+
+	ret = mobile_firmware_update_remapped_data_region(etdev);
+	if (ret)
+		return ret;
 
 	edgetpu_soc_prepare_firmware(etdev);
 
@@ -235,18 +328,10 @@ static int mobile_firmware_setup_buffer(struct edgetpu_firmware *et_fw,
 		return -EINVAL;
 	}
 
-	image_vaddr = memremap(etmdev->fw_region_paddr,
-			       etmdev->fw_region_size, MEMREMAP_WC);
-	if (!image_vaddr) {
-		etdev_err(etdev, "memremap failed\n");
-		return -ENOMEM;
-	}
-
 	hdr = (struct mobile_image_header *)fw_buf->vaddr;
 	if (hdr->common.Magic != EDGETPU_MOBILE_FW_MAGIC) {
 		etdev_err(etdev, "Invalid firmware header magic value %#08x\n", hdr->common.Magic);
-		ret = -EINVAL;
-		goto out;
+		return -EINVAL;
 	}
 
 	switch (hdr->common.Generation) {
@@ -259,7 +344,19 @@ static int mobile_firmware_setup_buffer(struct edgetpu_firmware *et_fw,
 	default:
 		etdev_err(etdev, "Invalid header generation identifier (%d)\n",
 			  hdr->common.Generation);
-		goto out;
+		return -EINVAL;
+	}
+
+	etmdev->fw_region_paddr = image_config->firmware_base;
+	etmdev->fw_region_size =
+		image_config->remapped_data_start ?
+			image_config->remapped_data_start - image_config->firmware_base :
+			EDGETPU_DEFAULT_FW_SIZE_MAX;
+
+	image_vaddr = memremap(etmdev->fw_region_paddr, etmdev->fw_region_size, MEMREMAP_WC);
+	if (!image_vaddr) {
+		etdev_err(etdev, "FW region memremap failed\n");
+		return -ENOMEM;
 	}
 
 	memcpy(&etdev->fw_version, &image_config->firmware_versions, sizeof(etdev->fw_version));
@@ -309,13 +406,14 @@ out:
 static void program_iremap_csr(struct edgetpu_dev *etdev)
 {
 	const int ctx_id = 0, sid0 = 0x30, sid1 = 0x34;
-	phys_addr_t fw_paddr = EDGETPU_INSTRUCTION_REMAP_BASE;
 
 	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_SECURITY, (ctx_id << 16) | sid0);
 	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_SECURITY + 8,
 			     (ctx_id << 16) | sid1);
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_NEW_BASE, fw_paddr);
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_NEW_BASE + 8, fw_paddr);
+	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_NEW_BASE,
+			     EDGETPU_INSTRUCTION_REMAP_BASE);
+	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_NEW_BASE + 8,
+			     EDGETPU_INSTRUCTION_REMAP_BASE);
 
 	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_LIMIT,
 			     EDGETPU_INSTRUCTION_REMAP_BASE + SZ_32M);

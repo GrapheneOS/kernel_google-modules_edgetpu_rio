@@ -23,23 +23,17 @@
 /* Reserved VCID that uses the extra partition. */
 #define EDGETPU_VCID_EXTRA_PARTITION 0
 
+/* Pre-allocate 1 IOMMU domain per VCID */
+#define EDGETPU_NUM_PREALLOCATED_DOMAINS EDGETPU_NUM_VCIDS
+
 /* Placeholder value */
 #define EDGETPU_TZ_MAILBOX_ID 31
 
-/*
- * Size of the area in remapped DRAM reserved for firmware code and internal
- * data. This must match the firmware's linker file.
- */
-#define EDGETPU_FW_SIZE_MAX			0x100000
+/* Default size of the area in remapped DRAM reserved for firmware code and internal data. */
+#define EDGETPU_DEFAULT_FW_SIZE_MAX 0x100000
 
-/* Data in remapped DRAM starts after firmware code and internal data */
-#define EDGETPU_REMAPPED_DATA_OFFSET		EDGETPU_FW_SIZE_MAX
-
-/*
- * Size of remapped DRAM data region. This must match the firmware's linker
- * file
- */
-#define EDGETPU_REMAPPED_DATA_SIZE		0x100000
+/* Default size of remapped DRAM data region. */
+#define EDGETPU_DEFAULT_REMAPPED_DATA_SIZE 0x100000
 
 /*
  * Instruction remap registers make carveout memory appear at address
@@ -47,8 +41,12 @@
  */
 #define EDGETPU_INSTRUCTION_REMAP_BASE		0x10000000
 
-/* Address from which the TPU CPU can access data in the remapped region */
-#define EDGETPU_REMAPPED_DATA_ADDR (EDGETPU_INSTRUCTION_REMAP_BASE + EDGETPU_REMAPPED_DATA_OFFSET)
+/*
+ * Default address from which the TPU CPU can access data in the remapped region.
+ * Data in remapped DRAM starts after firmware code and internal data.
+ */
+#define EDGETPU_DEFAULT_REMAPPED_DATA_ADDR                                                         \
+	(EDGETPU_INSTRUCTION_REMAP_BASE + EDGETPU_DEFAULT_FW_SIZE_MAX)
 
 /*
  * Size of memory for FW accessible debug dump segments
