@@ -56,6 +56,13 @@ int edgetpu_thermal_suspend(struct device *dev);
 int edgetpu_thermal_resume(struct device *dev);
 
 /*
+ * Sends the thermal throttling KCI if the device is powered.
+ *
+ * Returns the return value of KCI if the device is powered, otherwise 0.
+ */
+int edgetpu_thermal_kci_if_powered(struct edgetpu_dev *etdev, u32 state);
+
+/*
  * Holds thermal->lock.
  *
  * Does nothing if the thermal management is not supported.

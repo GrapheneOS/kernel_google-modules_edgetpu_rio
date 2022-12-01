@@ -23,6 +23,8 @@
 #include "mobile-firmware.h"
 #include "mobile-pm.h"
 
+static struct edgetpu_dev *edgetpu_debug_pointer;
+
 static void set_telemetry_mem(struct edgetpu_mobile_platform_dev *etmdev,
 			      enum gcip_telemetry_type type, struct edgetpu_coherent_mem *mem)
 {
@@ -426,6 +428,8 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 	/* Turn the device off unless a client request is already received. */
 	edgetpu_pm_shutdown(etdev, false);
 
+	edgetpu_debug_pointer = etdev;
+
 	return 0;
 out_destroy_fw:
 	edgetpu_mobile_firmware_destroy(etdev);
@@ -460,5 +464,8 @@ static int edgetpu_mobile_platform_remove(struct platform_device *pdev)
 	edgetpu_pm_put(etdev->pm);
 	edgetpu_pm_shutdown(etdev, true);
 	edgetpu_mobile_pm_destroy(etdev);
+
+	edgetpu_debug_pointer = NULL;
+
 	return 0;
 }
