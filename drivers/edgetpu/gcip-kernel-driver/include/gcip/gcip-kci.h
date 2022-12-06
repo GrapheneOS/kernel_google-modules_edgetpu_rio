@@ -93,10 +93,10 @@ enum gcip_kci_code {
 	GCIP_KCI_CODE_GET_USAGE = 12,
 	GCIP_KCI_CODE_NOTIFY_THROTTLING = 13,
 	GCIP_KCI_CODE_BLOCK_BUS_SPEED_CONTROL = 14,
-	/* TODO(b/237955391): Update this code after decided. */
 	GCIP_KCI_CODE_ALLOCATE_VMBOX = 15,
-	/* TODO(b/237955391): Update this code after decided. */
 	GCIP_KCI_CODE_RELEASE_VMBOX = 16,
+	GCIP_KCI_CODE_LINK_OFFLOAD_VMBOX = 17,
+	GCIP_KCI_CODE_UNLINK_OFFLOAD_VMBOX = 18,
 
 	GCIP_KCI_CODE_RKCI_ACK = 256,
 };
@@ -138,6 +138,11 @@ enum gcip_kci_error {
 	GCIP_KCI_ERROR_UNAVAILABLE = 14,
 	GCIP_KCI_ERROR_DATA_LOSS = 15,
 	GCIP_KCI_ERROR_UNAUTHENTICATED = 16,
+};
+
+/* Type of the chip of the offload vmbox to be linked. */
+enum gcip_kci_offload_chip_type {
+	GCIP_KCI_OFFLOAD_CHIP_TYPE_TPU = 0,
 };
 
 /*

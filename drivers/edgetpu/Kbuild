@@ -13,7 +13,7 @@ endif
 
 GCIP_DIR=gcip-kernel-driver/drivers/gcip
 
-edgetpu-objs	:= edgetpu-mailbox.o edgetpu-kci.o edgetpu-telemetry.o edgetpu-mapping.o edgetpu-dmabuf.o edgetpu-async.o edgetpu-iremap-pool.o edgetpu-sw-watchdog.o edgetpu-firmware.o edgetpu-firmware-util.o edgetpu-domain-pool.o $(GCIP_DIR)/gcip.o
+edgetpu-objs	:= edgetpu-mailbox.o edgetpu-kci.o edgetpu-telemetry.o edgetpu-mapping.o edgetpu-dmabuf.o edgetpu-async.o edgetpu-iremap-pool.o edgetpu-sw-watchdog.o edgetpu-firmware.o edgetpu-firmware-util.o $(GCIP_DIR)/gcip.o
 
 rio-y		:= rio-device.o rio-device-group.o rio-fs.o rio-core.o rio-platform.o rio-firmware.o rio-thermal.o rio-pm.o rio-debug-dump.o rio-usage-stats.o rio-iommu.o rio-wakelock.o rio-external.o rio-soc.o $(edgetpu-objs)
 
