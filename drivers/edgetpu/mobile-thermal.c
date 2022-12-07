@@ -30,26 +30,6 @@
 #define OF_DATA_NUM_MAX (MAX_NUM_TPU_STATES * 2)
 static struct edgetpu_state_pwr state_pwr_map[MAX_NUM_TPU_STATES] = {0};
 
-/*
- * Sends the thermal throttling KCI if the device is powered.
- *
- * Returns the return value of KCI if the device is powered, otherwise 0.
- */
-static int edgetpu_thermal_kci_if_powered(struct edgetpu_dev *etdev, enum edgetpu_pwr_state state)
-{
-	int ret = 0;
-
-	if (edgetpu_pm_get_if_powered(etdev->pm)) {
-		ret = edgetpu_kci_notify_throttling(etdev, state);
-		if (ret)
-			etdev_err_ratelimited(etdev,
-					      "Failed to notify FW about power state %u, error:%d",
-					      state, ret);
-		edgetpu_pm_put(etdev->pm);
-	}
-	return ret;
-}
-
 static int edgetpu_get_max_state(struct thermal_cooling_device *cdev, unsigned long *state)
 {
 	struct edgetpu_thermal *thermal = cdev->devdata;
@@ -71,7 +51,7 @@ static int edgetpu_set_thermal_policy(struct edgetpu_dev *etdev, unsigned long p
 	if (edgetpu_is_powered(etdev))
 		edgetpu_kci_block_bus_speed_control(etdev, true);
 
-	ret = edgetpu_soc_pm_set_policy(pwr_state);
+	ret = edgetpu_thermal_kci_if_powered(etdev, pwr_state);
 
 	if (edgetpu_is_powered(etdev))
 		edgetpu_kci_block_bus_speed_control(etdev, false);
@@ -140,7 +120,7 @@ static int edgetpu_get_cur_state(struct thermal_cooling_device *cdev, unsigned l
 	dev_warn(cooling->dev, "Unknown cooling state: %lu, resetting\n", *state);
 	mutex_lock(&cooling->lock);
 
-	ret = edgetpu_soc_pm_set_policy(TPU_ACTIVE_NOM);
+	ret = edgetpu_thermal_kci_if_powered(cooling->etdev, TPU_ACTIVE_NOM);
 	if (ret) {
 		dev_err(cooling->dev, "error setting tpu policy: %d\n", ret);
 		mutex_unlock(&cooling->lock);
@@ -443,7 +423,11 @@ int edgetpu_thermal_resume(struct device *dev)
 	if (IS_ERR(cooling))
 		return PTR_ERR(cooling);
 	mutex_lock(&cooling->lock);
-	ret = edgetpu_thermal_kci_if_powered(etdev, state_pwr_map[0].state);
+
+	if (cooling->cooling_state >= cooling->tpu_num_states)
+		cooling->cooling_state = 0;
+
+	ret = edgetpu_thermal_kci_if_powered(etdev, state_pwr_map[cooling->cooling_state].state);
 	/*
 	 * Unlike edgetpu_thermal_suspend(), only set the device is resumed if the FW handled the
 	 * KCI request.
@@ -451,5 +435,20 @@ int edgetpu_thermal_resume(struct device *dev)
 	if (!ret)
 		cooling->thermal_suspended = false;
 	mutex_unlock(&cooling->lock);
+	return ret;
+}
+
+int edgetpu_thermal_kci_if_powered(struct edgetpu_dev *etdev, u32 state)
+{
+	int ret = 0;
+
+	if (edgetpu_pm_get_if_powered(etdev->pm)) {
+		ret = edgetpu_kci_notify_throttling(etdev, state);
+		if (ret)
+			etdev_err_ratelimited(etdev,
+					      "Failed to notify FW about power state %u, error:%d",
+					      state, ret);
+		edgetpu_pm_put(etdev->pm);
+	}
 	return ret;
 }

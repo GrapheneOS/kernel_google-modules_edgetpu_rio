@@ -358,11 +358,6 @@ int edgetpu_soc_pm_set_rate(unsigned long rate)
 	return -EOPNOTSUPP;
 }
 
-int edgetpu_soc_pm_set_policy(u64 val)
-{
-	return 0;
-}
-
 static int edgetpu_core_rate_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;

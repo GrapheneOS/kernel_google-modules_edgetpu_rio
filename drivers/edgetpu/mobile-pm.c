@@ -18,6 +18,7 @@
 #include "edgetpu-mailbox.h"
 #include "edgetpu-mobile-platform.h"
 #include "edgetpu-pm.h"
+#include "edgetpu-thermal.h"
 #include "mobile-firmware.h"
 #include "mobile-pm.h"
 
@@ -148,7 +149,7 @@ static int mobile_pwr_policy_set(void *data, u64 val)
 	int ret;
 
 	mutex_lock(&platform_pwr->policy_lock);
-	ret = edgetpu_soc_pm_set_policy(val);
+	ret = edgetpu_thermal_kci_if_powered(etdev, val);
 
 	if (ret) {
 		dev_err(etmdev->edgetpu_dev.dev,
