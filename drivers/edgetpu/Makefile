@@ -19,8 +19,7 @@ endif
 edgetpu-objs	:= edgetpu-async.o edgetpu-dmabuf.o edgetpu-iremap-pool.o \
 		   edgetpu-kci.o edgetpu-mailbox.o edgetpu-mapping.o \
 		   edgetpu-sw-watchdog.o edgetpu-telemetry.o \
-		   edgetpu-firmware-util.o edgetpu-firmware.o \
-		   edgetpu-domain-pool.o
+		   edgetpu-firmware-util.o edgetpu-firmware.o
 
 rio-objs	:= rio-core.o rio-debug-dump.o rio-device-group.o rio-device.o \
 		   rio-firmware.o rio-fs.o rio-iommu.o rio-platform.o rio-pm.o \
