@@ -61,11 +61,19 @@ static int edgetpu_external_mailbox_alloc(struct device *edgetpu_dev,
 	struct edgetpu_external_mailbox *ext_mailbox;
 	struct edgetpu_external_mailbox_req req;
 	int ret = 0;
-	struct fd f = fdget(client_info->tpu_fd);
-	struct file *file = f.file;
+	struct file *file;
+	bool use_file = client_info->tpu_fd == -1;
+
+	if (use_file)
+		file = client_info->tpu_file;
+	else
+		file = fget(client_info->tpu_fd);
 
 	if (!file)
 		return -EBADF;
+
+	if (use_file)
+		get_file(file);
 
 	if (!is_edgetpu_file(file)) {
 		ret = -EINVAL;
@@ -116,7 +124,7 @@ unlock:
 error_put_group:
 	edgetpu_device_group_put(group);
 out:
-	fdput(f);
+	fput(file);
 	return ret;
 }
 
@@ -125,11 +133,19 @@ static int edgetpu_external_mailbox_free(struct device *edgetpu_dev,
 {
 	struct edgetpu_client *client;
 	int ret = 0;
-	struct fd f = fdget(client_info->tpu_fd);
-	struct file *file = f.file;
+	struct file *file;
+	bool use_file = client_info->tpu_fd == -1;
+
+	if (use_file)
+		file = client_info->tpu_file;
+	else
+		file = fget(client_info->tpu_fd);
 
 	if (!file)
 		return -EBADF;
+
+	if (use_file)
+		get_file(file);
 
 	if (!is_edgetpu_file(file)) {
 		ret = -EINVAL;
@@ -144,12 +160,57 @@ static int edgetpu_external_mailbox_free(struct device *edgetpu_dev,
 
 	ret = edgetpu_mailbox_disable_ext(client, EDGETPU_MAILBOX_ID_USE_ASSOC);
 out:
-	fdput(f);
+	fput(file);
 	return ret;
 }
 
-int edgetpu_ext_driver_cmd(struct device *edgetpu_dev,
-			   enum edgetpu_ext_client_type client_type,
+static int edgetpu_external_start_offload(struct device *edgetpu_dev,
+					  struct edgetpu_ext_client_info *client_info,
+					  struct edgetpu_ext_offload_info *offload_info)
+{
+	struct edgetpu_client *client;
+	struct edgetpu_device_group *group;
+	struct file *file = client_info->tpu_file;
+	int ret = 0;
+
+	if (!file)
+		return -EBADF;
+
+	get_file(file);
+
+	if (!is_edgetpu_file(file)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	client = file->private_data;
+	if (!client || client->etdev->dev != edgetpu_dev) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	mutex_lock(&client->group_lock);
+	if (!client->group) {
+		ret = -EINVAL;
+		mutex_unlock(&client->group_lock);
+		goto out;
+	}
+	group = edgetpu_device_group_get(client->group);
+	mutex_unlock(&client->group_lock);
+
+	mutex_lock(&group->lock);
+	offload_info->client_id = group->vcid;
+	/* TODO(b/259213063): notify the firmware to listen for the TPU offloads. */
+	mutex_unlock(&group->lock);
+
+	edgetpu_device_group_put(group);
+
+out:
+	fput(file);
+	return ret;
+}
+
+int edgetpu_ext_driver_cmd(struct device *edgetpu_dev, enum edgetpu_ext_client_type client_type,
 			   enum edgetpu_ext_commands cmd_id, void *in_data, void *out_data)
 {
 	switch (cmd_id) {
@@ -157,6 +218,8 @@ int edgetpu_ext_driver_cmd(struct device *edgetpu_dev,
 		return edgetpu_external_mailbox_alloc(edgetpu_dev, in_data, out_data, client_type);
 	case FREE_EXTERNAL_MAILBOX:
 		return edgetpu_external_mailbox_free(edgetpu_dev, in_data);
+	case START_OFFLOAD:
+		return edgetpu_external_start_offload(edgetpu_dev, in_data, out_data);
 	default:
 		return -ENOENT;
 	}
