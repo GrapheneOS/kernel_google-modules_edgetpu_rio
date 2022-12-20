@@ -13,6 +13,14 @@
 
 #include <gcip/gcip-mailbox.h>
 
+#if IS_ENABLED(CONFIG_GCIP_TEST)
+#include "unittests/helper/gcip-mailbox-controller.h"
+
+#define TEST_TRIGGER_TIMEOUT_RACE(awaiter) gcip_mailbox_controller_trigger_timeout_race(awaiter)
+#else
+#define TEST_TRIGGER_TIMEOUT_RACE(...)
+#endif
+
 #define GET_CMD_QUEUE_HEAD() mailbox->ops->get_cmd_queue_head(mailbox)
 #define GET_CMD_QUEUE_TAIL() mailbox->ops->get_cmd_queue_tail(mailbox)
 #define INC_CMD_QUEUE_TAIL(inc) mailbox->ops->inc_cmd_queue_tail(mailbox, inc)
@@ -46,6 +54,19 @@ struct gcip_mailbox_wait_list_elem {
 	struct gcip_mailbox_resp_awaiter *awaiter;
 };
 
+static void gcip_mailbox_awaiter_release(struct gcip_mailbox_resp_awaiter *awaiter)
+{
+	if (awaiter->release_data)
+		awaiter->release_data(awaiter->data);
+	kfree(awaiter);
+}
+
+static void gcip_mailbox_awaiter_dec_refs(struct gcip_mailbox_resp_awaiter *awaiter)
+{
+	if (refcount_dec_and_test(&awaiter->refs))
+		gcip_mailbox_awaiter_release(awaiter);
+}
+
 /*
  * Removes the response previously pushed with gcip_mailbox_push_wait_resp().
  *
@@ -65,6 +86,10 @@ static void gcip_mailbox_del_wait_resp(struct gcip_mailbox *mailbox, void *resp)
 			break;
 		if (cur_seq == seq) {
 			list_del(&cur->list);
+			if (cur->awaiter) {
+				/* Remove the reference of the arrived handler. */
+				gcip_mailbox_awaiter_dec_refs(cur->awaiter);
+			}
 			kfree(cur);
 			break;
 		}
@@ -89,6 +114,10 @@ static int gcip_mailbox_push_wait_resp(struct gcip_mailbox *mailbox, void *resp,
 
 	if (!entry)
 		return -ENOMEM;
+
+	/* Increase a reference of arrived handler. */
+	if (awaiter)
+		refcount_inc(&awaiter->refs);
 
 	entry->resp = resp;
 	entry->awaiter = awaiter;
@@ -221,7 +250,23 @@ static void gcip_mailbox_handle_response(struct gcip_mailbox *mailbox, void *res
 			list_del(&cur->list);
 			if (cur->awaiter) {
 				awaiter = cur->awaiter;
-				cancel_delayed_work(&awaiter->timeout_work);
+
+				/*
+				 * The timedout handler will be fired, but pended by waiting for
+				 * acquiring the wait_list_lock.
+				 */
+				TEST_TRIGGER_TIMEOUT_RACE(awaiter);
+
+				/*
+				 * If canceling timeout_work succeeded, we have to decrease the
+				 * reference count here because the timeout handler will not be
+				 * called. Otherwise, the timeout handler is already canceled or
+				 * pending by race. If it is canceled, the count must be decreased
+				 * already, and if it is pending, the timeout handler will decrease
+				 * the awaiter reference.
+				 */
+				if (cancel_delayed_work(&awaiter->timeout_work))
+					gcip_mailbox_awaiter_dec_refs(awaiter);
 				/*
 				 * If `handle_awaiter_arrived` callback is defined, @awaiter
 				 * will be released from the implementation side. Otherwise, it
@@ -229,8 +274,7 @@ static void gcip_mailbox_handle_response(struct gcip_mailbox *mailbox, void *res
 				 */
 				if (mailbox->ops->handle_awaiter_arrived)
 					mailbox->ops->handle_awaiter_arrived(mailbox, awaiter);
-				else
-					gcip_mailbox_release_awaiter(cur->awaiter);
+				gcip_mailbox_awaiter_dec_refs(awaiter);
 			}
 			kfree(cur);
 			break;
@@ -238,6 +282,10 @@ static void gcip_mailbox_handle_response(struct gcip_mailbox *mailbox, void *res
 		if (!mailbox->ignore_seq_order && cur_seq < seq) {
 			SET_RESP_ELEM_STATUS(cur->resp, GCIP_MAILBOX_STATUS_NO_RESPONSE);
 			list_del(&cur->list);
+			if (cur->awaiter) {
+				/* Remove the reference of the arrived handler. */
+				gcip_mailbox_awaiter_dec_refs(cur->awaiter);
+			}
 			kfree(cur);
 		}
 	}
@@ -379,8 +427,9 @@ static void gcip_mailbox_async_cmd_timeout_work(struct work_struct *work)
 	 */
 	if (mailbox->ops->handle_awaiter_timedout)
 		mailbox->ops->handle_awaiter_timedout(mailbox, awaiter);
-	else
-		gcip_mailbox_release_awaiter(awaiter);
+
+	/* Remove the reference of the timedout handler. */
+	gcip_mailbox_awaiter_dec_refs(awaiter);
 }
 
 /* Cleans up all the asynchronous responses which are not responded yet. */
@@ -414,6 +463,8 @@ static void gcip_mailbox_flush_awaiter(struct gcip_mailbox *mailbox)
 			awaiter = cur->awaiter;
 			if (mailbox->ops->flush_awaiter)
 				mailbox->ops->flush_awaiter(mailbox, awaiter);
+			/* Remove the reference of the arrived handler. */
+			gcip_mailbox_awaiter_dec_refs(cur->awaiter);
 		} else {
 			dev_warn(mailbox->dev,
 				 "Unexpected synchronous command pending on mailbox release\n");
@@ -429,8 +480,10 @@ static void gcip_mailbox_flush_awaiter(struct gcip_mailbox *mailbox)
 	list_for_each_entry_safe (cur, nxt, &resps_to_flush, list) {
 		list_del(&cur->list);
 		awaiter = cur->awaiter;
+		/* Cancel the timeout work and remove the reference of the timedout handler. */
 		gcip_mailbox_cancel_awaiter_timeout(awaiter);
-		gcip_mailbox_release_awaiter(awaiter);
+		/* Remove the reference of the caller. */
+		gcip_mailbox_awaiter_dec_refs(cur->awaiter);
 		kfree(cur);
 	}
 }
@@ -576,6 +629,8 @@ struct gcip_mailbox_resp_awaiter *gcip_mailbox_put_cmd(struct gcip_mailbox *mail
 	awaiter->mailbox = mailbox;
 	awaiter->data = data;
 	awaiter->release_data = mailbox->ops->release_awaiter_data;
+	/* 2 refs: caller (vd) and timedout handler. */
+	refcount_set(&awaiter->refs, 2);
 
 	INIT_DELAYED_WORK(&awaiter->timeout_work, gcip_mailbox_async_cmd_timeout_work);
 	schedule_delayed_work(&awaiter->timeout_work, msecs_to_jiffies(mailbox->timeout));
@@ -592,16 +647,21 @@ err_free_resp:
 	return ERR_PTR(ret);
 }
 
+void gcip_mailbox_cancel_awaiter(struct gcip_mailbox_resp_awaiter *awaiter)
+{
+	gcip_mailbox_del_wait_resp(awaiter->mailbox, awaiter->resp);
+	gcip_mailbox_cancel_awaiter_timeout(awaiter);
+}
+
 void gcip_mailbox_cancel_awaiter_timeout(struct gcip_mailbox_resp_awaiter *awaiter)
 {
-	cancel_delayed_work_sync(&awaiter->timeout_work);
+	if (cancel_delayed_work_sync(&awaiter->timeout_work))
+		gcip_mailbox_awaiter_dec_refs(awaiter);
 }
 
 void gcip_mailbox_release_awaiter(struct gcip_mailbox_resp_awaiter *awaiter)
 {
-	if (awaiter->release_data)
-		awaiter->release_data(awaiter->data);
-	kfree(awaiter);
+	gcip_mailbox_awaiter_dec_refs(awaiter);
 }
 
 void gcip_mailbox_consume_one_response(struct gcip_mailbox *mailbox, void *resp)

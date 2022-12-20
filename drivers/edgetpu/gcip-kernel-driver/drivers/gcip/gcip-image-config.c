@@ -14,11 +14,20 @@
 
 #define SIZE_MASK 0xfff
 
-/* used by iommu_mappings */
-#define CONFIG_TO_SIZE(a) ((1U << ((a) & SIZE_MASK)) << 12)
-
 /* used by ns_iommu_mappings */
-#define CONFIG_TO_MBSIZE(a) (((a) & SIZE_MASK) << 20)
+#define CONFIG_TO_MBSIZE(a) (((a)&SIZE_MASK) << 20)
+
+/* used by iommu_mappings */
+static inline __u32 config_to_size(__u32 cfg)
+{
+	__u32 page_size;
+
+	if (cfg & 0x800)
+		page_size = cfg & 0x7ff;
+	else
+		page_size = 1U << (cfg & SIZE_MASK);
+	return page_size << 12;
+}
 
 static int setup_iommu_mappings(struct gcip_image_config_parser *parser,
 				struct gcip_image_config *config)
@@ -35,7 +44,7 @@ static int setup_iommu_mappings(struct gcip_image_config_parser *parser,
 			ret = -EIO;
 			goto err;
 		}
-		size = CONFIG_TO_SIZE(config->iommu_mappings[i].image_config_value);
+		size = config_to_size(config->iommu_mappings[i].image_config_value);
 		paddr = config->iommu_mappings[i].image_config_value & ~SIZE_MASK;
 
 		dev_dbg(parser->dev, "Image config adding IOMMU mapping: %pad -> %pap", &daddr,
@@ -60,7 +69,7 @@ static int setup_iommu_mappings(struct gcip_image_config_parser *parser,
 err:
 	while (i--) {
 		daddr = config->iommu_mappings[i].virt_address;
-		size = CONFIG_TO_SIZE(config->iommu_mappings[i].image_config_value);
+		size = config_to_size(config->iommu_mappings[i].image_config_value);
 		parser->ops->unmap(parser->data, daddr, size, GCIP_IMAGE_CONFIG_FLAGS_SECURE);
 	}
 	return ret;
@@ -75,7 +84,7 @@ static void clear_iommu_mappings(struct gcip_image_config_parser *parser,
 
 	for (i = config->num_iommu_mappings - 1; i >= 0; i--) {
 		daddr = config->iommu_mappings[i].virt_address;
-		size = CONFIG_TO_SIZE(config->iommu_mappings[i].image_config_value);
+		size = config_to_size(config->iommu_mappings[i].image_config_value);
 		dev_dbg(parser->dev, "Image config removing IOMMU mapping: %pad size=%#lx", &daddr,
 			size);
 		parser->ops->unmap(parser->data, daddr, size, GCIP_IMAGE_CONFIG_FLAGS_SECURE);

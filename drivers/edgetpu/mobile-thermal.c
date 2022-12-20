@@ -41,26 +41,6 @@ static int edgetpu_get_max_state(struct thermal_cooling_device *cdev, unsigned l
 	return 0;
 }
 
-static int edgetpu_set_thermal_policy(struct edgetpu_dev *etdev, unsigned long pwr_state)
-{
-	int ret;
-
-	if (!edgetpu_pm_trylock(etdev->pm))
-		return -EAGAIN;
-
-	if (edgetpu_is_powered(etdev))
-		edgetpu_kci_block_bus_speed_control(etdev, true);
-
-	ret = edgetpu_thermal_kci_if_powered(etdev, pwr_state);
-
-	if (edgetpu_is_powered(etdev))
-		edgetpu_kci_block_bus_speed_control(etdev, false);
-
-	edgetpu_pm_unlock(etdev->pm);
-
-	return ret;
-}
-
 /*
  * Set cooling state.
  */
@@ -93,9 +73,9 @@ static int edgetpu_set_cur_state(struct thermal_cooling_device *cdev, unsigned l
 	if (pwr_state < TPU_ACTIVE_UUD) {
 		dev_warn_ratelimited(dev,
 				     "Setting lowest DVFS state, waiting for FW to shutdown TPU");
-		ret = edgetpu_set_thermal_policy(cooling->etdev, TPU_ACTIVE_UUD);
+		ret = edgetpu_thermal_kci_if_powered(cooling->etdev, TPU_ACTIVE_UUD);
 	} else {
-		ret = edgetpu_set_thermal_policy(cooling->etdev, pwr_state);
+		ret = edgetpu_thermal_kci_if_powered(cooling->etdev, pwr_state);
 	}
 
 	if (ret) {
@@ -440,14 +420,18 @@ int edgetpu_thermal_resume(struct device *dev)
 
 int edgetpu_thermal_kci_if_powered(struct edgetpu_dev *etdev, u32 state)
 {
-	int ret = 0;
+	int ret = -EAGAIN;
 
 	if (edgetpu_pm_get_if_powered(etdev->pm)) {
+		edgetpu_kci_block_bus_speed_control(etdev, true);
+
 		ret = edgetpu_kci_notify_throttling(etdev, state);
 		if (ret)
 			etdev_err_ratelimited(etdev,
 					      "Failed to notify FW about power state %u, error:%d",
 					      state, ret);
+
+		edgetpu_kci_block_bus_speed_control(etdev, false);
 		edgetpu_pm_put(etdev->pm);
 	}
 	return ret;

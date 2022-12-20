@@ -10,6 +10,7 @@
 
 #include <linux/compiler.h>
 #include <linux/mutex.h>
+#include <linux/refcount.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/wait.h>
@@ -100,6 +101,8 @@ struct gcip_mailbox_resp_awaiter {
 	struct gcip_mailbox *mailbox;
 	/* User-defined data. */
 	void *data;
+	/* Reference count. */
+	refcount_t refs;
 	/*
 	 * The callback for releasing the @data.
 	 * It will be set as @release_awaiter_data of struct gcip_mailbox_ops.
@@ -401,7 +404,7 @@ int gcip_mailbox_send_cmd(struct gcip_mailbox *mailbox, void *cmd, void *resp);
  * Executes @cmd command asynchronously. This function returns an instance of
  * `struct gcip_mailbox_resp_awaiter` which handles the arrival and time-out of the response.
  * The implementation side can cancel the asynchronous response by calling the
- * `gcip_mailbox_cancel_awaiter_timeout` function with it.
+ * `gcip_mailbox_cancel_awaiter` or `gcip_mailbox_cancel_awaiter_timeout` function with it.
  *
  * Arrived asynchronous response will be handled by `handle_awaiter_arrived` callback and timed out
  * asynchronous response will be handled by `handle_awaiter_timedout` callback. Those callbacks
@@ -425,9 +428,36 @@ int gcip_mailbox_send_cmd(struct gcip_mailbox *mailbox, void *cmd, void *resp);
  *
  * Note: the asynchronous responses fetched from @resp_queue should be released by calling the
  * `gcip_mailbox_release_awaiter` function.
+ *
+ * Note: if the life cycle of the mailbox is longer than the caller part, you should make sure
+ * that the callbacks don't access the variables of caller part after the release of it.
+ *
+ * Note: if you don't need the result of the response (e.g., if you pass @resp as NULL), you
+ * can release the returned awaiter right away by calling the `gcip_mailbox_release_awaiter`
+ * function.
  */
 struct gcip_mailbox_resp_awaiter *gcip_mailbox_put_cmd(struct gcip_mailbox *mailbox, void *cmd,
 						       void *resp, void *data);
+
+/*
+ * Cancels awaiting the asynchronous response.
+ * This function will remove @awaiter from the waiting list to make it not to be handled by the
+ * arrived callback. Also, it will cancel the timeout work of @awaiter synchronously. Therefore,
+ * AFTER the return of this function, you can guarantee that arrived or timedout callback will
+ * not be called for @awaiter.
+ *
+ * However, by the race condition, you must note that arrived or timedout callback can be executed
+ * BEFORE this function returns. (i.e, this function and arrived/timedout callback is called at the
+ * same time but the callback acquired the lock earlier.)
+ *
+ * Note: this function will cancel or wait for the completion of arrived or timedout callbacks
+ * synchronously. Therefore, make sure that the caller side doesn't hold any locks which can be
+ * acquired by the arrived or timedout callbacks.
+ *
+ * If you already got a response of @awaiter and want to ensure that timedout handler is finished,
+ * you can use the `gcip_mailbox_cancel_awaiter_timeout` function instead.
+ */
+void gcip_mailbox_cancel_awaiter(struct gcip_mailbox_resp_awaiter *awaiter);
 
 /*
  * Cancels the timeout work of the asynchronous response. In normally, the response arrives and
@@ -437,7 +467,12 @@ struct gcip_mailbox_resp_awaiter *gcip_mailbox_put_cmd(struct gcip_mailbox *mail
  * recommended to call this function after fetching the asynchronous response even though the
  * response arrived successfully.
  *
- * Note: this function will cancel the timeout work synchronously.
+ * Note: this function will cancel or wait for the completion of timedout callbacks synchronously.
+ * Therefore, make sure that the caller side doesn't hold any locks which can be acquired by the
+ * timedout callbacks.
+ *
+ * If you haven't gotten a response of @awaiter yet and want to make it not to be processed by
+ * arrived and timedout callbacks, use the `gcip_mailbox_cancel_awaiter` function.
  */
 void gcip_mailbox_cancel_awaiter_timeout(struct gcip_mailbox_resp_awaiter *awaiter);
 
