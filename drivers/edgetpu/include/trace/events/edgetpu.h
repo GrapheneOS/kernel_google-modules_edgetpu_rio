@@ -125,6 +125,80 @@ TRACE_EVENT(edgetpu_map_dmabuf_end,
 		__entry->dmabuf_fd, __entry->flags, __entry->die_index)
 );
 
+TRACE_EVENT(edgetpu_acquire_wakelock_start,
+
+	TP_PROTO(pid_t pid),
+
+	TP_ARGS(pid),
+
+	TP_STRUCT__entry(
+		__field(pid_t, pid)
+	),
+
+	TP_fast_assign(
+		__entry->pid = pid;
+	),
+
+	TP_printk("pid = %d", __entry->pid)
+);
+
+TRACE_EVENT(edgetpu_acquire_wakelock_end,
+
+	TP_PROTO(pid_t pid, int count, int ret),
+
+	TP_ARGS(pid, count, ret),
+
+	TP_STRUCT__entry(
+		__field(pid_t, pid)
+		__field(int, count)
+		__field(int, ret)
+	),
+
+	TP_fast_assign(
+		__entry->pid = pid;
+		__entry->count = count;
+		__entry->ret = ret;
+	),
+
+	TP_printk("pid = %d, req_count = %d, ret = %d", __entry->pid, __entry->count, __entry->ret)
+);
+
+TRACE_EVENT(edgetpu_release_wakelock_start,
+
+	TP_PROTO(pid_t pid),
+
+	TP_ARGS(pid),
+
+	TP_STRUCT__entry(
+		__field(pid_t, pid)
+	),
+
+	TP_fast_assign(
+		__entry->pid = pid;
+	),
+
+	TP_printk("pid = %d", __entry->pid)
+);
+
+TRACE_EVENT(edgetpu_release_wakelock_end,
+
+	TP_PROTO(pid_t pid, int count),
+
+	TP_ARGS(pid, count),
+
+	TP_STRUCT__entry(
+		__field(pid_t, pid)
+		__field(int, count)
+	),
+
+	TP_fast_assign(
+		__entry->pid = pid;
+		__entry->count = count;
+	),
+
+	TP_printk("pid = %d, req_count = %d", __entry->pid, __entry->count)
+);
+
 #endif /* _TRACE_EDGETPU_H */
 
 /* This part must be outside protection */

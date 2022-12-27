@@ -35,8 +35,9 @@ struct gcip_image_config {
 		/* Device virtual address */
 		__u32 virt_address;
 		/*
-		 * contains a 12-bit aligned address and a page-order size into a
-		 * 32-bit value i.e. a physical address and size in page order.
+		 * Encodes a 12-bit aligned address and the corresponding size
+		 * into a 32-bit value.
+		 * Detailed encoding method is defined in gcip-image-config.c.
 		 */
 		__u32 image_config_value;
 	} iommu_mappings[GCIP_IMG_CFG_MAX_IOMMU_MAPPINGS];

@@ -467,12 +467,17 @@ static int edgetpu_ioctl_release_wakelock(struct edgetpu_client *client)
 {
 	int count;
 
+	trace_edgetpu_release_wakelock_start(client->pid);
+
 	LOCK(client);
 	edgetpu_wakelock_lock(client->wakelock);
 	count = edgetpu_wakelock_release(client->wakelock);
 	if (count < 0) {
 		edgetpu_wakelock_unlock(client->wakelock);
 		UNLOCK(client);
+
+		trace_edgetpu_release_wakelock_end(client->pid, count);
+
 		return count;
 	}
 	if (!count) {
@@ -484,14 +489,19 @@ static int edgetpu_ioctl_release_wakelock(struct edgetpu_client *client)
 	UNLOCK(client);
 	etdev_dbg(client->etdev, "%s: wakelock req count = %u", __func__,
 		  count);
+
+	trace_edgetpu_release_wakelock_end(client->pid, count);
+
 	return 0;
 }
 
 static int edgetpu_ioctl_acquire_wakelock(struct edgetpu_client *client)
 {
-	int count;
+	int count = 0;
 	int ret;
 	struct edgetpu_thermal *thermal = client->etdev->thermal;
+
+	trace_edgetpu_acquire_wakelock_start(current->pid);
 
 	LOCK(client);
 	/*
@@ -509,46 +519,48 @@ static int edgetpu_ioctl_acquire_wakelock(struct edgetpu_client *client)
 		etdev_warn_ratelimited(client->etdev,
 				       "wakelock acquire rejected due to thermal suspend");
 		edgetpu_thermal_unlock(thermal);
-		goto error_unlock;
+		goto error_client_unlock;
 	} else {
 		ret = edgetpu_pm_get(client->etdev->pm);
 		edgetpu_thermal_unlock(thermal);
 		if (ret) {
 			etdev_warn(client->etdev, "pm_get failed (%d)", ret);
-			goto error_unlock;
+			goto error_client_unlock;
 		}
 	}
 	edgetpu_wakelock_lock(client->wakelock);
 	count = edgetpu_wakelock_acquire(client->wakelock);
 	if (count < 0) {
-		edgetpu_pm_put(client->etdev->pm);
 		ret = count;
-		goto error_unlock;
+		goto error_wakelock_unlock;
 	}
 	if (!count) {
 		if (client->group)
 			ret = edgetpu_group_attach_and_open_mailbox(client->group);
 		if (ret) {
-			etdev_warn(client->etdev,
-				   "failed to attach mailbox: %d", ret);
-			edgetpu_pm_put(client->etdev->pm);
+			etdev_warn(client->etdev, "failed to attach mailbox: %d", ret);
 			edgetpu_wakelock_release(client->wakelock);
-			edgetpu_wakelock_unlock(client->wakelock);
-			goto error_unlock;
+			goto error_wakelock_unlock;
 		}
-	} else {
-		/* Balance the power up count due to pm_get above.*/
-		edgetpu_pm_put(client->etdev->pm);
 	}
+
+error_wakelock_unlock:
 	edgetpu_wakelock_unlock(client->wakelock);
+
+	/* Balance the power up count due to pm_get above.*/
+	if (ret || count)
+		edgetpu_pm_put(client->etdev->pm);
+
+error_client_unlock:
 	UNLOCK(client);
-	etdev_dbg(client->etdev, "%s: wakelock req count = %u", __func__,
-		  count + 1);
-	return 0;
-error_unlock:
-	UNLOCK(client);
-	etdev_err(client->etdev, "client pid %d failed to acquire wakelock",
-		  client->pid);
+
+	if (ret)
+		etdev_err(client->etdev, "client pid %d failed to acquire wakelock", client->pid);
+	else
+		etdev_dbg(client->etdev, "%s: wakelock req count = %u", __func__, count + 1);
+
+	trace_edgetpu_acquire_wakelock_end(client->pid, ret ? count : count + 1, ret);
+
 	return ret;
 }
 

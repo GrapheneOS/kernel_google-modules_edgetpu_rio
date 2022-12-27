@@ -171,6 +171,7 @@ static int edgetpu_external_start_offload(struct device *edgetpu_dev,
 	struct edgetpu_client *client;
 	struct edgetpu_device_group *group;
 	struct file *file = client_info->tpu_file;
+	enum edgetpu_context_id context;
 	int ret = 0;
 
 	if (!file)
@@ -199,12 +200,17 @@ static int edgetpu_external_start_offload(struct device *edgetpu_dev,
 	mutex_unlock(&client->group_lock);
 
 	mutex_lock(&group->lock);
-	offload_info->client_id = group->vcid;
-	/* TODO(b/259213063): notify the firmware to listen for the TPU offloads. */
+	context = edgetpu_group_context_id_locked(group);
+	if (context == EDGETPU_CONTEXT_INVALID || context & EDGETPU_CONTEXT_DOMAIN_TOKEN) {
+		ret = -EINVAL;
+		goto out_group_unlock;
+	}
+
+	offload_info->client_id = context;
+
+out_group_unlock:
 	mutex_unlock(&group->lock);
-
 	edgetpu_device_group_put(group);
-
 out:
 	fput(file);
 	return ret;
