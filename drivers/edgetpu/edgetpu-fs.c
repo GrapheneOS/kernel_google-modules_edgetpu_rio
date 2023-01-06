@@ -498,7 +498,7 @@ static int edgetpu_ioctl_release_wakelock(struct edgetpu_client *client)
 static int edgetpu_ioctl_acquire_wakelock(struct edgetpu_client *client)
 {
 	int count = 0;
-	int ret;
+	int ret = 0;
 	struct edgetpu_thermal *thermal = client->etdev->thermal;
 
 	trace_edgetpu_acquire_wakelock_start(current->pid);
@@ -513,21 +513,23 @@ static int edgetpu_ioctl_acquire_wakelock(struct edgetpu_client *client)
 	client->pid = current->pid;
 	client->tgid = current->tgid;
 	edgetpu_thermal_lock(thermal);
-	if (edgetpu_thermal_is_suspended(thermal)) {
+	if (edgetpu_thermal_is_suspended(thermal))
 		/* TPU is thermal suspended, so fail acquiring wakelock */
 		ret = -EAGAIN;
+	edgetpu_thermal_unlock(thermal);
+
+	if (ret) {
 		etdev_warn_ratelimited(client->etdev,
 				       "wakelock acquire rejected due to thermal suspend");
-		edgetpu_thermal_unlock(thermal);
 		goto error_client_unlock;
-	} else {
-		ret = edgetpu_pm_get(client->etdev->pm);
-		edgetpu_thermal_unlock(thermal);
-		if (ret) {
-			etdev_warn(client->etdev, "pm_get failed (%d)", ret);
-			goto error_client_unlock;
-		}
 	}
+
+	ret = edgetpu_pm_get(client->etdev->pm);
+	if (ret) {
+		etdev_warn(client->etdev, "pm_get failed (%d)", ret);
+		goto error_client_unlock;
+	}
+
 	edgetpu_wakelock_lock(client->wakelock);
 	count = edgetpu_wakelock_acquire(client->wakelock);
 	if (count < 0) {

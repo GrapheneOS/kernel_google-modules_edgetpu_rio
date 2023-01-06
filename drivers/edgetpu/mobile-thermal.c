@@ -47,20 +47,20 @@ static int edgetpu_get_max_state(struct thermal_cooling_device *cdev, unsigned l
 static int edgetpu_set_cur_state(struct thermal_cooling_device *cdev, unsigned long state_original)
 {
 	int ret;
-	struct edgetpu_thermal *cooling = cdev->devdata;
-	struct device *dev = cooling->dev;
+	struct edgetpu_thermal *thermal = cdev->devdata;
+	struct device *dev = thermal->dev;
 	unsigned long pwr_state;
 
-	if (state_original >= cooling->tpu_num_states) {
+	if (state_original >= thermal->tpu_num_states) {
 		dev_err(dev, "%s: invalid cooling state %lu\n", __func__, state_original);
 		return -EINVAL;
 	}
 
-	state_original = max(cooling->sysfs_req, state_original);
+	state_original = max(thermal->sysfs_req, state_original);
 
-	mutex_lock(&cooling->lock);
+	edgetpu_thermal_lock(thermal);
 	pwr_state = state_pwr_map[state_original].state;
-	if (state_original == cooling->cooling_state) {
+	if (state_original == thermal->cooling_state) {
 		ret = -EALREADY;
 		goto out;
 	}
@@ -73,43 +73,43 @@ static int edgetpu_set_cur_state(struct thermal_cooling_device *cdev, unsigned l
 	if (pwr_state < TPU_ACTIVE_UUD) {
 		dev_warn_ratelimited(dev,
 				     "Setting lowest DVFS state, waiting for FW to shutdown TPU");
-		ret = edgetpu_thermal_kci_if_powered(cooling->etdev, TPU_ACTIVE_UUD);
+		ret = edgetpu_thermal_kci_if_powered(thermal->etdev, TPU_ACTIVE_UUD);
 	} else {
-		ret = edgetpu_thermal_kci_if_powered(cooling->etdev, pwr_state);
+		ret = edgetpu_thermal_kci_if_powered(thermal->etdev, pwr_state);
 	}
 
 	if (ret) {
 		dev_err(dev, "error setting tpu policy: %d\n", ret);
 		goto out;
 	}
-	cooling->cooling_state = state_original;
+	thermal->cooling_state = state_original;
 out:
-	mutex_unlock(&cooling->lock);
+	edgetpu_thermal_unlock(thermal);
 	return ret;
 }
 
 static int edgetpu_get_cur_state(struct thermal_cooling_device *cdev, unsigned long *state)
 {
 	int ret = 0;
-	struct edgetpu_thermal *cooling = cdev->devdata;
+	struct edgetpu_thermal *thermal = cdev->devdata;
 
-	*state = cooling->cooling_state;
-	if (*state < cooling->tpu_num_states)
+	*state = thermal->cooling_state;
+	if (*state < thermal->tpu_num_states)
 		return 0;
 
-	dev_warn(cooling->dev, "Unknown cooling state: %lu, resetting\n", *state);
-	mutex_lock(&cooling->lock);
+	dev_warn(thermal->dev, "Unknown cooling state: %lu, resetting\n", *state);
+	edgetpu_thermal_lock(thermal);
 
-	ret = edgetpu_thermal_kci_if_powered(cooling->etdev, TPU_ACTIVE_NOM);
+	ret = edgetpu_thermal_kci_if_powered(thermal->etdev, TPU_ACTIVE_NOM);
 	if (ret) {
-		dev_err(cooling->dev, "error setting tpu policy: %d\n", ret);
-		mutex_unlock(&cooling->lock);
+		dev_err(thermal->dev, "error setting tpu policy: %d\n", ret);
+		edgetpu_thermal_unlock(thermal);
 		return ret;
 	}
 
 	/* setting back to "no cooling" */
-	cooling->cooling_state = 0;
-	mutex_unlock(&cooling->lock);
+	thermal->cooling_state = 0;
+	edgetpu_thermal_unlock(thermal);
 
 	return 0;
 }
@@ -137,10 +137,10 @@ static int edgetpu_get_requested_power(struct thermal_cooling_device *cdev,
 				       u32 *power)
 {
 	unsigned long state_original;
-	struct edgetpu_thermal *cooling = cdev->devdata;
+	struct edgetpu_thermal *thermal = cdev->devdata;
 
-	state_original = edgetpu_soc_pm_get_rate(cooling->etdev, 0);
-	return edgetpu_state2power_internal(state_original, power, cooling);
+	state_original = edgetpu_soc_pm_get_rate(thermal->etdev, 0);
+	return edgetpu_state2power_internal(state_original, power, thermal);
 }
 
 static int edgetpu_state2power(struct thermal_cooling_device *cdev,
@@ -149,14 +149,14 @@ static int edgetpu_state2power(struct thermal_cooling_device *cdev,
 #endif
 			       unsigned long state, u32 *power)
 {
-	struct edgetpu_thermal *cooling = cdev->devdata;
+	struct edgetpu_thermal *thermal = cdev->devdata;
 
-	if (state >= cooling->tpu_num_states) {
-		dev_err(cooling->dev, "%s: invalid state: %lu\n", __func__, state);
+	if (state >= thermal->tpu_num_states) {
+		dev_err(thermal->dev, "%s: invalid state: %lu\n", __func__, state);
 		return -EINVAL;
 	}
 
-	return edgetpu_state2power_internal(state_pwr_map[state].state, power, cooling);
+	return edgetpu_state2power_internal(state_pwr_map[state].state, power, thermal);
 }
 
 static int edgetpu_power2state(struct thermal_cooling_device *cdev,
@@ -261,12 +261,12 @@ static ssize_t user_vote_show(struct device *dev, struct device_attribute *attr,
 {
 	struct thermal_cooling_device *cdev =
 		container_of(dev, struct thermal_cooling_device, device);
-	struct edgetpu_thermal *cooling = cdev->devdata;
+	struct edgetpu_thermal *thermal = cdev->devdata;
 
-	if (!cooling)
+	if (!thermal)
 		return -ENODEV;
 
-	return sysfs_emit(buf, "%lu\n", cooling->sysfs_req);
+	return sysfs_emit(buf, "%lu\n", thermal->sysfs_req);
 }
 
 static ssize_t user_vote_store(struct device *dev, struct device_attribute *attr, const char *buf,
@@ -274,22 +274,22 @@ static ssize_t user_vote_store(struct device *dev, struct device_attribute *attr
 {
 	struct thermal_cooling_device *cdev =
 		container_of(dev, struct thermal_cooling_device, device);
-	struct edgetpu_thermal *cooling = cdev->devdata;
+	struct edgetpu_thermal *thermal = cdev->devdata;
 	int ret;
 	unsigned long state;
 
-	if (!cooling)
+	if (!thermal)
 		return -ENODEV;
 
 	ret = kstrtoul(buf, 0, &state);
 	if (ret)
 		return ret;
 
-	if (state >= cooling->tpu_num_states)
+	if (state >= thermal->tpu_num_states)
 		return -EINVAL;
 
 	mutex_lock(&cdev->lock);
-	cooling->sysfs_req = state;
+	thermal->sysfs_req = state;
 	cdev->updated = false;
 	mutex_unlock(&cdev->lock);
 
@@ -377,19 +377,19 @@ int edgetpu_thermal_suspend(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct edgetpu_dev *etdev = platform_get_drvdata(pdev);
-	struct edgetpu_thermal *cooling = etdev->thermal;
+	struct edgetpu_thermal *thermal = etdev->thermal;
 	int ret = 0;
 
-	if (IS_ERR(cooling))
-		return PTR_ERR(cooling);
-	mutex_lock(&cooling->lock);
+	if (IS_ERR(thermal))
+		return PTR_ERR(thermal);
+	edgetpu_thermal_lock(thermal);
 	/*
 	 * Always set as suspended even when the FW cannot handle the KCI (it's dead for some
 	 * unknown reasons) because we still want to prevent the runtime from using TPU.
 	 */
-	cooling->thermal_suspended = true;
+	thermal->thermal_suspended = true;
 	ret = edgetpu_thermal_kci_if_powered(etdev, TPU_OFF);
-	mutex_unlock(&cooling->lock);
+	edgetpu_thermal_unlock(thermal);
 	return ret;
 }
 
@@ -397,24 +397,24 @@ int edgetpu_thermal_resume(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct edgetpu_dev *etdev = platform_get_drvdata(pdev);
-	struct edgetpu_thermal *cooling = etdev->thermal;
+	struct edgetpu_thermal *thermal = etdev->thermal;
 	int ret = 0;
 
-	if (IS_ERR(cooling))
-		return PTR_ERR(cooling);
-	mutex_lock(&cooling->lock);
+	if (IS_ERR(thermal))
+		return PTR_ERR(thermal);
+	edgetpu_thermal_lock(thermal);
 
-	if (cooling->cooling_state >= cooling->tpu_num_states)
-		cooling->cooling_state = 0;
+	if (thermal->cooling_state >= thermal->tpu_num_states)
+		thermal->cooling_state = 0;
 
-	ret = edgetpu_thermal_kci_if_powered(etdev, state_pwr_map[cooling->cooling_state].state);
+	ret = edgetpu_thermal_kci_if_powered(etdev, state_pwr_map[thermal->cooling_state].state);
 	/*
 	 * Unlike edgetpu_thermal_suspend(), only set the device is resumed if the FW handled the
 	 * KCI request.
 	 */
 	if (!ret)
-		cooling->thermal_suspended = false;
-	mutex_unlock(&cooling->lock);
+		thermal->thermal_suspended = false;
+	edgetpu_thermal_unlock(thermal);
 	return ret;
 }
 

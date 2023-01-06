@@ -19,7 +19,7 @@
 #define ADDR_MASK ~(BIT(ADDR_SHIFT) - 1u)
 
 /* used by ns_iommu_mappings */
-#define CONFIG_TO_MBSIZE(a) (((a)&NS_SIZE_MASK) << 20)
+#define CONFIG_TO_MBSIZE(a) (((a) & NS_SIZE_MASK) << 20)
 
 /* used by iommu_mappings */
 static inline __u32 config_to_size(__u32 cfg)

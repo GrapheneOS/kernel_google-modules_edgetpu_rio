@@ -25,9 +25,10 @@ static int gcip_vmalloc_to_pages(void *mem, size_t count, struct page **pages)
 	size_t i = 0;
 
 	while (count--) {
-		pages[i++] = vmalloc_to_page(mem);
-		if (!pages[i - 1])
+		pages[i] = vmalloc_to_page(mem);
+		if (!pages[i])
 			return -ENOMEM;
+		i++;
 		mem += PAGE_SIZE;
 	}
 	return 0;
