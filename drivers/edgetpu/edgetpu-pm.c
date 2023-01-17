@@ -71,7 +71,7 @@ void edgetpu_pm_unlock(struct edgetpu_pm *etpm)
 	mutex_unlock(&etpm->p->lock);
 }
 
-bool edgetpu_pm_get_if_powered(struct edgetpu_pm *etpm)
+bool edgetpu_pm_get_if_powered(struct edgetpu_pm *etpm, bool trylock)
 {
 	bool ret;
 
@@ -80,12 +80,21 @@ bool edgetpu_pm_get_if_powered(struct edgetpu_pm *etpm)
 	/* fast fail without holding the lock */
 	if (!etpm->p->power_up_count)
 		return false;
-	mutex_lock(&etpm->p->lock);
+
+	if (trylock) {
+		if (!mutex_trylock(&etpm->p->lock))
+			return false;
+	} else {
+		mutex_lock(&etpm->p->lock);
+	}
+
 	if (etpm->p->power_up_count)
 		ret = !edgetpu_pm_get_locked(etpm);
 	else
 		ret = false;
+
 	mutex_unlock(&etpm->p->lock);
+
 	return ret;
 }
 

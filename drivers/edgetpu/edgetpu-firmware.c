@@ -177,11 +177,9 @@ static int edgetpu_firmware_handshake(struct edgetpu_firmware *et_fw)
 	if (ret)
 		etdev_warn(etdev, "telemetry KCI error: %d", ret);
 
-	if (!IS_ERR(etdev->thermal) && etdev->thermal->cooling_state) {
-		ret = edgetpu_thermal_resume(etdev->dev);
-		if (ret)
-			etdev_warn(etdev, "Thermal resume error: %d", ret);
-	}
+	ret = edgetpu_thermal_restore(etdev);
+	if (ret)
+		etdev_warn(etdev, "thermal restore error: %d", ret);
 
 	/* Set debug dump buffer in FW */
 	edgetpu_get_debug_dump(etdev, 0);

@@ -938,7 +938,7 @@ static int edgetpu_mailbox_external_alloc_enable(struct edgetpu_client *client,
 	group = edgetpu_device_group_get(client->group);
 	mutex_unlock(&client->group_lock);
 
-	if (edgetpu_pm_get_if_powered(group->etdev->pm)) {
+	if (edgetpu_pm_get_if_powered(group->etdev->pm, false)) {
 		mutex_lock(&group->lock);
 		ret = edgetpu_mailbox_external_alloc(group, req);
 		if (ret) {
@@ -975,7 +975,7 @@ static int edgetpu_mailbox_external_disable_free(struct edgetpu_client *client)
 	group = edgetpu_device_group_get(client->group);
 	mutex_unlock(&client->group_lock);
 
-	if (edgetpu_pm_get_if_powered(group->etdev->pm)) {
+	if (edgetpu_pm_get_if_powered(group->etdev->pm, false)) {
 		mutex_lock(&group->lock);
 		edgetpu_mailbox_external_disable_free_locked(group);
 		mutex_unlock(&group->lock);

@@ -59,9 +59,9 @@ void edgetpu_pm_unlock(struct edgetpu_pm *etpm);
  * Caller calls edgetpu_pm_put() to decrease power_up_count if this function
  * returned true, otherwise put() shouldn't be called.
  *
- * Return false if device is not powered, true otherwise.
+ * Return false if device is not powered or trylock fails, true otherwise.
  */
-bool edgetpu_pm_get_if_powered(struct edgetpu_pm *etpm);
+bool edgetpu_pm_get_if_powered(struct edgetpu_pm *etpm, bool trylock);
 /*
  * Increase power_up_count for active state, power up the device if previous
  * power_up_count was zero.

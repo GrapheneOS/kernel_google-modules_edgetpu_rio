@@ -314,7 +314,7 @@ long edgetpu_soc_pm_get_rate(struct edgetpu_dev *etdev, int flags)
 		return -EINVAL;
 
 	/* We need to keep TPU being powered to ensure CMU read is valid. */
-	if (!edgetpu_pm_get_if_powered(etdev->pm))
+	if (!edgetpu_pm_get_if_powered(etdev->pm, false))
 		return 0;
 	pll_con3 = readl(cmu_base + PLL_CON3_OFFSET);
 	edgetpu_pm_put(etdev->pm);

@@ -18,7 +18,7 @@
 
 /* Used before accessing the list headed by mgr->fence_list_head. */
 #define GCIP_DMA_FENCE_LIST_LOCK(mgr, flags) spin_lock_irqsave(&mgr->fence_list_lock, flags)
-#define GCIP_DMA_FENCE_LIST_UNLOCK(mgr, flags) spin_lock_irqrestore(&mgr->fence_list_lock, flags)
+#define GCIP_DMA_FENCE_LIST_UNLOCK(mgr, flags) spin_unlock_irqrestore(&mgr->fence_list_lock, flags)
 
 /*
  * A macro to loop through all fences under a gcip_dma_fence_manager.
@@ -29,6 +29,8 @@
  */
 #define gcip_for_each_fence(mgr, gfence)                                                           \
 	list_for_each_entry(gfence, &mgr->fence_list_head, fence_list)
+
+#define to_gcip_fence(fence) container_of(fence, struct gcip_dma_fence, fence)
 
 struct gcip_dma_fence_manager {
 	/* The list of all fence objects for debugging. */
@@ -57,7 +59,9 @@ struct gcip_dma_fence_data {
 	 * the gcip_dma_fence_init() call.
 	 */
 	char *timeline_name;
-	/* The DMA fence operators to initialize the fence with. */
+	/*
+	 * The DMA fence operators to initialize the fence with.
+	 */
 	const struct dma_fence_ops *ops;
 	/* The sequence number to initialize the fence with. */
 	u32 seqno;
@@ -95,6 +99,20 @@ bool gcip_dma_fence_always_true(struct dma_fence *fence);
 
 /* End of helpers for setting dma_fence_ops. */
 
+/*
+ * This function does
+ *  1. Initialize the DMA fence object
+ *  2. Call after_init() if present
+ *  3. Install an FD associates to the created DMA fence
+ *
+ * This function never fails on step 1, so this function returns an error only if after_init() fails
+ * (step 2) or FD allocation fails (step 3).
+ * In either failure case, @ops->release is always called. Therefore @ops->release may need to
+ * distinguish whether after_init() succeeded.
+ *
+ * It's always safe to call gcip_dma_fence_exit() in @ops->release because that function reverts
+ * step 1.
+ */
 int gcip_dma_fence_init(struct gcip_dma_fence_manager *mgr, struct gcip_dma_fence *gfence,
 			struct gcip_dma_fence_data *data);
 

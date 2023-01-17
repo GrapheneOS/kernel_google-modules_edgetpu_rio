@@ -130,11 +130,7 @@ static int edgetpu_state2power_internal(unsigned long state, u32 *power,
 	return -EINVAL;
 }
 
-static int edgetpu_get_requested_power(struct thermal_cooling_device *cdev,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
-				       struct thermal_zone_device *tz,
-#endif
-				       u32 *power)
+static int edgetpu_get_requested_power(struct thermal_cooling_device *cdev, u32 *power)
 {
 	unsigned long state_original;
 	struct edgetpu_thermal *thermal = cdev->devdata;
@@ -143,11 +139,7 @@ static int edgetpu_get_requested_power(struct thermal_cooling_device *cdev,
 	return edgetpu_state2power_internal(state_original, power, thermal);
 }
 
-static int edgetpu_state2power(struct thermal_cooling_device *cdev,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
-			       struct thermal_zone_device *tz,
-#endif
-			       unsigned long state, u32 *power)
+static int edgetpu_state2power(struct thermal_cooling_device *cdev, unsigned long state, u32 *power)
 {
 	struct edgetpu_thermal *thermal = cdev->devdata;
 
@@ -159,11 +151,7 @@ static int edgetpu_state2power(struct thermal_cooling_device *cdev,
 	return edgetpu_state2power_internal(state_pwr_map[state].state, power, thermal);
 }
 
-static int edgetpu_power2state(struct thermal_cooling_device *cdev,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
-			       struct thermal_zone_device *tz,
-#endif
-			       u32 power, unsigned long *state)
+static int edgetpu_power2state(struct thermal_cooling_device *cdev, u32 power, unsigned long *state)
 {
 	int i, penultimate_throttle_state;
 	struct edgetpu_thermal *thermal = cdev->devdata;
@@ -418,21 +406,52 @@ int edgetpu_thermal_resume(struct device *dev)
 	return ret;
 }
 
+static int edgetpu_thermal_kci(struct edgetpu_dev *etdev, u32 state)
+{
+	int ret;
+
+	edgetpu_kci_block_bus_speed_control(etdev, true);
+
+	ret = edgetpu_kci_notify_throttling(etdev, state);
+	if (ret)
+		etdev_err_ratelimited(etdev, "Failed to notify FW about power state %u, error:%d",
+				      state, ret);
+
+	edgetpu_kci_block_bus_speed_control(etdev, false);
+
+	return ret;
+}
+
 int edgetpu_thermal_kci_if_powered(struct edgetpu_dev *etdev, u32 state)
 {
-	int ret = -EAGAIN;
+	int ret;
 
-	if (edgetpu_pm_get_if_powered(etdev->pm)) {
-		edgetpu_kci_block_bus_speed_control(etdev, true);
+	/* Use trylock since this function might be called during power up. */
+	if (!edgetpu_pm_get_if_powered(etdev->pm, true))
+		return -EAGAIN;
 
-		ret = edgetpu_kci_notify_throttling(etdev, state);
-		if (ret)
-			etdev_err_ratelimited(etdev,
-					      "Failed to notify FW about power state %u, error:%d",
-					      state, ret);
+	ret = edgetpu_thermal_kci(etdev, state);
+	edgetpu_pm_put(etdev->pm);
 
-		edgetpu_kci_block_bus_speed_control(etdev, false);
-		edgetpu_pm_put(etdev->pm);
-	}
+	return ret;
+}
+
+int edgetpu_thermal_restore(struct edgetpu_dev *etdev)
+{
+	struct edgetpu_thermal *thermal = etdev->thermal;
+	int ret = 0;
+
+	if (IS_ERR_OR_NULL(thermal))
+		return 0;
+
+	edgetpu_thermal_lock(thermal);
+
+	if (edgetpu_thermal_is_suspended(thermal))
+		ret = edgetpu_thermal_kci(etdev, TPU_OFF);
+	else if (thermal->cooling_state)
+		ret = edgetpu_thermal_kci(etdev, state_pwr_map[thermal->cooling_state].state);
+
+	edgetpu_thermal_unlock(thermal);
+
 	return ret;
 }

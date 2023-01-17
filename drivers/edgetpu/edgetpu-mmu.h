@@ -16,12 +16,6 @@
 #include "edgetpu-internal.h"
 #include "edgetpu.h"
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 2, 0)
-#ifndef IOMMU_PASID_INVALID
-#define IOMMU_PASID_INVALID	(-1U)
-#endif
-#endif
-
 /* flags for MMU operations */
 
 /* Whether the TPU address to be allocated can be 64-bit wide. */

@@ -488,6 +488,8 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 		etdev_warn(etdev, "debug dump init fail: %d", ret);
 
 	edgetpu_chip_init(etdev);
+	/* No limit on DMA segment size */
+	dma_set_max_seg_size(etdev->dev, UINT_MAX);
 	return 0;
 
 remove_usage_stats:

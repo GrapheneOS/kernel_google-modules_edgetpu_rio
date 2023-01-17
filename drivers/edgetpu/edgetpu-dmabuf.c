@@ -521,13 +521,6 @@ static const struct dma_fence_ops edgetpu_dma_fence_ops = {
 	.release = edgetpu_dma_fence_release,
 };
 
-/* the data type of fence->seqno is u64 in 5.1 */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 1, 0)
-#define SEQ_FMT "%u"
-#else
-#define SEQ_FMT "%llu"
-#endif
-
 int edgetpu_sync_fence_create(struct edgetpu_device_group *group,
 			      struct edgetpu_create_sync_fence_data *datap)
 {
@@ -598,10 +591,8 @@ static int _edgetpu_sync_fence_signal(struct dma_fence *fence, int errno, bool i
 		ret = ignore_signaled ? 0 : -EINVAL;
 		goto out_unlock;
 	}
-	pr_debug("%s: %s-%s%llu-" SEQ_FMT " errno=%d\n", __func__,
-		 fence->ops->get_driver_name(fence),
-		 fence->ops->get_timeline_name(fence), fence->context,
-		 fence->seqno, errno);
+	pr_debug("%s: %s-%s%llu-%llu errno=%d\n", __func__, fence->ops->get_driver_name(fence),
+		 fence->ops->get_timeline_name(fence), fence->context, fence->seqno, errno);
 	if (errno)
 		dma_fence_set_error(fence, errno);
 	ret = dma_fence_signal_locked(fence);
@@ -646,10 +637,10 @@ void edgetpu_sync_fence_group_shutdown(struct edgetpu_device_group *group)
 
 		ret = _edgetpu_sync_fence_signal(fence, -EPIPE, true);
 		if (ret)
-			etdev_warn(group->etdev, "error %d signaling fence %s-%s %llu-" SEQ_FMT,
-				   ret, fence->ops->get_driver_name(fence),
-				   fence->ops->get_timeline_name(fence),
-				   fence->context, fence->seqno);
+			etdev_warn(group->etdev, "error %d signaling fence %s-%s %llu-%llu", ret,
+				   fence->ops->get_driver_name(fence),
+				   fence->ops->get_timeline_name(fence), fence->context,
+				   fence->seqno);
 	}
 }
 
@@ -689,10 +680,8 @@ int edgetpu_sync_fence_debugfs_show(struct seq_file *s, void *unused)
 		struct dma_fence *fence = &etfence->fence;
 
 		spin_lock_irq(&etfence->lock);
-		seq_printf(s, "%s-%s %llu-" SEQ_FMT " %s",
-			   fence->ops->get_driver_name(fence),
-			   fence->ops->get_timeline_name(fence),
-			   fence->context, fence->seqno,
+		seq_printf(s, "%s-%s %llu-%llu %s", fence->ops->get_driver_name(fence),
+			   fence->ops->get_timeline_name(fence), fence->context, fence->seqno,
 			   sync_status_str(dma_fence_get_status_locked(fence)));
 
 		if (test_bit(DMA_FENCE_FLAG_TIMESTAMP_BIT, &fence->flags)) {

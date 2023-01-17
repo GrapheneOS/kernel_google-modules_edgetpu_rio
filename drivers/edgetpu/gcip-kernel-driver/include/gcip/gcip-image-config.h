@@ -8,6 +8,8 @@
 #ifndef __GCIP_IMAGE_CONFIG_H__
 #define __GCIP_IMAGE_CONFIG_H__
 
+#include <asm/page.h>
+#include <linux/bits.h>
 #include <linux/types.h>
 
 #define GCIP_FW_NUM_VERSIONS 4
@@ -79,6 +81,39 @@ struct gcip_image_config_parser {
 	/* The last image config being successfully parsed. */
 	struct gcip_image_config last_config;
 };
+
+#define GCIP_IMG_CFG_ADDR_SHIFT 12
+#define GCIP_IMG_CFG_MB_SHIFT 20
+#define GCIP_IMG_CFG_SIZE_MODE_BIT BIT(GCIP_IMG_CFG_ADDR_SHIFT - 1)
+#define GCIP_IMG_CFG_SECURE_SIZE_MASK (GCIP_IMG_CFG_SIZE_MODE_BIT - 1u)
+#define GCIP_IMG_CFG_NS_SIZE_MASK (GCIP_IMG_CFG_SIZE_MODE_BIT - 1u)
+#define GCIP_IMG_CFG_ADDR_MASK ~(BIT(GCIP_IMG_CFG_ADDR_SHIFT) - 1u)
+
+/* For decoding the size of ns_iommu_mappings. */
+static inline u32 gcip_ns_config_to_size(u32 cfg)
+{
+	u32 size;
+
+	if (cfg & GCIP_IMG_CFG_SIZE_MODE_BIT)
+		size = (cfg & GCIP_IMG_CFG_NS_SIZE_MASK) << PAGE_SHIFT;
+	else
+		size = (cfg & GCIP_IMG_CFG_NS_SIZE_MASK) << GCIP_IMG_CFG_MB_SHIFT;
+
+	return size;
+}
+
+/* For decoding the size of iommu_mappings. */
+static inline u32 gcip_config_to_size(u32 cfg)
+{
+	u32 page_size;
+
+	if (cfg & GCIP_IMG_CFG_SIZE_MODE_BIT)
+		page_size = cfg & GCIP_IMG_CFG_SECURE_SIZE_MASK;
+	else
+		page_size = BIT(cfg & GCIP_IMG_CFG_SECURE_SIZE_MASK);
+
+	return page_size << PAGE_SHIFT;
+}
 
 /*
  * Initializes the image configuration parser.

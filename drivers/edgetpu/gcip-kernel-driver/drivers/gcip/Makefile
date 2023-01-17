@@ -6,8 +6,14 @@
 CONFIG_GCIP		?= m
 obj-$(CONFIG_GCIP)	+= gcip.o
 
-gcip-objs		:= gcip-alloc-helper.o gcip-domain-pool.o gcip-firmware.o \
-			   gcip-image-config.o gcip-kci.o gcip-mailbox.o gcip-mem-pool.o \
+gcip-objs		:= gcip-alloc-helper.o \
+			   gcip-dma-fence.o \
+			   gcip-domain-pool.o \
+			   gcip-firmware.o \
+			   gcip-image-config.o \
+			   gcip-kci.o \
+			   gcip-mailbox.o \
+			   gcip-mem-pool.o \
 			   gcip-telemetry.o
 
 CURRENT_DIR=$(dir $(abspath $(lastword $(MAKEFILE_LIST))))

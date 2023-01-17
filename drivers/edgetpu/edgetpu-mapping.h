@@ -9,6 +9,7 @@
 
 #include <linux/device.h>
 #include <linux/dma-direction.h>
+#include <linux/dma-map-ops.h>
 #include <linux/iommu.h>
 #include <linux/mutex.h>
 #include <linux/rbtree.h>
@@ -16,9 +17,6 @@
 #include <linux/seq_file.h>
 #include <linux/types.h>
 #include <linux/version.h>
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
-#include <linux/dma-map-ops.h>
-#endif
 
 #include "edgetpu-internal.h"
 #include "edgetpu-mmu.h"
