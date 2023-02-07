@@ -92,27 +92,19 @@ struct gcip_image_config_parser {
 /* For decoding the size of ns_iommu_mappings. */
 static inline u32 gcip_ns_config_to_size(u32 cfg)
 {
-	u32 size;
-
 	if (cfg & GCIP_IMG_CFG_SIZE_MODE_BIT)
-		size = (cfg & GCIP_IMG_CFG_NS_SIZE_MASK) << PAGE_SHIFT;
-	else
-		size = (cfg & GCIP_IMG_CFG_NS_SIZE_MASK) << GCIP_IMG_CFG_MB_SHIFT;
+		return (cfg & GCIP_IMG_CFG_NS_SIZE_MASK) << PAGE_SHIFT;
 
-	return size;
+	return (cfg & GCIP_IMG_CFG_NS_SIZE_MASK) << GCIP_IMG_CFG_MB_SHIFT;
 }
 
 /* For decoding the size of iommu_mappings. */
 static inline u32 gcip_config_to_size(u32 cfg)
 {
-	u32 page_size;
-
 	if (cfg & GCIP_IMG_CFG_SIZE_MODE_BIT)
-		page_size = cfg & GCIP_IMG_CFG_SECURE_SIZE_MASK;
-	else
-		page_size = BIT(cfg & GCIP_IMG_CFG_SECURE_SIZE_MASK);
+		return (cfg & GCIP_IMG_CFG_SECURE_SIZE_MASK) << PAGE_SHIFT;
 
-	return page_size << PAGE_SHIFT;
+	return BIT(cfg & GCIP_IMG_CFG_SECURE_SIZE_MASK) << PAGE_SHIFT;
 }
 
 /*

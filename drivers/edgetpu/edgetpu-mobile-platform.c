@@ -56,7 +56,7 @@ static int edgetpu_platform_setup_fw_region(struct edgetpu_mobile_platform_dev *
 	struct resource r;
 	struct device_node *np;
 	int err;
-	size_t region_map_size = EDGETPU_DEFAULT_FW_SIZE_MAX + EDGETPU_DEFAULT_REMAPPED_DATA_SIZE;
+	size_t region_map_size = EDGETPU_MAX_FW_LIMIT;
 
 	np = of_parse_phandle(dev->of_node, "memory-region", 0);
 	if (!np) {
@@ -93,7 +93,7 @@ static int edgetpu_platform_setup_fw_region(struct edgetpu_mobile_platform_dev *
 	}
 
 	etmdev->fw_region_paddr = r.start;
-	etmdev->fw_region_size = EDGETPU_DEFAULT_FW_SIZE_MAX;
+	etmdev->fw_region_size = EDGETPU_DEFAULT_FW_LIMIT;
 
 	etmdev->remapped_data_addr = EDGETPU_INSTRUCTION_REMAP_BASE + etmdev->fw_region_size;
 	etmdev->remapped_data_size = EDGETPU_DEFAULT_REMAPPED_DATA_SIZE;

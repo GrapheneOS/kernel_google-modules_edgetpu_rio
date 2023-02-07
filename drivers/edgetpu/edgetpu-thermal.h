@@ -27,6 +27,7 @@ struct edgetpu_thermal {
 	unsigned int tpu_num_states;
 	struct edgetpu_dev *etdev;
 	bool thermal_suspended; /* TPU thermal suspended state */
+	bool enabled;
 };
 
 struct edgetpu_state_pwr {

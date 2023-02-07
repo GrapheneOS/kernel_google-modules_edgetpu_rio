@@ -636,6 +636,21 @@ int edgetpu_kci_block_bus_speed_control(struct edgetpu_dev *etdev, bool block)
 	return gcip_kci_send_cmd(etdev->etkci->kci, &cmd);
 }
 
+int edgetpu_kci_thermal_control(struct edgetpu_dev *etdev, bool enable)
+{
+	struct gcip_kci_command_element cmd = {
+		.code = GCIP_KCI_CODE_THERMAL_CONTROL,
+		.dma = {
+			.flags = (u32)enable,
+		},
+	};
+
+	if (!etdev->etkci)
+		return -ENODEV;
+
+	return gcip_kci_send_cmd(etdev->etkci->kci, &cmd);
+}
+
 int edgetpu_kci_resp_rkci_ack(struct edgetpu_dev *etdev, struct gcip_kci_response_element *rkci_cmd)
 {
 	struct gcip_kci_command_element cmd = {

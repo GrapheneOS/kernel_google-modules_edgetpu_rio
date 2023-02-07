@@ -197,6 +197,14 @@ int edgetpu_kci_notify_throttling(struct edgetpu_dev *etdev, u32 level);
 int edgetpu_kci_block_bus_speed_control(struct edgetpu_dev *etdev, bool block);
 
 /*
+ * Request the firmware to enable or disable the thermal throttling.
+ *
+ * Returns KCI response code on success or < 0 on error (typically -ETIMEDOUT).
+ */
+
+int edgetpu_kci_thermal_control(struct edgetpu_dev *etdev, bool enable);
+
+/*
  * Send an ack to the FW after handling a reverse KCI request.
  *
  * The FW may wait for a response from the kernel for an RKCI request so a

@@ -292,6 +292,70 @@ static ssize_t user_vote_store(struct device *dev, struct device_attribute *attr
 
 static DEVICE_ATTR_RW(user_vote);
 
+static int edgetpu_thermal_control_kci(struct edgetpu_dev *etdev, bool enable)
+{
+	int ret;
+
+	ret = edgetpu_kci_thermal_control(etdev, enable);
+	if (ret)
+		etdev_err_ratelimited(etdev, "Failed to %s the thermal, error:%d",
+				      enable ? "enable" : "disable", ret);
+
+	return ret;
+}
+
+static int edgetpu_thermal_control_kci_if_powered(struct edgetpu_dev *etdev, bool enable)
+{
+	int ret;
+
+	/* Use trylock since this function might be called during power up. */
+	if (!edgetpu_pm_get_if_powered(etdev->pm, true))
+		return -EAGAIN;
+
+	ret = edgetpu_thermal_control_kci(etdev, enable);
+
+	edgetpu_pm_put(etdev->pm);
+
+	return ret;
+}
+
+static int thermal_enable_get(void *data, u64 *val)
+{
+	struct edgetpu_thermal *thermal = (struct edgetpu_thermal *)data;
+
+	edgetpu_thermal_lock(thermal);
+	*val = thermal->enabled;
+	edgetpu_thermal_unlock(thermal);
+
+	return 0;
+}
+
+static int thermal_enable_set(void *data, u64 val)
+{
+	struct edgetpu_thermal *thermal = (struct edgetpu_thermal *)data;
+	int ret = 0;
+
+	edgetpu_thermal_lock(thermal);
+
+	if (thermal->enabled != (bool)val) {
+		ret = edgetpu_thermal_control_kci_if_powered(thermal->etdev, val);
+		/*
+		 * -EAGAIN means the fw is not powered and the value will be restored by
+		 * edgetpu_thermal_restore in next fw boot.
+		 */
+		if (!ret || ret == -EAGAIN) {
+			ret = 0;
+			thermal->enabled = val;
+		}
+	}
+
+	edgetpu_thermal_unlock(thermal);
+
+	return ret;
+}
+
+DEFINE_DEBUGFS_ATTRIBUTE(fops_thermal_enable, thermal_enable_get, thermal_enable_set, "%llu\n");
+
 static int tpu_thermal_cooling_register(struct edgetpu_thermal *thermal, char *type)
 {
 	struct device_node *cooling_node = NULL;
@@ -324,11 +388,18 @@ static int tpu_thermal_init(struct edgetpu_thermal *thermal, struct device *dev)
 	struct dentry *d;
 
 	thermal->dev = dev;
+	thermal->enabled = true;
+
 	d = debugfs_create_dir("cooling", edgetpu_fs_debugfs_dir());
 	/* don't let debugfs creation failure abort the init procedure */
-	if (IS_ERR_OR_NULL(d))
+	if (IS_ERR_OR_NULL(d)) {
 		dev_warn(dev, "failed to create debug fs for cooling");
-	thermal->cooling_root = d;
+		thermal->cooling_root = NULL;
+	} else {
+		thermal->cooling_root = d;
+		debugfs_create_file("enable", 0660, thermal->cooling_root, thermal,
+				    &fops_thermal_enable);
+	}
 
 	err = tpu_thermal_cooling_register(thermal, EDGETPU_COOLING_NAME);
 	if (err) {
@@ -446,7 +517,9 @@ int edgetpu_thermal_restore(struct edgetpu_dev *etdev)
 
 	edgetpu_thermal_lock(thermal);
 
-	if (edgetpu_thermal_is_suspended(thermal))
+	if (!thermal->enabled)
+		ret = edgetpu_thermal_control_kci(etdev, thermal->enabled);
+	else if (edgetpu_thermal_is_suspended(thermal))
 		ret = edgetpu_thermal_kci(etdev, TPU_OFF);
 	else if (thermal->cooling_state)
 		ret = edgetpu_thermal_kci(etdev, state_pwr_map[thermal->cooling_state].state);

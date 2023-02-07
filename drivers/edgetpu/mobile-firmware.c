@@ -99,11 +99,9 @@ static int mobile_firmware_alloc_buffer(
 		struct edgetpu_firmware_buffer *fw_buf)
 {
 	struct edgetpu_dev *etdev = et_fw->etdev;
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 
 	/* Allocate extra space the image header */
-	size_t buffer_size =
-		etmdev->fw_region_size + MOBILE_FW_HEADER_SIZE;
+	size_t buffer_size = EDGETPU_MAX_FW_LIMIT + MOBILE_FW_HEADER_SIZE;
 
 	fw_buf->vaddr = vmalloc(buffer_size);
 	if (!fw_buf->vaddr) {
@@ -351,7 +349,7 @@ static int mobile_firmware_setup_buffer(struct edgetpu_firmware *et_fw,
 	etmdev->fw_region_size =
 		image_config->remapped_data_start ?
 			image_config->remapped_data_start - image_config->firmware_base :
-			EDGETPU_DEFAULT_FW_SIZE_MAX;
+			EDGETPU_DEFAULT_FW_LIMIT;
 
 	image_vaddr = memremap(etmdev->fw_region_paddr, etmdev->fw_region_size, MEMREMAP_WC);
 	if (!image_vaddr) {

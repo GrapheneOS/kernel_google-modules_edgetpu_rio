@@ -354,9 +354,8 @@ static int mobile_pm_after_create(struct edgetpu_pm *etpm)
 
 	ret = pm_runtime_get_sync(dev);
 	if (ret) {
-		pm_runtime_put_noidle(dev);
 		dev_err(dev, "pm_runtime_get_sync returned %d\n", ret);
-		return ret;
+		goto err_pm_runtime_put;
 	}
 
 	mutex_init(&platform_pwr->policy_lock);
@@ -374,7 +373,21 @@ static int mobile_pm_after_create(struct edgetpu_pm *etpm)
 		debugfs_create_file("policy", 0660, platform_pwr->debugfs_dir, etdev,
 				    &fops_tpu_pwr_policy);
 	}
-	return edgetpu_soc_pm_init(etdev);
+
+	ret = edgetpu_soc_pm_init(etdev);
+	if (ret)
+		goto err_debugfs_remove;
+
+	return 0;
+
+err_debugfs_remove:
+	debugfs_remove_recursive(platform_pwr->debugfs_dir);
+
+err_pm_runtime_put:
+	pm_runtime_put_noidle(dev);
+	pm_runtime_disable(dev);
+
+	return ret;
 }
 
 static void mobile_pm_before_destroy(struct edgetpu_pm *etpm)

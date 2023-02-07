@@ -17,8 +17,9 @@
 #define GCIP_FENCE_TIMELINE_NAME_LEN 128
 
 /* Used before accessing the list headed by mgr->fence_list_head. */
-#define GCIP_DMA_FENCE_LIST_LOCK(mgr, flags) spin_lock_irqsave(&mgr->fence_list_lock, flags)
-#define GCIP_DMA_FENCE_LIST_UNLOCK(mgr, flags) spin_unlock_irqrestore(&mgr->fence_list_lock, flags)
+#define GCIP_DMA_FENCE_LIST_LOCK(mgr, flags) spin_lock_irqsave(&(mgr)->fence_list_lock, flags)
+#define GCIP_DMA_FENCE_LIST_UNLOCK(mgr, flags)                                                     \
+	spin_unlock_irqrestore(&(mgr)->fence_list_lock, flags)
 
 /*
  * A macro to loop through all fences under a gcip_dma_fence_manager.
@@ -28,7 +29,7 @@
  * This macro must be wrapped by GCIP_DMA_FENCE_LIST_(UN)LOCK.
  */
 #define gcip_for_each_fence(mgr, gfence)                                                           \
-	list_for_each_entry(gfence, &mgr->fence_list_head, fence_list)
+	list_for_each_entry(gfence, &(mgr)->fence_list_head, fence_list)
 
 #define to_gcip_fence(fence) container_of(fence, struct gcip_dma_fence, fence)
 

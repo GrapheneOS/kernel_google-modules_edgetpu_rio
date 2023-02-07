@@ -7,6 +7,7 @@
 
 #include <asm/page.h>
 #include <linux/device.h>
+#include <linux/gfp.h>
 #include <linux/mm_types.h>
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
@@ -47,7 +48,10 @@ struct sg_table *gcip_alloc_noncontiguous(struct device *dev, size_t size, gfp_t
 
 	size = PAGE_ALIGN(size);
 	count = size >> PAGE_SHIFT;
-	mem = vzalloc_node(size, dev_to_node(dev));
+	if (gfp & __GFP_ZERO)
+		mem = vzalloc(size);
+	else
+		mem = vmalloc(size);
 	if (!mem) {
 		dev_err(dev, "GCIP noncontiguous alloc size=%#zx failed", size);
 		goto err_free_sh;
