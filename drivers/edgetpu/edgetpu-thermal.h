@@ -27,6 +27,7 @@ struct edgetpu_thermal {
 	unsigned int tpu_num_states;
 	struct edgetpu_dev *etdev;
 	bool thermal_suspended; /* TPU thermal suspended state */
+	unsigned long thermal_vote[2]; /* Thermal vote array, idx0: Tskin; idx1: BCL */
 	bool enabled;
 };
 
@@ -72,6 +73,22 @@ int edgetpu_thermal_kci_if_powered(struct edgetpu_dev *etdev, u32 state);
  * Returns 0 if no thermal throttling required; otherwise the return value of KCI.
  */
 int edgetpu_thermal_restore(struct edgetpu_dev *etdev);
+
+/*
+ * Callback for BCL vote for throttling
+ *
+ * This goes through the same path as regular Tskin throttling
+ *
+ * Returns 0 if successful, otherwise negative error.
+ */
+int edgetpu_set_cur_state_bcl(struct thermal_cooling_device *cdev, unsigned long state_original);
+
+/*
+ * API to map frequency to cooling state
+ *
+ * Returns state if successful. On an invalid input it returns lowest state.
+ */
+int edgetpu_state_to_cooling(struct edgetpu_dev *etdev, unsigned long state);
 
 /*
  * Holds thermal->lock.

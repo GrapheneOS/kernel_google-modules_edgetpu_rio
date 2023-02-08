@@ -25,6 +25,7 @@
 #include <linux/irqreturn.h>
 #include <linux/mm_types.h>
 #include <linux/mutex.h>
+#include <linux/notifier.h>
 #include <linux/refcount.h>
 #include <linux/scatterlist.h>
 #include <linux/types.h>
@@ -221,6 +222,7 @@ struct edgetpu_dev {
 	struct work_struct debug_dump_work;
 
 	struct mutex freq_lock;	/* protects below freq_* variables */
+	struct notifier_block pmqos_nb;	/* PMQoS notifier struct */
 	uint32_t *freq_table;	/* Array to record reported frequencies by f/w */
 	uint32_t freq_count;	/* Number of entries in freq_table */
 };

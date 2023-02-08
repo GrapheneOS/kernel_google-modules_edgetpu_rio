@@ -7,7 +7,9 @@
 
 #include <linux/delay.h>
 #include <linux/iopoll.h>
+#include <linux/notifier.h>
 #include <soc/google/bcl.h>
+#include <soc/google/exynos_pm_qos.h>
 
 #include "edgetpu-config.h"
 #include "edgetpu-internal.h"
@@ -142,6 +144,22 @@ static int rio_lpm_up(struct edgetpu_dev *etdev)
 	return 0;
 }
 
+static int rio_pmqos_notifier(struct notifier_block *nb, unsigned long state_freq,
+			      void *nb_data)
+{
+	struct edgetpu_dev *etdev;
+	int state_cooling;
+	int ret;
+
+	etdev = container_of(nb, struct edgetpu_dev, pmqos_nb);
+	state_cooling = edgetpu_state_to_cooling(etdev, state_freq);
+	etdev_dbg(etdev, "pmqos req original: %ld, cooling: %d\n", state_freq, state_cooling);
+	ret = edgetpu_set_cur_state_bcl(etdev->thermal->cdev, state_cooling);
+	if (ret)
+		etdev_err_ratelimited(etdev, "Error in BCL throttling %d\n", ret);
+	return NOTIFY_OK;
+}
+
 static bool rio_is_block_down(struct edgetpu_dev *etdev)
 {
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
@@ -162,8 +180,6 @@ static bool rio_is_block_down(struct edgetpu_dev *etdev)
 
 static void rio_post_fw_start(struct edgetpu_dev *etdev)
 {
-	if (!etdev->soc_data->bcl_dev)
-		etdev->soc_data->bcl_dev = google_retrieve_bcl_handle();
 	if (etdev->soc_data->bcl_dev)
 		google_init_tpu_ratio(etdev->soc_data->bcl_dev);
 }
@@ -178,6 +194,12 @@ int edgetpu_chip_pm_create(struct edgetpu_dev *etdev)
 	if (etmdev->pmu_status)
 		platform_pwr->is_block_down = rio_is_block_down;
 	platform_pwr->post_fw_start = rio_post_fw_start;
+
+	etdev->soc_data->bcl_dev = google_retrieve_bcl_handle();
+	if (etdev->soc_data->bcl_dev) {
+		etdev->pmqos_nb.notifier_call = rio_pmqos_notifier;
+		exynos_pm_qos_add_notifier(PM_QOS_TPU_FREQ_MAX, &etdev->pmqos_nb);
+	}
 
 	return edgetpu_mobile_pm_create(etdev);
 }

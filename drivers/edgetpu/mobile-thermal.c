@@ -42,10 +42,8 @@ static int edgetpu_get_max_state(struct thermal_cooling_device *cdev, unsigned l
 	return 0;
 }
 
-/*
- * Set cooling state.
- */
-static int edgetpu_set_cur_state(struct thermal_cooling_device *cdev, unsigned long state_original)
+static int __edgetpu_set_cur_state(struct thermal_cooling_device *cdev,
+				   unsigned long state_original, int voter_id)
 {
 	int ret;
 	struct edgetpu_thermal *thermal = cdev->devdata;
@@ -57,9 +55,12 @@ static int edgetpu_set_cur_state(struct thermal_cooling_device *cdev, unsigned l
 		return -EINVAL;
 	}
 
+	edgetpu_thermal_lock(thermal);
+	thermal->thermal_vote[voter_id] = state_original;
+
+	state_original = max(thermal->thermal_vote[0], thermal->thermal_vote[1]);
 	state_original = max(thermal->sysfs_req, state_original);
 
-	edgetpu_thermal_lock(thermal);
 	pwr_state = state_pwr_map[state_original].state;
 	if (state_original == thermal->cooling_state) {
 		ret = -EALREADY;
@@ -87,6 +88,19 @@ static int edgetpu_set_cur_state(struct thermal_cooling_device *cdev, unsigned l
 out:
 	edgetpu_thermal_unlock(thermal);
 	return ret;
+}
+
+/*
+ * Set cooling state.
+ */
+static int edgetpu_set_cur_state(struct thermal_cooling_device *cdev, unsigned long state_original)
+{
+	return __edgetpu_set_cur_state(cdev, state_original, 0);
+}
+
+int edgetpu_set_cur_state_bcl(struct thermal_cooling_device *cdev, unsigned long state_original)
+{
+	return __edgetpu_set_cur_state(cdev, state_original, 1);
 }
 
 static int edgetpu_get_cur_state(struct thermal_cooling_device *cdev, unsigned long *state)
@@ -526,4 +540,16 @@ int edgetpu_thermal_restore(struct edgetpu_dev *etdev)
 	edgetpu_thermal_unlock(thermal);
 
 	return ret;
+}
+
+int edgetpu_state_to_cooling(struct edgetpu_dev *etdev, unsigned long state)
+{
+	struct edgetpu_thermal *thermal = etdev->thermal;
+	int i = 0;
+
+	for (i = 0; i < thermal->tpu_num_states; i++) {
+		if (state_pwr_map[i].state <= state)
+			return i;
+	}
+	return thermal->tpu_num_states - 1;
 }
