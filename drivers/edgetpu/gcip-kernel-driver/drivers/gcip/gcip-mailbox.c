@@ -111,9 +111,18 @@ static int gcip_mailbox_push_wait_resp(struct gcip_mailbox *mailbox, void *resp,
 {
 	struct gcip_mailbox_wait_list_elem *entry = kzalloc(sizeof(*entry), GFP_KERNEL);
 	unsigned long flags;
+	int ret;
 
 	if (!entry)
 		return -ENOMEM;
+
+	if (mailbox->ops->before_enqueue_wait_list) {
+		ret = mailbox->ops->before_enqueue_wait_list(mailbox, resp, awaiter);
+		if (ret) {
+			kfree(entry);
+			return ret;
+		}
+	}
 
 	/* Increase a reference of arrived handler. */
 	if (awaiter)

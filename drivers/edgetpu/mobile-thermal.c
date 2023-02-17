@@ -17,11 +17,12 @@
 #include <linux/thermal.h>
 #include <linux/version.h>
 
+#include <gcip/gcip-pm.h>
+
 #include "edgetpu-config.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-kci.h"
 #include "edgetpu-mmu.h"
-#include "edgetpu-pm.h"
 #include "edgetpu-soc.h"
 #include "edgetpu-thermal.h"
 #include "mobile-pm.h"
@@ -308,13 +309,12 @@ static int edgetpu_thermal_control_kci_if_powered(struct edgetpu_dev *etdev, boo
 {
 	int ret;
 
-	/* Use trylock since this function might be called during power up. */
-	if (!edgetpu_pm_get_if_powered(etdev->pm, true))
+	if (!gcip_pm_get_if_powered(etdev->pm, false))
 		return -EAGAIN;
 
 	ret = edgetpu_thermal_control_kci(etdev, enable);
 
-	edgetpu_pm_put(etdev->pm);
+	gcip_pm_put(etdev->pm);
 
 	return ret;
 }
@@ -497,12 +497,11 @@ int edgetpu_thermal_kci_if_powered(struct edgetpu_dev *etdev, u32 state)
 {
 	int ret;
 
-	/* Use trylock since this function might be called during power up. */
-	if (!edgetpu_pm_get_if_powered(etdev->pm, true))
+	if (gcip_pm_get_if_powered(etdev->pm, false))
 		return -EAGAIN;
 
 	ret = edgetpu_thermal_kci(etdev, state);
-	edgetpu_pm_put(etdev->pm);
+	gcip_pm_put(etdev->pm);
 
 	return ret;
 }

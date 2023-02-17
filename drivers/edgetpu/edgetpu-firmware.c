@@ -15,6 +15,8 @@
 #include <linux/string.h>
 #include <linux/types.h>
 
+#include <gcip/gcip-pm.h>
+
 #include "edgetpu.h"
 #include "edgetpu-debug-dump.h"
 #include "edgetpu-device-group.h"
@@ -22,7 +24,6 @@
 #include "edgetpu-firmware-util.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-kci.h"
-#include "edgetpu-pm.h"
 #include "edgetpu-sw-watchdog.h"
 #include "edgetpu-telemetry.h"
 
@@ -177,6 +178,10 @@ static int edgetpu_firmware_handshake(struct edgetpu_firmware *et_fw)
 	if (ret)
 		etdev_warn(etdev, "telemetry KCI error: %d", ret);
 
+	ret = gcip_firmware_tracing_restore(etdev->fw_tracing);
+	if (ret)
+		etdev_warn(etdev, "firmware tracing restore error: %d", ret);
+
 	ret = edgetpu_thermal_restore(etdev);
 	if (ret)
 		etdev_warn(etdev, "thermal restore error: %d", ret);
@@ -187,9 +192,9 @@ static int edgetpu_firmware_handshake(struct edgetpu_firmware *et_fw)
 }
 
 /*
- * Do edgetpu_pm_get() but prevent it from running the loaded firmware.
+ * Do gcip_pm_get() but prevent it from running the loaded firmware.
  *
- * On success, caller must later call edgetpu_pm_put() to decrease the reference count.
+ * On success, caller must later call gcip_pm_put() to decrease the reference count.
  *
  * Caller holds firmware lock.
  */
@@ -201,7 +206,7 @@ static int edgetpu_firmware_pm_get(struct edgetpu_firmware *et_fw)
 	/* Prevent platform-specific code from trying to run the previous firmware */
 	et_fw->p->status = GCIP_FW_LOADING;
 	etdev_dbg(et_fw->etdev, "Requesting power up for firmware run\n");
-	ret = edgetpu_pm_get(et_fw->etdev->pm);
+	ret = gcip_pm_get(et_fw->etdev->pm);
 	if (ret)
 		et_fw->p->status = prev;
 	return ret;
@@ -388,7 +393,7 @@ int edgetpu_firmware_run(struct edgetpu_dev *etdev, const char *name,
 	ret = edgetpu_firmware_pm_get(et_fw);
 	if (!ret) {
 		ret = edgetpu_firmware_run_locked(et_fw, name, flags);
-		edgetpu_pm_put(etdev->pm);
+		gcip_pm_put(etdev->pm);
 	}
 
 	edgetpu_firmware_load_unlock(etdev);
@@ -597,7 +602,7 @@ static void edgetpu_firmware_wdt_timeout_action(void *data)
 
 	etdev->watchdog_timeout_count++;
 	/* Don't attempt f/w restart if device is off. */
-	if (!edgetpu_is_powered(etdev))
+	if (!gcip_pm_is_powered(etdev->pm))
 		return;
 
 	/*
@@ -617,7 +622,7 @@ static void edgetpu_firmware_wdt_timeout_action(void *data)
 	ret = edgetpu_firmware_pm_get(et_fw);
 	if (!ret) {
 		ret = edgetpu_firmware_restart_locked(etdev, true);
-		edgetpu_pm_put(etdev->pm);
+		gcip_pm_put(etdev->pm);
 	}
 	edgetpu_firmware_unlock(etdev);
 }

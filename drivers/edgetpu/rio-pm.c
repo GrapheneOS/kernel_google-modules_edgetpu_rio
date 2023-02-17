@@ -12,6 +12,7 @@
 #include "edgetpu-config.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-mobile-platform.h"
+#include "edgetpu-pm.h"
 #include "edgetpu-soc.h"
 #include "mobile-soc-gsx01.h"
 #include "mobile-pm.h"

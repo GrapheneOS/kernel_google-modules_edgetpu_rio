@@ -16,11 +16,12 @@
 #include <soc/google/exynos_pm_qos.h>
 #include <soc/google/gs_tmu_v3.h>
 
+#include <gcip/gcip-pm.h>
+
 #include "edgetpu-internal.h"
 #include "edgetpu-firmware.h"
 #include "edgetpu-kci.h"
 #include "edgetpu-mobile-platform.h"
-#include "edgetpu-pm.h"
 #include "edgetpu-soc.h"
 #include "edgetpu-thermal.h"
 #include "mobile-firmware.h"
@@ -314,10 +315,10 @@ long edgetpu_soc_pm_get_rate(struct edgetpu_dev *etdev, int flags)
 		return -EINVAL;
 
 	/* We need to keep TPU being powered to ensure CMU read is valid. */
-	if (!edgetpu_pm_get_if_powered(etdev->pm, false))
+	if (gcip_pm_get_if_powered(etdev->pm, true))
 		return 0;
 	pll_con3 = readl(cmu_base + PLL_CON3_OFFSET);
-	edgetpu_pm_put(etdev->pm);
+	gcip_pm_put(etdev->pm);
 
 	/*
 	 * Below values must match the CMU PLL (pll_con3_pll_tpu) values in the spec and firmware.

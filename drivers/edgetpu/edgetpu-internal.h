@@ -30,8 +30,10 @@
 #include <linux/types.h>
 #include <linux/workqueue.h>
 
+#include <gcip/gcip-firmware.h>
+#include <gcip/gcip-pm.h>
+
 #include "edgetpu.h"
-#include "edgetpu-pm.h"
 #include "edgetpu-thermal.h"
 #include "edgetpu-usage-stats.h"
 
@@ -196,10 +198,11 @@ struct edgetpu_dev {
 	struct edgetpu_mailbox_manager *mailbox_manager;
 	struct edgetpu_kci *etkci;
 	struct edgetpu_firmware *firmware; /* firmware management */
+	struct gcip_fw_tracing *fw_tracing; /* firmware tracing */
 	struct edgetpu_telemetry_ctx *telemetry;
 	struct edgetpu_thermal *thermal;
 	struct edgetpu_usage_stats *usage_stats; /* usage stats private data */
-	struct edgetpu_pm *pm;  /* Power management interface */
+	struct gcip_pm *pm; /* Power management interface */
 	/* Memory pool in instruction remap region */
 	struct edgetpu_mempool *iremap_pool;
 	struct edgetpu_sw_wdt *etdev_sw_wdt;	/* software watchdog */

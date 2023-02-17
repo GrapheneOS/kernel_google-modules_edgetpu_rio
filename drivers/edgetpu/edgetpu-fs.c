@@ -29,6 +29,8 @@
 #include <linux/uaccess.h>
 #include <linux/uidgid.h>
 
+#include <gcip/gcip-pm.h>
+
 #include "edgetpu-config.h"
 #include "edgetpu-device-group.h"
 #include "edgetpu-dmabuf.h"
@@ -36,7 +38,6 @@
 #include "edgetpu-internal.h"
 #include "edgetpu-kci.h"
 #include "edgetpu-mapping.h"
-#include "edgetpu-pm.h"
 #include "edgetpu-telemetry.h"
 #include "edgetpu-wakelock.h"
 #include "edgetpu.h"
@@ -124,7 +125,7 @@ static int edgetpu_fs_release(struct inode *inode, struct file *file)
 
 	/* count was zero if client previously released its wake lock */
 	if (wakelock_count)
-		edgetpu_pm_put(etdev->pm);
+		gcip_pm_put(etdev->pm);
 	return 0;
 }
 
@@ -214,7 +215,7 @@ static int edgetpu_ioctl_finalize_group(struct edgetpu_client *client)
 	if (!group)
 		goto out_unlock;
 	/* Finalization has to be performed with device on. */
-	ret = edgetpu_pm_get(client->etdev->pm);
+	ret = gcip_pm_get(client->etdev->pm);
 	if (ret) {
 		etdev_err(client->etdev, "%s: pm_get failed (%d)",
 			  __func__, ret);
@@ -227,7 +228,7 @@ static int edgetpu_ioctl_finalize_group(struct edgetpu_client *client)
 	edgetpu_wakelock_lock(client->wakelock);
 	ret = edgetpu_device_group_finalize(group);
 	edgetpu_wakelock_unlock(client->wakelock);
-	edgetpu_pm_put(client->etdev->pm);
+	gcip_pm_put(client->etdev->pm);
 out_unlock:
 	UNLOCK(client);
 	return ret;
@@ -483,7 +484,7 @@ static int edgetpu_ioctl_release_wakelock(struct edgetpu_client *client)
 	if (!count) {
 		if (client->group)
 			edgetpu_group_close_and_detach_mailbox(client->group);
-		edgetpu_pm_put(client->etdev->pm);
+		gcip_pm_put(client->etdev->pm);
 	}
 	edgetpu_wakelock_unlock(client->wakelock);
 	UNLOCK(client);
@@ -524,7 +525,7 @@ static int edgetpu_ioctl_acquire_wakelock(struct edgetpu_client *client)
 		goto error_client_unlock;
 	}
 
-	ret = edgetpu_pm_get(client->etdev->pm);
+	ret = gcip_pm_get(client->etdev->pm);
 	if (ret) {
 		etdev_warn(client->etdev, "pm_get failed (%d)", ret);
 		goto error_client_unlock;
@@ -551,7 +552,7 @@ error_wakelock_unlock:
 
 	/* Balance the power up count due to pm_get above.*/
 	if (ret || count)
-		edgetpu_pm_put(client->etdev->pm);
+		gcip_pm_put(client->etdev->pm);
 
 error_client_unlock:
 	UNLOCK(client);
@@ -807,9 +808,9 @@ static int edgetpu_pm_debugfs_set_wakelock(void *data, u64 val)
 	int ret = 0;
 
 	if (val)
-		ret = edgetpu_pm_get(etdev->pm);
+		ret = gcip_pm_get(etdev->pm);
 	else
-		edgetpu_pm_put(etdev->pm);
+		gcip_pm_put(etdev->pm);
 	return ret;
 }
 DEFINE_DEBUGFS_ATTRIBUTE(fops_wakelock, NULL, edgetpu_pm_debugfs_set_wakelock,

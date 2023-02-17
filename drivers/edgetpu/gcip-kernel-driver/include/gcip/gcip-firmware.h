@@ -8,7 +8,16 @@
 #ifndef __GCIP_FIRMWARE_H__
 #define __GCIP_FIRMWARE_H__
 
+#include <linux/dcache.h>
+#include <linux/device.h>
+#include <linux/mutex.h>
 #include <linux/types.h>
+
+/*
+ * Any tracing level vote with the following bit set will be considered as a default vote.
+ * See go/gcip-firmware-dynamic-tracing for details.
+ */
+#define GCIP_FW_TRACING_DEFAULT_VOTE BIT(8)
 
 enum gcip_fw_status {
 	/* No firmware loaded yet, or last firmware failed to run. */
@@ -61,5 +70,59 @@ struct gcip_fw_info {
 
 /* Returns the name of @fw_flavor in string. */
 char *gcip_fw_flavor_str(enum gcip_fw_flavor fw_flavor);
+
+struct gcip_fw_tracing {
+	struct device *dev;
+	struct dentry *dentry;
+	struct gcip_pm *pm;
+
+	/*
+	 * Lock to protect the struct members listed below.
+	 *
+	 * Note that since the request of tracing level adjusting might happen during power state
+	 * transitions, this lock must be acquired after holding the pm lock to avoid deadlock.
+	 */
+	struct mutex lock;
+	/* Actual firmware tracing level. */
+	unsigned long active_level;
+	/* Requested firmware tracing level. */
+	unsigned long request_level;
+
+	/* Private data. See struct gcip_fw_tracing_args.*/
+	void *data;
+
+	/* Callbacks. See struct gcip_fw_tracing_args. */
+	int (*set_level)(void *data, unsigned long level, unsigned long *active_level);
+};
+
+struct gcip_fw_tracing_args {
+	/* Device struct of GCIP device. */
+	struct device *dev;
+	/* GCIP power management. */
+	struct gcip_pm *pm;
+	/* Top-level debugfs directory for the device. */
+	struct dentry *dentry;
+	/* Private data for callbacks listed below. */
+	void *data;
+	/*
+	 * Callback to set the tracing level.
+	 * The actual tracing level clamped by the firmware should be returned by @active_level.
+	 */
+	int (*set_level)(void *data, unsigned long level, unsigned long *active_level);
+};
+
+/* Allocate and initialize the firmware tracing struct. */
+struct gcip_fw_tracing *gcip_firmware_tracing_create(const struct gcip_fw_tracing_args *args);
+
+/* Destroy and free the firmware tracing struct. */
+void gcip_firmware_tracing_destroy(struct gcip_fw_tracing *fw_tracing);
+
+/*
+ * Restore the previous firmware tracing level.
+ *
+ * This function is designed to restore the firmware tracing level during power management calls and
+ * thus it assumes the caller holds the pm lock.
+ */
+int gcip_firmware_tracing_restore(struct gcip_fw_tracing *fw_tracing);
 
 #endif /* __GCIP_FIRMWARE_H__ */

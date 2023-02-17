@@ -13,6 +13,8 @@
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 
+#include <gcip/gcip-pm.h>
+
 #include "edgetpu-config.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-iremap-pool.h"
@@ -426,7 +428,7 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 
 	dev_info(dev, "%s edgetpu initialized. Build: %s", etdev->dev_name, GIT_REPO_TAG);
 	/* Turn the device off unless a client request is already received. */
-	edgetpu_pm_shutdown(etdev, false);
+	gcip_pm_shutdown(etdev->pm, false);
 
 	edgetpu_debug_pointer = etdev;
 
@@ -445,7 +447,7 @@ out_cleanup_fw:
 	edgetpu_platform_cleanup_fw_region(etmdev);
 out_shutdown:
 	dev_dbg(dev, "Probe finished with error %d, powering down", ret);
-	edgetpu_pm_shutdown(etdev, true);
+	gcip_pm_shutdown(etdev->pm, true);
 	return ret;
 }
 
@@ -456,13 +458,13 @@ static int edgetpu_mobile_platform_remove(struct platform_device *pdev)
 
 	edgetpu_mobile_firmware_destroy(etdev);
 	edgetpu_platform_remove_irq(etmdev);
-	edgetpu_pm_get(etdev->pm);
+	gcip_pm_get(etdev->pm);
 	edgetpu_telemetry_exit(etdev);
 	edgetpu_device_remove(etdev);
 	edgetpu_iremap_pool_destroy(etdev);
 	edgetpu_platform_cleanup_fw_region(etmdev);
-	edgetpu_pm_put(etdev->pm);
-	edgetpu_pm_shutdown(etdev, true);
+	gcip_pm_put(etdev->pm);
+	gcip_pm_shutdown(etdev->pm, true);
 	edgetpu_mobile_pm_destroy(etdev);
 
 	edgetpu_debug_pointer = NULL;

@@ -260,6 +260,22 @@ struct gcip_mailbox_ops {
 	 */
 	int (*wait_for_cmd_queue_not_full)(struct gcip_mailbox *mailbox);
 	/*
+	 * This callback will be called before putting the @resp into @mailbox->wait_list and
+	 * putting @cmd of @resp into the command queue. After this callback returns, the consumer
+	 * is able to start processing it and the mailbox is going to wait for it. Therefore, this
+	 * callback is the final checkpoint of deciding whether it is good to wait for the response
+	 * or not. If you don't want to wait for it, return a non-zero value error.
+	 *
+	 * If the implement side has its own wait queue, this callback is suitable to put @resp or
+	 * @awaiter into that.
+	 *
+	 * If @resp is synchronous, @awaiter will be NULL.
+	 *
+	 * Context: normal.
+	 */
+	int (*before_enqueue_wait_list)(struct gcip_mailbox *mailbox, void *resp,
+					struct gcip_mailbox_resp_awaiter *awaiter);
+	/*
 	 * This callback will be called after putting the @cmd to the command queue. It can be used
 	 * for triggering the doorbell. Also, @mailbox->cur_seq will be increased by the return
 	 * value. If error occurs, returns negative value and @mailbox->cur_seq will not be changed

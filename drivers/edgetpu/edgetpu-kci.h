@@ -125,7 +125,7 @@ int edgetpu_kci_update_usage(struct edgetpu_dev *etdev);
 /*
  * Works the same as edgetpu_kci_update_usage() except the caller of this
  * function must guarantee the device stays powered up, typically by calling
- * edgetpu_pm_get() or by calling this function from the power management
+ * gcip_pm_get() or by calling this function from the power management
  * functions themselves.
  *
  * Returns KCI response code on success or < 0 on error (typically -ETIMEDOUT).
@@ -195,6 +195,10 @@ int edgetpu_kci_notify_throttling(struct edgetpu_dev *etdev, u32 level);
  * Used to prevent conflicts when sending a thermal policy request
  */
 int edgetpu_kci_block_bus_speed_control(struct edgetpu_dev *etdev, bool block);
+
+/* Set the firmware tracing level. */
+int edgetpu_kci_firmware_tracing_level(void *data, unsigned long level,
+				       unsigned long *active_level);
 
 /*
  * Request the firmware to enable or disable the thermal throttling.

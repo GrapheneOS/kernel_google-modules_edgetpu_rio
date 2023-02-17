@@ -15,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/string.h> /* memcpy */
 
+#include <gcip/gcip-pm.h>
 #include <gcip/gcip-telemetry.h>
 
 #include "edgetpu-firmware.h"
@@ -440,8 +441,9 @@ int edgetpu_kci_update_usage(struct edgetpu_dev *etdev)
 	int ret = -EAGAIN;
 
 	/* Quick return if device is already powered down. */
-	if (!edgetpu_is_powered(etdev))
+	if (!gcip_pm_is_powered(etdev->pm))
 		return -EAGAIN;
+
 	/*
 	 * Lockout change in f/w load/unload status during usage update.
 	 * Skip usage update if the firmware is being updated now or is not
@@ -452,17 +454,12 @@ int edgetpu_kci_update_usage(struct edgetpu_dev *etdev)
 
 	if (edgetpu_firmware_status_locked(etdev) != GCIP_FW_VALID)
 		goto fw_unlock;
-	/*
-	 * This function may run in a worker that is being canceled when the
-	 * device is powering down, and the power down code holds the PM lock.
-	 * Using trylock to prevent cancel_work_sync() waiting forever.
-	 */
-	if (!edgetpu_pm_trylock(etdev->pm))
+
+	if (gcip_pm_get_if_powered(etdev->pm, false))
 		goto fw_unlock;
 
-	if (edgetpu_is_powered(etdev))
-		ret = edgetpu_kci_update_usage_locked(etdev);
-	edgetpu_pm_unlock(etdev->pm);
+	ret = edgetpu_kci_update_usage_locked(etdev);
+	gcip_pm_put_async(etdev->pm);
 
 fw_unlock:
 	edgetpu_firmware_unlock(etdev);
@@ -636,6 +633,28 @@ int edgetpu_kci_block_bus_speed_control(struct edgetpu_dev *etdev, bool block)
 	return gcip_kci_send_cmd(etdev->etkci->kci, &cmd);
 }
 
+int edgetpu_kci_firmware_tracing_level(void *data, unsigned long level, unsigned long *active_level)
+{
+	struct edgetpu_dev *etdev = data;
+	struct gcip_kci_command_element cmd = {
+		.code = GCIP_KCI_CODE_FIRMWARE_TRACING_LEVEL,
+		.dma = {
+			.flags = (u32)level,
+		},
+	};
+	struct gcip_kci_response_element resp;
+	int ret;
+
+	if (!etdev->etkci)
+		return -ENODEV;
+
+	ret = gcip_kci_send_cmd_return_resp(etdev->etkci->kci, &cmd, &resp);
+	if (ret == GCIP_KCI_ERROR_OK)
+		*active_level = resp.retval;
+
+	return ret;
+}
+
 int edgetpu_kci_thermal_control(struct edgetpu_dev *etdev, bool enable)
 {
 	struct gcip_kci_command_element cmd = {
@@ -644,9 +663,6 @@ int edgetpu_kci_thermal_control(struct edgetpu_dev *etdev, bool enable)
 			.flags = (u32)enable,
 		},
 	};
-
-	if (!etdev->etkci)
-		return -ENODEV;
 
 	return gcip_kci_send_cmd(etdev->etkci->kci, &cmd);
 }
