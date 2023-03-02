@@ -25,7 +25,6 @@
 #include <linux/irqreturn.h>
 #include <linux/mm_types.h>
 #include <linux/mutex.h>
-#include <linux/notifier.h>
 #include <linux/refcount.h>
 #include <linux/scatterlist.h>
 #include <linux/types.h>
@@ -33,10 +32,9 @@
 
 #include <gcip/gcip-firmware.h>
 #include <gcip/gcip-pm.h>
+#include <gcip/gcip-thermal.h>
 
 #include "edgetpu.h"
-#include "edgetpu-thermal.h"
-#include "edgetpu-usage-stats.h"
 
 #define get_dev_for_logging(etdev)                                                                 \
 	((etdev)->etiface && (etdev)->etiface->etcdev ? (etdev)->etiface->etcdev : (etdev)->dev)
@@ -201,7 +199,7 @@ struct edgetpu_dev {
 	struct edgetpu_firmware *firmware; /* firmware management */
 	struct gcip_fw_tracing *fw_tracing; /* firmware tracing */
 	struct edgetpu_telemetry_ctx *telemetry;
-	struct edgetpu_thermal *thermal;
+	struct gcip_thermal *thermal;
 	struct edgetpu_usage_stats *usage_stats; /* usage stats private data */
 	struct gcip_pm *pm; /* Power management interface */
 	/* Memory pool in instruction remap region */
@@ -222,7 +220,6 @@ struct edgetpu_dev {
 	struct work_struct debug_dump_work;
 
 	struct mutex freq_lock;	/* protects below freq_* variables */
-	struct notifier_block pmqos_nb;	/* PMQoS notifier struct */
 	uint32_t *freq_table;	/* Array to record reported frequencies by f/w */
 	uint32_t freq_count;	/* Number of entries in freq_table */
 };

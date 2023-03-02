@@ -500,7 +500,7 @@ static int edgetpu_ioctl_acquire_wakelock(struct edgetpu_client *client)
 {
 	int count = 0;
 	int ret = 0;
-	struct edgetpu_thermal *thermal = client->etdev->thermal;
+	struct gcip_thermal *thermal = client->etdev->thermal;
 
 	trace_edgetpu_acquire_wakelock_start(current->pid);
 
@@ -513,11 +513,9 @@ static int edgetpu_ioctl_acquire_wakelock(struct edgetpu_client *client)
 	 */
 	client->pid = current->pid;
 	client->tgid = current->tgid;
-	edgetpu_thermal_lock(thermal);
-	if (edgetpu_thermal_is_suspended(thermal))
+	if (gcip_thermal_is_device_suspended(thermal))
 		/* TPU is thermal suspended, so fail acquiring wakelock */
 		ret = -EAGAIN;
-	edgetpu_thermal_unlock(thermal);
 
 	if (ret) {
 		etdev_warn_ratelimited(client->etdev,

@@ -18,20 +18,37 @@ obj-$(CONFIG_RIO)	+= rio.o
 
 GCIP_DIR=gcip-kernel-driver/drivers/gcip
 
-edgetpu-objs	:= edgetpu-async.o edgetpu-dmabuf.o edgetpu-iremap-pool.o \
-		   edgetpu-kci.o edgetpu-mailbox.o edgetpu-mapping.o \
-		   edgetpu-sw-watchdog.o edgetpu-telemetry.o \
-		   edgetpu-firmware-util.o edgetpu-firmware.o
+edgetpu-objs	:= edgetpu-async.o \
+		   edgetpu-dmabuf.o \
+		   edgetpu-firmware-util.o \
+		   edgetpu-firmware.o \
+		   edgetpu-iremap-pool.o \
+		   edgetpu-kci.o \
+		   edgetpu-mailbox.o \
+		   edgetpu-mapping.o \
+		   edgetpu-sw-watchdog.o \
+		   edgetpu-telemetry.o \
+		   edgetpu-thermal.o
 
 ifndef CONFIG_EDGETPU_TEST
 # Unit testing doesn't need this because GCIP is compiled as a built-in there.
 edgetpu-objs	+= $(GCIP_DIR)/gcip.o
 endif
 
-rio-objs	:= rio-core.o rio-debug-dump.o rio-device-group.o rio-device.o \
-		   rio-firmware.o rio-fs.o rio-iommu.o rio-platform.o rio-pm.o \
-		   rio-thermal.o rio-usage-stats.o rio-wakelock.o rio-external.o \
-		   rio-soc.o $(edgetpu-objs)
+rio-objs	:= rio-core.o \
+		   rio-debug-dump.o \
+		   rio-device-group.o \
+		   rio-device.o \
+		   rio-external.o \
+		   rio-firmware.o \
+		   rio-fs.o \
+		   rio-iommu.o \
+		   rio-platform.o \
+		   rio-pm.o \
+		   rio-soc.o \
+		   rio-usage-stats.o \
+		   rio-wakelock.o \
+		   $(edgetpu-objs)
 
 CFLAGS_rio-fs.o := -DCONFIG_RIO=1
 CFLAGS_rio-core.o := -DCONFIG_RIO=1
@@ -41,7 +58,6 @@ CFLAGS_rio-firmware.o := -DCONFIG_RIO=1
 CFLAGS_rio-iommu.o := -DCONFIG_RIO=1
 CFLAGS_rio-platform.o := -DCONFIG_RIO=1
 CFLAGS_rio-pm.o := -DCONFIG_RIO=1
-CFLAGS_rio-thermal.o := -DCONFIG_RIO=1
 CFLAGS_rio-debug-dump.o := -DCONFIG_RIO=1
 CFLAGS_rio-usage-stats.o := -DCONFIG_RIO=1
 CFLAGS_rio-wakelock.o := -DCONFIG_RIO=1

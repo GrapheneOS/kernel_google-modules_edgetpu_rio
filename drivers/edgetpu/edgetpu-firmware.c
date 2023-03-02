@@ -16,6 +16,7 @@
 #include <linux/types.h>
 
 #include <gcip/gcip-pm.h>
+#include <gcip/gcip-thermal.h>
 
 #include "edgetpu.h"
 #include "edgetpu-debug-dump.h"
@@ -182,7 +183,7 @@ static int edgetpu_firmware_handshake(struct edgetpu_firmware *et_fw)
 	if (ret)
 		etdev_warn(etdev, "firmware tracing restore error: %d", ret);
 
-	ret = edgetpu_thermal_restore(etdev);
+	ret = gcip_thermal_restore_on_powering(etdev->thermal);
 	if (ret)
 		etdev_warn(etdev, "thermal restore error: %d", ret);
 

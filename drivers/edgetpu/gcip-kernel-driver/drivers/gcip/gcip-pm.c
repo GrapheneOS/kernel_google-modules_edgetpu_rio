@@ -228,8 +228,7 @@ void gcip_pm_shutdown(struct gcip_pm *pm, bool force)
 	if (pm->count) {
 		if (!force)
 			goto unlock;
-		else
-			dev_warn(pm->dev, "Force shutdown with power up count: %d", pm->count);
+		dev_warn(pm->dev, "Force shutdown with power up count: %d", pm->count);
 	}
 
 	gcip_pm_try_power_down(pm);

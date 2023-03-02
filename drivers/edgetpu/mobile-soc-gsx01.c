@@ -2,13 +2,14 @@
 /*
  * Edge TPU functions for GSX01 SoCs.
  *
- * Copyright (C) 2022 Google LLC
+ * Copyright (C) 2022-2023 Google LLC
  */
 
 #include <linux/acpm_dvfs.h>
 #include <linux/device.h>
 #include <linux/errno.h>
 #include <linux/gsa/gsa_tpu.h>
+#include <linux/notifier.h>
 #include <linux/platform_device.h>
 #include <linux/thermal.h>
 #include <linux/types.h>
@@ -17,13 +18,13 @@
 #include <soc/google/gs_tmu_v3.h>
 
 #include <gcip/gcip-pm.h>
+#include <gcip/gcip-thermal.h>
 
 #include "edgetpu-internal.h"
 #include "edgetpu-firmware.h"
 #include "edgetpu-kci.h"
 #include "edgetpu-mobile-platform.h"
 #include "edgetpu-soc.h"
-#include "edgetpu-thermal.h"
 #include "mobile-firmware.h"
 #include "mobile-soc-gsx01.h"
 
@@ -574,14 +575,29 @@ static int tpu_pause_callback(enum thermal_pause_state action, void *dev)
 		return ret;
 
 	if (action == THERMAL_SUSPEND)
-		ret = edgetpu_thermal_suspend(dev);
+		ret = gcip_thermal_suspend_device(dev);
 	else if (action == THERMAL_RESUME)
-		ret = edgetpu_thermal_resume(dev);
+		ret = gcip_thermal_resume_device(dev);
 
 	return ret;
 }
 
-void edgetpu_soc_thermal_init(struct edgetpu_thermal *thermal)
+void edgetpu_soc_thermal_init(struct edgetpu_dev *etdev)
 {
+	struct gcip_thermal *thermal = etdev->thermal;
+	struct notifier_block *nb = gcip_thermal_get_notifier_block(thermal);
+
 	register_tpu_thermal_pause_cb(tpu_pause_callback, thermal->dev);
+
+	if (etdev->soc_data->bcl_dev)
+		exynos_pm_qos_add_notifier(PM_QOS_TPU_FREQ_MAX, nb);
+}
+
+void edgetpu_soc_thermal_exit(struct edgetpu_dev *etdev)
+{
+	struct gcip_thermal *thermal = etdev->thermal;
+	struct notifier_block *nb = gcip_thermal_get_notifier_block(thermal);
+
+	if (etdev->soc_data->bcl_dev)
+		exynos_pm_qos_remove_notifier(PM_QOS_TPU_FREQ_MAX, nb);
 }

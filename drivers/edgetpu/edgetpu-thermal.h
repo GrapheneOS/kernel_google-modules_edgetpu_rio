@@ -1,126 +1,18 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * EdgeTPU thermal driver header.
+ * EdgeTPU thermal management header.
  *
- * Copyright (C) 2020 Google, Inc.
+ * Copyright (C) 2020-2023 Google LLC
  */
 #ifndef __EDGETPU_THERMAL_H__
 #define __EDGETPU_THERMAL_H__
 
-#include <linux/debugfs.h>
-#include <linux/device.h>
-#include <linux/mutex.h>
-#include <linux/thermal.h>
-
 #include "edgetpu-internal.h"
 
-#define EDGETPU_COOLING_NAME "tpu_cooling"
+#define EDGETPU_COOLING_NAME "tpu-cooling"
 
-struct edgetpu_thermal {
-	struct device *dev;
-	struct dentry *cooling_root;
-	struct thermal_cooling_device *cdev;
-	struct mutex lock;
-	void *op_data;
-	unsigned long cooling_state;
-	unsigned long sysfs_req;
-	unsigned int tpu_num_states;
-	struct edgetpu_dev *etdev;
-	bool thermal_suspended; /* TPU thermal suspended state */
-	unsigned long thermal_vote[2]; /* Thermal vote array, idx0: Tskin; idx1: BCL */
-	bool enabled;
-};
-
-struct edgetpu_state_pwr {
-	unsigned long state;
-	u32 power;
-};
-
-/*
- * Creates a managed edgetpu_thermal object.
- *
- * Returns -errno on error.
- */
-struct edgetpu_thermal *devm_tpu_thermal_create(struct device *dev,
-						struct edgetpu_dev *etdev);
-
-/*
- * Marks the TPU is suspended and informs TPU device if it's powered.
- *
- * Returns 0 on success.
- */
-int edgetpu_thermal_suspend(struct device *dev);
-/*
- * Resumes the TPU from the suspend state and informs TPU CPU if it's powered.
- *
- * Returns 0 on success.
- */
-int edgetpu_thermal_resume(struct device *dev);
-
-/*
- * Sends the thermal throttling KCI if the device is powered.
- *
- * Returns the return value of KCI if the device is powered, otherwise -EAGAIN.
- */
-int edgetpu_thermal_kci_if_powered(struct edgetpu_dev *etdev, u32 state);
-
-/*
- * Sends thermal throttling KCI to restore the last thermal state.
- *
- * The caller must guarantee the device stays powered up, typically by calling gcip_pm_get() or
- * by calling this function from the power management functions themselves.
- *
- * Returns 0 if no thermal throttling required; otherwise the return value of KCI.
- */
-int edgetpu_thermal_restore(struct edgetpu_dev *etdev);
-
-/*
- * Callback for BCL vote for throttling
- *
- * This goes through the same path as regular Tskin throttling
- *
- * Returns 0 if successful, otherwise negative error.
- */
-int edgetpu_set_cur_state_bcl(struct thermal_cooling_device *cdev, unsigned long state_original);
-
-/*
- * API to map frequency to cooling state
- *
- * Returns state if successful. On an invalid input it returns lowest state.
- */
-int edgetpu_state_to_cooling(struct edgetpu_dev *etdev, unsigned long state);
-
-/*
- * Holds thermal->lock.
- *
- * Does nothing if the thermal management is not supported.
- */
-static inline void edgetpu_thermal_lock(struct edgetpu_thermal *thermal)
-{
-	if (!IS_ERR_OR_NULL(thermal))
-		mutex_lock(&thermal->lock);
-}
-
-/*
- * Checks whether device is thermal suspended.
- * Returns false if the thermal management is not supported.
- */
-static inline bool edgetpu_thermal_is_suspended(struct edgetpu_thermal *thermal)
-{
-	if (!IS_ERR_OR_NULL(thermal))
-		return thermal->thermal_suspended;
-	return false;
-}
-
-/*
- * Releases thermal->lock.
- *
- * Does nothing if the thermal management is not supported.
- */
-static inline void edgetpu_thermal_unlock(struct edgetpu_thermal *thermal)
-{
-	if (!IS_ERR_OR_NULL(thermal))
-		mutex_unlock(&thermal->lock);
-}
+int edgetpu_thermal_create(struct edgetpu_dev *etdev);
+void edgetpu_thermal_destroy(struct edgetpu_dev *etdev);
+int edgetpu_thermal_set_rate(struct edgetpu_dev *etdev, unsigned long rate);
 
 #endif /* __EDGETPU_THERMAL_H__ */

@@ -147,10 +147,14 @@ static int mobile_pwr_policy_set(void *data, u64 val)
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
-	int ret;
+	int ret = -EAGAIN;
 
 	mutex_lock(&platform_pwr->policy_lock);
-	ret = edgetpu_thermal_kci_if_powered(etdev, val);
+
+	if (!gcip_pm_get_if_powered(etdev->pm, false)) {
+		ret = edgetpu_thermal_set_rate(etdev, val);
+		gcip_pm_put(etdev->pm);
+	}
 
 	if (ret) {
 		dev_err(etmdev->edgetpu_dev.dev,

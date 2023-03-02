@@ -22,6 +22,7 @@
 #include "edgetpu-mobile-platform.h"
 #include "edgetpu-soc.h"
 #include "edgetpu-telemetry.h"
+#include "edgetpu-thermal.h"
 #include "mobile-firmware.h"
 #include "mobile-pm.h"
 
@@ -410,19 +411,21 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		goto out_tel_exit;
 	}
 
-	etdev_dbg(etdev, "Creating thermal device");
-	etdev->thermal = devm_tpu_thermal_create(etdev->dev, etdev);
+	ret = edgetpu_thermal_create(etdev);
+	if (ret)
+		etdev_warn(etdev, "Failed to create thermal device: %d", ret);
+
 	ret = edgetpu_mobile_platform_set_fw_ctx_memory(etmdev);
 	if (ret) {
 		etdev_err(etdev, "Failed to initialize fw context memory: %d", ret);
-		goto out_destroy_fw;
+		goto out_destroy_thermal;
 	}
 
 	if (etmdev->after_probe) {
 		ret = etmdev->after_probe(etmdev);
 		if (ret) {
 			dev_err(dev, "after_probe callback failed: %d", ret);
-			goto out_destroy_fw;
+			goto out_destroy_thermal;
 		}
 	}
 
@@ -433,7 +436,9 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 	edgetpu_debug_pointer = etdev;
 
 	return 0;
-out_destroy_fw:
+
+out_destroy_thermal:
+	edgetpu_thermal_destroy(etdev);
 	edgetpu_mobile_firmware_destroy(etdev);
 out_tel_exit:
 	edgetpu_telemetry_exit(etdev);
@@ -456,6 +461,7 @@ static int edgetpu_mobile_platform_remove(struct platform_device *pdev)
 	struct edgetpu_dev *etdev = platform_get_drvdata(pdev);
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 
+	edgetpu_thermal_destroy(etdev);
 	edgetpu_mobile_firmware_destroy(etdev);
 	edgetpu_platform_remove_irq(etmdev);
 	gcip_pm_get(etdev->pm);

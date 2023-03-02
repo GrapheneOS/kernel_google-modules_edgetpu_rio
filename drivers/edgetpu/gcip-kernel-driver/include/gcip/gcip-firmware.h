@@ -44,9 +44,10 @@ enum gcip_fw_flavor {
 	GCIP_FW_FLAVOR_CUSTOM = 4,
 };
 
-/* Type of firmware crash which will be sent by GCIP_RKCI_FIRMWARE_CRASH RKCI command. */
+/* Type of firmware crash. */
 enum gcip_fw_crash_type {
-	/* Assert happened. */
+	/* Type which will be sent by GCIP_RKCI_FIRMWARE_CRASH reverse KCI. */
+	/*Assert happened. */
 	GCIP_FW_CRASH_ASSERT_FAIL = 0,
 	/* Data abort exception. */
 	GCIP_FW_CRASH_DATA_ABORT = 1,
@@ -58,6 +59,9 @@ enum gcip_fw_crash_type {
 	GCIP_FW_CRASH_UNRECOVERABLE_FAULT = 4,
 	/* Used in debug dump. */
 	GCIP_FW_CRASH_DUMMY_CRASH_TYPE = 0xFF,
+
+	/* HW watchdog timeout. */
+	GCIP_FW_CRASH_HW_WDG_TIMEOUT = 0x100,
 };
 
 /* Firmware info filled out via KCI FIRMWARE_INFO command. */
