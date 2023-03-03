@@ -205,7 +205,6 @@ struct edgetpu_dev {
 	/* Memory pool in instruction remap region */
 	struct edgetpu_mempool *iremap_pool;
 	struct edgetpu_sw_wdt *etdev_sw_wdt;	/* software watchdog */
-	bool reset_needed;	/* error recovery requests full chip reset. */
 	/* version read from the firmware binary file */
 	struct edgetpu_fw_version fw_version;
 	atomic_t job_count;	/* times joined to a device group */

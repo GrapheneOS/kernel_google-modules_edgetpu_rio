@@ -58,20 +58,17 @@ static void sw_wdt_modify_rate(struct edgetpu_sw_wdt *wdt, unsigned long rate)
 	sw_wdt_start(wdt);
 }
 
-void edgetpu_watchdog_bite(struct edgetpu_dev *etdev, bool reset)
+void edgetpu_watchdog_bite(struct edgetpu_dev *etdev)
 {
 	if (!etdev->etdev_sw_wdt)
 		return;
 	/*
 	 * Stop sw wdog delayed worker, to reduce chance this explicit call
 	 * races with a sw wdog timeout.  May be in IRQ context, no sync,
-	 * worker may already be active.  If we race with a sw wdog restart
-	 * and need a chip reset, hopefully the P-channel reset will fail
-	 * and the bigger hammer chip reset will kick in at that point.
+	 * worker may already be active.
 	 */
 	cancel_delayed_work(&etdev->etdev_sw_wdt->dwork);
-	etdev_err(etdev, "watchdog %s", reset ? "reset" : "restart");
-	etdev->reset_needed = reset;
+	etdev_err(etdev, "watchdog restart");
 	schedule_work(&etdev->etdev_sw_wdt->et_action_work.work);
 }
 

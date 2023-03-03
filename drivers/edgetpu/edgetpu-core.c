@@ -694,8 +694,8 @@ void edgetpu_handle_firmware_crash(struct edgetpu_dev *etdev,
 		etdev_err(etdev, "firmware unrecoverable crash");
 		etdev->firmware_crash_count++;
 		edgetpu_fatal_error_notify(etdev, EDGETPU_ERROR_FW_CRASH);
-		/* Restart firmware without chip reset */
-		edgetpu_watchdog_bite(etdev, false);
+		/* Restart firmware */
+		edgetpu_watchdog_bite(etdev);
 	} else {
 		etdev_err(etdev, "firmware non-fatal crash event: %u",
 			  crash_type);

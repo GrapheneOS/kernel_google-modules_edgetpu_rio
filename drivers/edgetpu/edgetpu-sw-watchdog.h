@@ -77,9 +77,7 @@ void edgetpu_sw_wdt_dec_active_ref(struct edgetpu_dev *etdev);
 
 /*
  * Schedule sw watchdog action immediately.  Called on fatal errors.
- * @reset: true if error recovery requires a full chip reset, not just
- *         firmware restart.
  */
-void edgetpu_watchdog_bite(struct edgetpu_dev *etdev, bool reset);
+void edgetpu_watchdog_bite(struct edgetpu_dev *etdev);
 
 #endif /* __EDGETPU_SW_WDT_H__ */

@@ -9,7 +9,7 @@
 
 #include "edgetpu-internal.h"
 
-#define EDGETPU_COOLING_NAME "tpu-cooling"
+#define EDGETPU_COOLING_NAME "tpu_cooling"
 
 int edgetpu_thermal_create(struct edgetpu_dev *etdev);
 void edgetpu_thermal_destroy(struct edgetpu_dev *etdev);

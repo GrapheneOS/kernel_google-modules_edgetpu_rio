@@ -1135,11 +1135,11 @@ int edgetpu_mailbox_activate_bulk(struct edgetpu_dev *etdev, u32 mailbox_map, s1
 	mutex_unlock(&eh->lock);
 	/*
 	 * We are observing OPEN_DEVICE KCI fails while other KCIs (usage update / shutdown) still
-	 * succeed and no firmware crash is reported. Kick off the firmware restart when we are
-	 * facing this and hope this can rescue the device from the bad state.
+	 * succeed and no firmware crash is reported. Kick off a firmware restart when we are
+	 * facing this and hope it can rescue the device from the bad state.
 	 */
 	if (ret == -ETIMEDOUT)
-		edgetpu_watchdog_bite(etdev, false);
+		edgetpu_watchdog_bite(etdev);
 	return ret;
 
 }
