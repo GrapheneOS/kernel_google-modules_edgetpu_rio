@@ -188,7 +188,7 @@ static void gcip_thermal_update(struct gcip_thermal *thermal)
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0) || IS_ENABLED(CONFIG_ANDROID)
 	thermal_cdev_update(cdev);
 #elif IS_ENABLED(CONFIG_THERMAL)
-	dev_err_once(dev, "Thermal update not implemented");
+	dev_err_once(thermal->dev, "Thermal update not implemented");
 #endif
 }
 

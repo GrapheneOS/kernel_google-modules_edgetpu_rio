@@ -17,10 +17,7 @@
 
 struct edgetpu_sw_wdt_action_work {
 	struct work_struct work;
-	/* pending function to be called on watchdog bite. */
-	void (*edgetpu_sw_wdt_handler)(void *data);
-	/* optional data can be used by callback function. */
-	void *data;
+	struct edgetpu_dev *etdev;
 };
 
 struct edgetpu_sw_wdt {
@@ -55,12 +52,6 @@ int edgetpu_sw_wdt_start(struct edgetpu_dev *etdev);
 void edgetpu_sw_wdt_stop(struct edgetpu_dev *etdev);
 void edgetpu_sw_wdt_destroy(struct edgetpu_dev *etdev);
 /*
- * Set callback function @handler_cb and optional param @data which is to be
- * called on f/w ping timeout.
- */
-void edgetpu_sw_wdt_set_handler(struct edgetpu_dev *etdev,
-				void (*handler_cb)(void *), void *data);
-/*
  * Increases the @active_counter.
  *
  * If @active_counter was zero, watchdog will be restarted with the active
@@ -76,7 +67,7 @@ void edgetpu_sw_wdt_inc_active_ref(struct edgetpu_dev *etdev);
 void edgetpu_sw_wdt_dec_active_ref(struct edgetpu_dev *etdev);
 
 /*
- * Schedule sw watchdog action immediately.  Called on fatal errors.
+ * Trigger immediate sw watchdog timeout.  Called on fatal errors.
  */
 void edgetpu_watchdog_bite(struct edgetpu_dev *etdev);
 

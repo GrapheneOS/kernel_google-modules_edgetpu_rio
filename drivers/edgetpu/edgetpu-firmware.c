@@ -179,7 +179,7 @@ static int edgetpu_firmware_handshake(struct edgetpu_firmware *et_fw)
 	if (ret)
 		etdev_warn(etdev, "telemetry KCI error: %d", ret);
 
-	ret = gcip_firmware_tracing_restore(etdev->fw_tracing);
+	ret = gcip_firmware_tracing_restore_on_powering(etdev->fw_tracing);
 	if (ret)
 		etdev_warn(etdev, "firmware tracing restore error: %d", ret);
 
@@ -595,13 +595,11 @@ static const struct attribute_group edgetpu_firmware_attr_group = {
 	.attrs = dev_attrs,
 };
 
-static void edgetpu_firmware_wdt_timeout_action(void *data)
+void edgetpu_firmware_watchdog_restart(struct edgetpu_dev *etdev)
 {
 	int ret;
-	struct edgetpu_dev *etdev = data;
 	struct edgetpu_firmware *et_fw = etdev->firmware;
 
-	etdev->watchdog_timeout_count++;
 	/* Don't attempt f/w restart if device is off. */
 	if (!gcip_pm_is_powered(etdev->pm))
 		return;
@@ -611,7 +609,6 @@ static void edgetpu_firmware_wdt_timeout_action(void *data)
 	 * groups the CLOSE_DEVICE KCIs won't be sent.
 	 */
 	edgetpu_handshake_clear_fw_state(&etdev->mailbox_manager->open_devices);
-	edgetpu_fatal_error_notify(etdev, EDGETPU_ERROR_WATCHDOG_TIMEOUT);
 
 	/* Another procedure is loading the firmware, let it do the work. */
 	if (edgetpu_firmware_is_loading(etdev))
@@ -669,10 +666,7 @@ int edgetpu_firmware_create(struct edgetpu_dev *etdev,
 	ret = edgetpu_sw_wdt_create(etdev, EDGETPU_ACTIVE_DEV_BEAT_MS,
 				    EDGETPU_DORMANT_DEV_BEAT_MS);
 	if (ret)
-		etdev_err(etdev, "Failed to create sw wdt instance\n");
-	else
-		edgetpu_sw_wdt_set_handler(
-			etdev, edgetpu_firmware_wdt_timeout_action, etdev);
+		etdev_warn(etdev, "Failed to create software watchdog\n");
 	return 0;
 
 out_device_remove_group:

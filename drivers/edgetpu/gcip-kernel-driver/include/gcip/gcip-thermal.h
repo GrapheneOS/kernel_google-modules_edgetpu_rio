@@ -37,9 +37,9 @@ struct gcip_thermal {
 	 * Lock to protect the struct members listed below.
 	 *
 	 * Note that since the request of thermal state adjusting might happen during power state
-	 * transitions (i.e., another thread calling gcip_thermal_restore() with pm lock held), one
-	 * must either use the non-blocking gcip_pm_get_if_powered() or make sure there won't be any
-	 * new power transition after holding this thermal lock to prevent deadlock.
+	 * transitions (i.e., another thread calling gcip_thermal_restore_on_powering() with pm lock
+	 * held), one must either use the non-blocking gcip_pm_get_if_powered() or make sure there
+	 * won't be any new power transition after holding this thermal lock to prevent deadlock.
 	 */
 	struct mutex lock;
 	unsigned long num_states;

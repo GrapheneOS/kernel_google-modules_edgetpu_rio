@@ -84,7 +84,9 @@ struct gcip_fw_tracing {
 	 * Lock to protect the struct members listed below.
 	 *
 	 * Note that since the request of tracing level adjusting might happen during power state
-	 * transitions, this lock must be acquired after holding the pm lock to avoid deadlock.
+	 * transitions (i.e., another thread calling gcip_firmware_tracing_restore_on_powering()
+	 * with pm lock held), one must either use the non-blocking gcip_pm_get_if_powered() or make
+	 * sure there won't be any new power transition after holding this lock to prevent deadlock.
 	 */
 	struct mutex lock;
 	/* Actual firmware tracing level. */
@@ -127,6 +129,6 @@ void gcip_firmware_tracing_destroy(struct gcip_fw_tracing *fw_tracing);
  * This function is designed to restore the firmware tracing level during power management calls and
  * thus it assumes the caller holds the pm lock.
  */
-int gcip_firmware_tracing_restore(struct gcip_fw_tracing *fw_tracing);
+int gcip_firmware_tracing_restore_on_powering(struct gcip_fw_tracing *fw_tracing);
 
 #endif /* __GCIP_FIRMWARE_H__ */

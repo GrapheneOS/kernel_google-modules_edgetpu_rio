@@ -60,7 +60,7 @@ struct iommu_domain *gcip_domain_pool_alloc(struct gcip_domain_pool *pool)
 	if (!pool->size) {
 		ddomain = vzalloc(sizeof(*ddomain));
 		if (!ddomain)
-			return ERR_PTR(-ENOMEM);
+			return NULL;
 
 		ddomain->domain = iommu_domain_alloc(pool->dev->bus);
 		if (!ddomain->domain) {
