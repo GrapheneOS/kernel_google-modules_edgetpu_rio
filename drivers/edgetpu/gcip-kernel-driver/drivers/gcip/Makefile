@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: GPL-2.0-only
 #
 # Makefile for GCIP framework.
 #
@@ -24,6 +24,8 @@ ccflags-y += -I$(CURRENT_DIR)/../../include
 
 ifdef CONFIG_GCIP_TEST
 obj-y	+= unittests/
+include $(srctree)/drivers/gcip/unittests/Makefile.include
+$(call include_test_path, $(gcip-objs))
 endif
 
 modules modules_install clean:

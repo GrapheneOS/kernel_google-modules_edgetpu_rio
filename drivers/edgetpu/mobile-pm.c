@@ -31,10 +31,8 @@
 #define BLOCK_DOWN_MAX_DELAY_US 1500
 
 enum edgetpu_pwr_state edgetpu_active_states[EDGETPU_NUM_STATES] = {
-	TPU_ACTIVE_UUD,
-	TPU_ACTIVE_SUD,
-	TPU_ACTIVE_UD,
-	TPU_ACTIVE_NOM,
+	TPU_ACTIVE_MIN, TPU_ACTIVE_ULTRA_LOW, TPU_ACTIVE_VERY_LOW, TPU_ACTIVE_SUB_LOW,
+	TPU_ACTIVE_LOW, TPU_ACTIVE_MEDIUM,    TPU_ACTIVE_NOM,
 };
 
 uint32_t *edgetpu_states_display = edgetpu_active_states;

@@ -10,6 +10,17 @@
 #include <linux/hashtable.h>
 #include <linux/mutex.h>
 
+/* The highest version of usage metrics handled by this driver. */
+#define EDGETPU_USAGE_METRIC_VERSION	1
+
+/*
+ * Size in bytes of usage metric v1.
+ * If fewer bytes than this are received then discard the invalid buffer.
+ * This size also identifies the fw response as v1; subsequent versions will add another field
+ * with the version number.
+ */
+#define EDGETPU_USAGE_METRIC_SIZE_V1	20
+
 /* Header struct in the metric buffer. */
 /* Must be kept in sync with firmware struct UsageTrackerHeader */
 struct edgetpu_usage_header {

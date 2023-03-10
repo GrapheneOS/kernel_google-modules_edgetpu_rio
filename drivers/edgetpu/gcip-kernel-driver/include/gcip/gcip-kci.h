@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Kernel Control Interface, implements the protocol between AP kernel and GCIP firmware.
  *

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Power management support for GCIP devices.
  *
@@ -97,17 +97,10 @@ int gcip_pm_get(struct gcip_pm *pm);
  */
 void gcip_pm_put(struct gcip_pm *pm);
 
-/*
- * Same as gcip_pm_put, but the power off will be scheduled later.
- * Caller should use this async gcip_pm_put if they're on the power off path to prevent deadlock,
- * e.g., a workqueue that will be canceled during power off.
- */
-void gcip_pm_put_async(struct gcip_pm *pm);
-
-/* Gets the power up counter. Retures -EAGAIN if device is in power state transition. */
+/* Gets the power up counter. Note that this is checked without PM lock. */
 int gcip_pm_get_count(struct gcip_pm *pm);
 
-/* Checks if device is already on. Retures false if device is off or in power state transition. */
+/* Checks if device is already on. Note that this is checked without PM lock. */
 bool gcip_pm_is_powered(struct gcip_pm *pm);
 
 /* Shuts down the device if @pm->count equals to 0 or @force is true. */
@@ -120,6 +113,43 @@ static inline void gcip_pm_lockdep_assert_held(struct gcip_pm *pm)
 		return;
 
 	lockdep_assert_held(&pm->lock);
+}
+
+/*
+ * Lock the PM lock.
+ * Since all the PM requests will be blocked until gcip_pm_unlock is called, one should use the
+ * gcip_pm_{get,get_if_powered,put} if possible and uses this only if a power state transition can
+ * not be triggered, e.g., in a workqueue that will be canceled during power off or crash handler.
+ */
+static inline void gcip_pm_lock(struct gcip_pm *pm)
+{
+	if (!pm)
+		return;
+
+	mutex_lock(&pm->lock);
+}
+
+/*
+ * Lock the PM lock.
+ * Same as gcip_pm_lock, but returns 1 if the lock has been acquired successfully, and 0 on
+ * contention.
+ */
+static inline int gcip_pm_trylock(struct gcip_pm *pm)
+{
+	if (!pm)
+		return 1;
+
+	return mutex_trylock(&pm->lock);
+}
+
+/* Unlock the PM lock. */
+static inline void gcip_pm_unlock(struct gcip_pm *pm)
+{
+	if (!pm)
+		return;
+
+	lockdep_assert_held(&pm->lock);
+	mutex_unlock(&pm->lock);
 }
 
 #endif /* __GCIP_PM_H__ */

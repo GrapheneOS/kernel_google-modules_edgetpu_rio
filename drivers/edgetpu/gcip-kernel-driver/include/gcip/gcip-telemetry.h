@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * GCIP telemetry: logging and tracing.
  *
@@ -22,6 +22,7 @@
 #define GCIP_FW_LOG_LEVEL_INFO (0)
 #define GCIP_FW_LOG_LEVEL_WARN (-1)
 #define GCIP_FW_LOG_LEVEL_ERROR (-2)
+#define GCIP_FW_LOG_LEVEL_FATAL (-3)
 
 #define GCIP_FW_DMESG_LOG_LEVEL (GCIP_FW_LOG_LEVEL_WARN)
 

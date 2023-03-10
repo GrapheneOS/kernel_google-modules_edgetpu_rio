@@ -328,13 +328,22 @@ long edgetpu_soc_pm_get_rate(struct edgetpu_dev *etdev, int flags)
 	 */
 	switch (TO_PLL_DIV_M(pll_con3)) {
 	case 221:
-		curr_state = TPU_ACTIVE_UUD;
+		curr_state = TPU_ACTIVE_MIN;
+		break;
+	case 222:
+		curr_state = TPU_ACTIVE_ULTRA_LOW;
 		break;
 	case 153:
-		curr_state = TPU_ACTIVE_SUD;
+		curr_state = TPU_ACTIVE_VERY_LOW;
+		break;
+	case 174:
+		curr_state = TPU_ACTIVE_SUB_LOW;
 		break;
 	case 206:
-		curr_state = TPU_ACTIVE_UD;
+		curr_state = TPU_ACTIVE_LOW;
+		break;
+	case 118:
+		curr_state = TPU_ACTIVE_MEDIUM;
 		break;
 	case 182:
 		curr_state = TPU_ACTIVE_NOM;
@@ -567,17 +576,18 @@ void edgetpu_soc_pm_exit(struct edgetpu_dev *etdev)
 	exynos_pm_qos_remove_request(&etdev->soc_data->mif_min);
 }
 
-static int tpu_pause_callback(enum thermal_pause_state action, void *dev)
+static int tpu_pause_callback(enum thermal_pause_state action, void *data)
 {
+	struct gcip_thermal *thermal = data;
 	int ret = -EINVAL;
 
-	if (!dev)
+	if (!thermal)
 		return ret;
 
 	if (action == THERMAL_SUSPEND)
-		ret = gcip_thermal_suspend_device(dev);
+		ret = gcip_thermal_suspend_device(thermal);
 	else if (action == THERMAL_RESUME)
-		ret = gcip_thermal_resume_device(dev);
+		ret = gcip_thermal_resume_device(thermal);
 
 	return ret;
 }
@@ -587,7 +597,7 @@ void edgetpu_soc_thermal_init(struct edgetpu_dev *etdev)
 	struct gcip_thermal *thermal = etdev->thermal;
 	struct notifier_block *nb = gcip_thermal_get_notifier_block(thermal);
 
-	register_tpu_thermal_pause_cb(tpu_pause_callback, thermal->dev);
+	register_tpu_thermal_pause_cb(tpu_pause_callback, thermal);
 
 	if (etdev->soc_data->bcl_dev)
 		exynos_pm_qos_add_notifier(PM_QOS_TPU_FREQ_MAX, nb);

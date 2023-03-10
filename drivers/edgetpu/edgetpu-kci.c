@@ -455,11 +455,18 @@ int edgetpu_kci_update_usage(struct edgetpu_dev *etdev)
 	if (edgetpu_firmware_status_locked(etdev) != GCIP_FW_VALID)
 		goto fw_unlock;
 
-	if (gcip_pm_get_if_powered(etdev->pm, false))
+	/*
+	 * This function may run in a worker that is being canceled when the device is powering
+	 * down, and the power down code holds the PM lock.
+	 * Using trylock to prevent cancel_work_sync() waiting forever.
+	 */
+	if (!gcip_pm_trylock(etdev->pm))
 		goto fw_unlock;
 
-	ret = edgetpu_kci_update_usage_locked(etdev);
-	gcip_pm_put_async(etdev->pm);
+	if (gcip_pm_is_powered(etdev->pm))
+		ret = edgetpu_kci_update_usage_locked(etdev);
+
+	gcip_pm_unlock(etdev->pm);
 
 fw_unlock:
 	edgetpu_firmware_unlock(etdev);
@@ -477,6 +484,7 @@ int edgetpu_kci_update_usage_locked(struct edgetpu_dev *etdev)
 		.dma = {
 			.address = 0,
 			.size = 0,
+			.flags = EDGETPU_USAGE_METRIC_VERSION,
 		},
 	};
 	struct edgetpu_coherent_mem mem;

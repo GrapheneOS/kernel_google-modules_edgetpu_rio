@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Power management interface for GCIP devices.
  *
@@ -113,8 +113,10 @@ static int gcip_pm_get_locked(struct gcip_pm *pm)
 	gcip_pm_lockdep_assert_held(pm);
 
 	if (!pm->count) {
-		pm->power_down_pending = false;
-		ret = pm->power_up(pm->data);
+		if (pm->power_down_pending)
+			pm->power_down_pending = false;
+		else
+			ret = pm->power_up(pm->data);
 	}
 
 	if (!ret)
@@ -163,7 +165,7 @@ int gcip_pm_get(struct gcip_pm *pm)
 	return ret;
 }
 
-static void __gcip_pm_put(struct gcip_pm *pm, bool async)
+void gcip_pm_put(struct gcip_pm *pm)
 {
 	if (!pm)
 		return;
@@ -175,10 +177,7 @@ static void __gcip_pm_put(struct gcip_pm *pm, bool async)
 
 	if (!--pm->count) {
 		pm->power_down_pending = true;
-		if (async)
-			schedule_delayed_work(&pm->power_down_work, 0);
-		else
-			gcip_pm_try_power_down(pm);
+		gcip_pm_try_power_down(pm);
 	}
 
 	dev_dbg(pm->dev, "%s: %d\n", __func__, pm->count);
@@ -187,29 +186,12 @@ unlock:
 	mutex_unlock(&pm->lock);
 }
 
-void gcip_pm_put(struct gcip_pm *pm)
-{
-	__gcip_pm_put(pm, false);
-}
-
-void gcip_pm_put_async(struct gcip_pm *pm)
-{
-	__gcip_pm_put(pm, true);
-}
-
 int gcip_pm_get_count(struct gcip_pm *pm)
 {
-	int count = -EAGAIN;
-
 	if (!pm)
 		return 0;
 
-	if (mutex_trylock(&pm->lock)) {
-		count = pm->count;
-		mutex_unlock(&pm->lock);
-	}
-
-	return count;
+	return pm->count;
 }
 
 bool gcip_pm_is_powered(struct gcip_pm *pm)
