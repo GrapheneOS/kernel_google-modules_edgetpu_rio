@@ -90,6 +90,9 @@ enum gcip_kci_code {
 	GCIP_KCI_CODE_OPEN_DEVICE = 9,
 	GCIP_KCI_CODE_CLOSE_DEVICE = 10,
 	GCIP_KCI_CODE_FIRMWARE_INFO = 11,
+	/* TODO(b/271372136): remove v1 when v1 firmware no longer in use. */
+	GCIP_KCI_CODE_GET_USAGE_V1 = 12,
+	/* Backward compatible define, also update when v1 firmware no longer in use. */
 	GCIP_KCI_CODE_GET_USAGE = 12,
 	GCIP_KCI_CODE_NOTIFY_THROTTLING = 13,
 	GCIP_KCI_CODE_BLOCK_BUS_SPEED_CONTROL = 14,
@@ -99,6 +102,7 @@ enum gcip_kci_code {
 	GCIP_KCI_CODE_UNLINK_OFFLOAD_VMBOX = 18,
 	GCIP_KCI_CODE_FIRMWARE_TRACING_LEVEL = 19,
 	GCIP_KCI_CODE_THERMAL_CONTROL = 20,
+	GCIP_KCI_CODE_GET_USAGE_V2 = 21,
 
 	GCIP_KCI_CODE_RKCI_ACK = 256,
 };

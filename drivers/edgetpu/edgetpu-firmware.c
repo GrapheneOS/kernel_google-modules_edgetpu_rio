@@ -27,6 +27,7 @@
 #include "edgetpu-kci.h"
 #include "edgetpu-sw-watchdog.h"
 #include "edgetpu-telemetry.h"
+#include "edgetpu-usage-stats.h"
 
 static char *firmware_name;
 module_param(firmware_name, charp, 0660);
@@ -339,6 +340,7 @@ static int edgetpu_firmware_run_locked(struct edgetpu_firmware *et_fw,
 				       enum edgetpu_firmware_flags flags)
 {
 	const struct edgetpu_firmware_chip_data *chip_fw = et_fw->p->chip_fw;
+	struct edgetpu_dev *etdev = et_fw->etdev;
 	struct edgetpu_firmware_desc new_fw_desc;
 	int ret;
 
@@ -349,7 +351,7 @@ static int edgetpu_firmware_run_locked(struct edgetpu_firmware *et_fw,
 	if (ret)
 		goto out_failed;
 
-	etdev_dbg(et_fw->etdev, "run fw %s flags=%#x", name, flags);
+	etdev_dbg(etdev, "run fw %s flags=%#x", name, flags);
 	if (chip_fw->prepare_run) {
 		ret = chip_fw->prepare_run(et_fw, &new_fw_desc.buf);
 		if (ret)
@@ -367,6 +369,9 @@ static int edgetpu_firmware_run_locked(struct edgetpu_firmware *et_fw,
 	if (!ret)
 		edgetpu_sw_wdt_start(et_fw->etdev);
 	edgetpu_firmware_set_state(et_fw, ret);
+	/* If previous firmware was metrics v1-only reset that flag and probe this again. */
+	if (etdev->usage_stats)
+		etdev->usage_stats->use_metrics_v1 = false;
 	return ret;
 
 out_unload_new_fw:

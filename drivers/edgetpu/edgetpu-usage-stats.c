@@ -241,23 +241,44 @@ out:
 
 void edgetpu_usage_stats_process_buffer(struct edgetpu_dev *etdev, void *buf)
 {
-	struct edgetpu_usage_header *header = buf;
-	struct edgetpu_usage_metric *metric =
-		(struct edgetpu_usage_metric *)(header + 1);
+	struct edgetpu_usage_stats *ustats = etdev->usage_stats;
+	struct edgetpu_usage_metric *metric;
+	uint metric_size;
+	uint num_metrics;
+	uint version;
 	int i;
 
-	etdev_dbg(etdev, "%s: n=%u sz=%u", __func__,
-		  header->num_metrics, header->metric_size);
-	if (header->metric_size < EDGETPU_USAGE_METRIC_SIZE_V1) {
+	if (!ustats)
+		return;
+
+	/* TODO(b/271372136): remove v1 when v1 firmware no longer in use. */
+	if (ustats->use_metrics_v1) {
+		struct edgetpu_usage_header_v1 *header = buf;
+
+		metric_size = header->metric_size;
+		num_metrics = header->num_metrics;
+		version = 1;
+		metric = (struct edgetpu_usage_metric *)(header + 1);
+	} else {
+		struct edgetpu_usage_header *header = buf;
+
+		metric_size = header->metric_size;
+		num_metrics = header->num_metrics;
+		version = header->version;
+		metric = (struct edgetpu_usage_metric *)((char *)header + header->header_bytes);
+	}
+
+	etdev_dbg(etdev, "%s: v=%u n=%u sz=%u", __func__, version, num_metrics, metric_size);
+	if (metric_size < EDGETPU_USAGE_METRIC_SIZE_V1) {
 		etdev_warn_once(etdev, "fw metric size %u less than minimum %u",
-				header->metric_size, EDGETPU_USAGE_METRIC_SIZE_V1);
+				metric_size, EDGETPU_USAGE_METRIC_SIZE_V1);
 		return;
 	}
 
-	if (header->metric_size > sizeof(struct edgetpu_usage_metric))
+	if (metric_size > sizeof(struct edgetpu_usage_metric))
 		etdev_dbg(etdev, "fw metrics are later version with unknown fields");
 
-	for (i = 0; i < header->num_metrics; i++) {
+	for (i = 0; i < num_metrics; i++) {
 		switch (metric->type) {
 		case EDGETPU_METRIC_TYPE_TPU_USAGE:
 			edgetpu_usage_add(etdev, &metric->tpu_usage);
@@ -287,7 +308,7 @@ void edgetpu_usage_stats_process_buffer(struct edgetpu_dev *etdev, void *buf)
 			break;
 		}
 
-		metric = (struct edgetpu_usage_metric *)((char *)metric + header->metric_size);
+		metric = (struct edgetpu_usage_metric *)((char *)metric + metric_size);
 	}
 }
 
@@ -915,6 +936,7 @@ static struct attribute *usage_stats_dev_attrs[] = {
 static const struct attribute_group usage_stats_attr_group = {
 	.attrs = usage_stats_dev_attrs,
 };
+
 void edgetpu_usage_stats_init(struct edgetpu_dev *etdev)
 {
 	struct edgetpu_usage_stats *ustats;

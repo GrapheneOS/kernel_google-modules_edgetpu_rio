@@ -40,12 +40,14 @@ struct gcip_pm_args {
 	void *data;
 	/*
 	 * Device-specific power up.
-	 * Called with @pm->lock hold and nesting is handled at generic layer.
+	 * Called with @pm->lock held and nesting is handled at generic layer.
+	 * The IP driver may reject power on for such conditions as thermal suspend in this
+	 * callback.
 	 */
 	int (*power_up)(void *data);
 	/*
 	 * Device-specific power down.
-	 * Called with @pm->lock hold and nesting is handled at generic layer.
+	 * Called with @pm->lock held and nesting is handled at generic layer.
 	 * Returning -EAGAIN will trigger a retry after GCIP_ASYNC_POWER_DOWN_RETRY_DELAY ms.
 	 */
 	int (*power_down)(void *data);
@@ -106,7 +108,7 @@ bool gcip_pm_is_powered(struct gcip_pm *pm);
 /* Shuts down the device if @pm->count equals to 0 or @force is true. */
 void gcip_pm_shutdown(struct gcip_pm *pm, bool force);
 
-/* Make sure @pm->lock is hold. */
+/* Make sure @pm->lock is held. */
 static inline void gcip_pm_lockdep_assert_held(struct gcip_pm *pm)
 {
 	if (!pm)

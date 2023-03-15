@@ -11,7 +11,7 @@
 #include <linux/mutex.h>
 
 /* The highest version of usage metrics handled by this driver. */
-#define EDGETPU_USAGE_METRIC_VERSION	1
+#define EDGETPU_USAGE_METRIC_VERSION	2
 
 /*
  * Size in bytes of usage metric v1.
@@ -21,9 +21,17 @@
  */
 #define EDGETPU_USAGE_METRIC_SIZE_V1	20
 
+/* v1 metric header struct. */
+struct edgetpu_usage_header_v1 {
+	uint32_t num_metrics;		/* Number of metrics being reported */
+	uint32_t metric_size;		/* Size of each metric struct */
+};
+
 /* Header struct in the metric buffer. */
 /* Must be kept in sync with firmware struct UsageTrackerHeader */
 struct edgetpu_usage_header {
+	uint16_t header_bytes;		/* Number of bytes in this header */
+	uint16_t version;		/* Metrics version */
 	uint32_t num_metrics;		/* Number of metrics being reported */
 	uint32_t metric_size;		/* Size of each metric struct */
 };
@@ -31,15 +39,24 @@ struct edgetpu_usage_header {
 /*
  * Encapsulate TPU core usage information of a specific application for a
  * specific power state.
- * Must be kept in sync with firmware struct TpuUsage.
+ * Must be kept in sync with firmware struct CoreUsage.
  */
 struct tpu_usage {
 	/* Unique identifier of the application. */
 	int32_t uid;
 	/* The power state of the device (values are chip dependent) */
+	/* Now called operating_point in FW. */
 	uint32_t power_state;
 	/* Duration of usage in microseconds. */
 	uint32_t duration_us;
+
+	/* Following fields are added in metrics v2 */
+
+	/* Compute Core: TPU cluster ID. */
+	/* Called core_id in FW. */
+	uint8_t cluster_id;
+	/* Reserved.  Filling out the next 32-bit boundary. */
+	uint8_t reserved[3];
 };
 
 /*
@@ -49,9 +66,12 @@ struct tpu_usage {
 enum edgetpu_usage_component {
 	/* The device as a whole */
 	EDGETPU_USAGE_COMPONENT_DEVICE = 0,
-	/* Just the TPU core */
+	/* Just the TPU core (scalar core and tiles) */
 	EDGETPU_USAGE_COMPONENT_TPU = 1,
-	EDGETPU_USAGE_COMPONENT_COUNT = 2, /* number of components above */
+	/* Control core (ARM Cortex-R52 CPU) */
+	EDGETPU_USAGE_COMPONENT_CONTROLCORE = 2,
+
+	EDGETPU_USAGE_COMPONENT_COUNT = 3, /* number of components above */
 };
 
 /*
@@ -73,7 +93,7 @@ enum edgetpu_usage_counter_type {
 	EDGETPU_COUNTER_TPU_ACTIVE_CYCLES = 0,
 	/* Number of stalls caused by throttling. */
 	EDGETPU_COUNTER_TPU_THROTTLE_STALLS = 1,
-	/* Number of graph invocations. */
+	/* Number of graph invocations. (Now called kWorkload in FW.) */
 	EDGETPU_COUNTER_INFERENCES = 2,
 	/* Number of TPU offload op invocations. */
 	EDGETPU_COUNTER_TPU_OPS = 3,
@@ -92,7 +112,12 @@ enum edgetpu_usage_counter_type {
 	/* Number of times (firmware)suspend function takes longer than SLA time. */
 	EDGETPU_COUNTER_LONG_SUSPEND = 10,
 
-	EDGETPU_COUNTER_COUNT = 11, /* number of counters above */
+	/* The following counters are added in metrics v2. */
+
+	/* Number of context switches on a compute core. */
+	EDGETPU_COUNTER_CONTEXT_SWITCHES = 11,
+
+	EDGETPU_COUNTER_COUNT = 12, /* number of counters above */
 };
 
 /* Generic counter. Only reported if it has a value larger than 0. */
@@ -102,6 +127,11 @@ struct __packed edgetpu_usage_counter {
 
 	/* Accumulated value since last initialization. */
 	uint64_t value;
+
+	/* Following fields are added in metrics v2 */
+
+	/* Reporting component. */
+	uint8_t component_id;
 };
 
 /* Defines different max watermarks we track. */
@@ -132,15 +162,21 @@ struct __packed edgetpu_usage_max_watermark {
 	 * non-mobile, firmware boot on mobile).
 	 */
 	uint64_t value;
+
+	/* Following fields are added in metrics v2 */
+
+	/* Reporting component. */
+	uint8_t component_id;
 };
 
 /* An enum to identify the tracked firmware threads. */
 /* Must be kept in sync with firmware enum class UsageTrackerThreadId. */
 enum edgetpu_usage_threadid {
-	/* Individual thread IDs are not tracked. */
+	/* Individual thread IDs do not have identifiers assigned. */
+	/* Thread ID 14, used for other IP, is not used for TPU */
 
 	/* Number of task identifiers. */
-	EDGETPU_FW_THREAD_COUNT = 12,
+	EDGETPU_FW_THREAD_COUNT = 14,
 };
 
 /* Statistics related to a single thread in firmware. */
@@ -184,6 +220,8 @@ struct edgetpu_usage_metric {
 #define UID_HASH_BITS 3
 
 struct edgetpu_usage_stats {
+	/* if true the current firmware only implements metrics V1 */
+	bool use_metrics_v1;
 	DECLARE_HASHTABLE(uid_hash_table, UID_HASH_BITS);
 	/* component utilization values reported by firmware */
 	int32_t component_utilization[EDGETPU_USAGE_COMPONENT_COUNT];

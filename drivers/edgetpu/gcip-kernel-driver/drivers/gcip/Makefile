@@ -11,6 +11,7 @@ gcip-objs		:= gcip-alloc-helper.o \
 			   gcip-domain-pool.o \
 			   gcip-firmware.o \
 			   gcip-image-config.o \
+			   gcip-iommu.o \
 			   gcip-kci.o \
 			   gcip-mailbox.o \
 			   gcip-mem-pool.o \

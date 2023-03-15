@@ -519,7 +519,7 @@ static int edgetpu_ioctl_acquire_wakelock(struct edgetpu_client *client)
 
 	if (ret) {
 		etdev_warn_ratelimited(client->etdev,
-				       "wakelock acquire rejected due to thermal suspend");
+		       "wakelock acquire rejected due to device thermal limit exceeded");
 		goto error_client_unlock;
 	}
 

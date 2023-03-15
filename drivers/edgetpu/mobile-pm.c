@@ -11,6 +11,8 @@
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
 
+#include <gcip/gcip-thermal.h>
+
 #include "edgetpu-config.h"
 #include "edgetpu-firmware.h"
 #include "edgetpu-internal.h"
@@ -195,6 +197,12 @@ static int mobile_power_up(void *data)
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
 	int ret;
+
+	if (gcip_thermal_is_device_suspended(etdev->thermal)) {
+		etdev_warn_ratelimited(etdev,
+				       "power up rejected due to device thermal limit exceeded");
+		return -EAGAIN;
+	}
 
 	if (platform_pwr->is_block_down) {
 		int times = 0;
