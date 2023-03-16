@@ -16,6 +16,7 @@
 #include <gcip/gcip-pm.h>
 
 #include "edgetpu-config.h"
+#include "edgetpu-dmabuf.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-iremap-pool.h"
 #include "edgetpu-mmu.h"
@@ -418,6 +419,12 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 	ret = edgetpu_mobile_platform_set_fw_ctx_memory(etmdev);
 	if (ret) {
 		etdev_err(etdev, "Failed to initialize fw context memory: %d", ret);
+		goto out_destroy_thermal;
+	}
+
+	ret = edgetpu_sync_fence_manager_create(etdev);
+	if (ret) {
+		etdev_err(etdev, "Failed to create DMA fence manager: %d", ret);
 		goto out_destroy_thermal;
 	}
 

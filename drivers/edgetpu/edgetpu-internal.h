@@ -30,6 +30,7 @@
 #include <linux/types.h>
 #include <linux/workqueue.h>
 
+#include <gcip/gcip-dma-fence.h>
 #include <gcip/gcip-firmware.h>
 #include <gcip/gcip-pm.h>
 #include <gcip/gcip-thermal.h>
@@ -205,6 +206,7 @@ struct edgetpu_dev {
 	/* Memory pool in instruction remap region */
 	struct edgetpu_mempool *iremap_pool;
 	struct edgetpu_sw_wdt *etdev_sw_wdt;	/* software watchdog */
+	struct gcip_dma_fence_manager *gfence_mgr; /* DMA sync fences manager */
 	/* version read from the firmware binary file */
 	struct edgetpu_fw_version fw_version;
 	atomic_t job_count;	/* times joined to a device group */

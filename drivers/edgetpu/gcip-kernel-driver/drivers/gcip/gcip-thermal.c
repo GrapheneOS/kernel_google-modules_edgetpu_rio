@@ -272,6 +272,24 @@ struct notifier_block *gcip_thermal_get_notifier_block(struct gcip_thermal *ther
 	return &thermal->nb;
 }
 
+static ssize_t state2power_table_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct gcip_thermal *thermal = to_gcip_thermal(dev);
+	ssize_t count = 0;
+	int i;
+	u32 power;
+
+	for (i = 0; i < thermal->num_states; i++) {
+		gcip_thermal_state2power(thermal->cdev, i, &power);
+		count += sysfs_emit_at(buf, count, "%u ", power);
+	}
+	count += sysfs_emit_at(buf, count, "\n");
+
+	return count;
+}
+
+static DEVICE_ATTR_RO(state2power_table);
+
 void gcip_thermal_destroy(struct gcip_thermal *thermal)
 {
 	if (IS_ERR_OR_NULL(thermal))
@@ -388,6 +406,10 @@ static int gcip_thermal_cooling_register(struct gcip_thermal *thermal, const cha
 		return PTR_ERR(thermal->cdev);
 
 	ret = device_create_file(&thermal->cdev->device, &dev_attr_user_vote);
+	if (ret)
+		thermal_cooling_device_unregister(thermal->cdev);
+
+	ret = device_create_file(&thermal->cdev->device, &dev_attr_state2power_table);
 	if (ret)
 		thermal_cooling_device_unregister(thermal->cdev);
 

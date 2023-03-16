@@ -387,11 +387,12 @@ static int edgetpu_ioctl_sync_fence_create(
 	if (copy_from_user(&data, (void __user *)datap, sizeof(data)))
 		return -EFAULT;
 	LOCK(client);
-	if (!client->group)
-		/* TODO(b/258868303): Require a group, disallow creating a fence we can't track. */
-		etdev_warn(client->etdev,
-			   "client creating sync fence not joined to a device group");
-	ret = edgetpu_sync_fence_create(client->group, &data);
+	if (!client->group) {
+		etdev_err(client->etdev, "client creating sync fence not joined to a device group");
+		UNLOCK(client);
+		return -EINVAL;
+	}
+	ret = edgetpu_sync_fence_create(client->etdev, client->group, &data);
 	UNLOCK(client);
 	if (ret)
 		return ret;
@@ -800,6 +801,19 @@ static const struct file_operations mappings_ops = {
 	.release = single_release,
 };
 
+static int syncfences_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, edgetpu_sync_fence_debugfs_show, inode->i_private);
+}
+
+static const struct file_operations syncfences_ops = {
+	.open = syncfences_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.owner = THIS_MODULE,
+	.release = single_release,
+};
+
 static int edgetpu_pm_debugfs_set_wakelock(void *data, u64 val)
 {
 	struct edgetpu_dev *etdev = data;
@@ -824,6 +838,7 @@ static void edgetpu_fs_setup_debugfs(struct edgetpu_dev *etdev)
 	}
 	debugfs_create_file("mappings", 0440, etdev->d_entry,
 			    etdev, &mappings_ops);
+	debugfs_create_file("syncfences", 0440, etdev->d_entry, etdev, &syncfences_ops);
 	debugfs_create_file("wakelock", 0220, etdev->d_entry, etdev,
 			    &fops_wakelock);
 }
@@ -1062,20 +1077,6 @@ void edgetpu_fs_remove(struct edgetpu_dev *etdev)
 	debugfs_remove_recursive(etdev->d_entry);
 }
 
-static int syncfences_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, edgetpu_sync_fence_debugfs_show,
-			   inode->i_private);
-}
-
-static const struct file_operations syncfences_ops = {
-	.open = syncfences_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.owner = THIS_MODULE,
-	.release = single_release,
-};
-
 static void edgetpu_debugfs_global_setup(void)
 {
 	edgetpu_debugfs_dir = debugfs_create_dir("edgetpu", NULL);
@@ -1083,9 +1084,6 @@ static void edgetpu_debugfs_global_setup(void)
 		pr_warn(DRIVER_NAME " error creating edgetpu debugfs dir\n");
 		return;
 	}
-
-	debugfs_create_file("syncfences", 0440, edgetpu_debugfs_dir, NULL,
-			    &syncfences_ops);
 }
 
 int __init edgetpu_fs_init(void)
