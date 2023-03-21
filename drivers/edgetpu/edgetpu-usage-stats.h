@@ -13,6 +13,9 @@
 /* The highest version of usage metrics handled by this driver. */
 #define EDGETPU_USAGE_METRIC_VERSION	2
 
+/* Max # of TPU clusters accounted for in the highest supported metrics version. */
+#define EDGETPU_USAGE_CLUSTERS_MAX	3
+
 /*
  * Size in bytes of usage metric v1.
  * If fewer bytes than this are received then discard the invalid buffer.
@@ -54,6 +57,7 @@ struct tpu_usage {
 
 	/* Compute Core: TPU cluster ID. */
 	/* Called core_id in FW. */
+	/* Note: as of metrics v2 the cluster_id is always zero and is ignored. */
 	uint8_t cluster_id;
 	/* Reserved.  Filling out the next 32-bit boundary. */
 	uint8_t reserved[3];
@@ -69,6 +73,7 @@ enum edgetpu_usage_component {
 	/* Just the TPU core (scalar core and tiles) */
 	EDGETPU_USAGE_COMPONENT_TPU = 1,
 	/* Control core (ARM Cortex-R52 CPU) */
+	/* Note: this component is not reported as of metrics v2. */
 	EDGETPU_USAGE_COMPONENT_CONTROLCORE = 2,
 
 	EDGETPU_USAGE_COMPONENT_COUNT = 3, /* number of components above */
@@ -114,10 +119,16 @@ enum edgetpu_usage_counter_type {
 
 	/* The following counters are added in metrics v2. */
 
-	/* Number of context switches on a compute core. */
+	/* Counter 11 not used on TPU. */
 	EDGETPU_COUNTER_CONTEXT_SWITCHES = 11,
 
-	EDGETPU_COUNTER_COUNT = 12, /* number of counters above */
+	/* Number of TPU Cluster Reconfigurations. */
+	EDGETPU_COUNTER_RECONFIGURATIONS = 12,
+
+	/* Number of TPU Cluster Reconfigurations motivated exclusively by a preemption. */
+	EDGETPU_COUNTER_PREEMPT_RECONFIGURATIONS = 13,
+
+	EDGETPU_COUNTER_COUNT = 14, /* number of counters above */
 };
 
 /* Generic counter. Only reported if it has a value larger than 0. */
@@ -173,10 +184,11 @@ struct __packed edgetpu_usage_max_watermark {
 /* Must be kept in sync with firmware enum class UsageTrackerThreadId. */
 enum edgetpu_usage_threadid {
 	/* Individual thread IDs do not have identifiers assigned. */
-	/* Thread ID 14, used for other IP, is not used for TPU */
+
+	/* Thread ID 14 is not used for TPU */
 
 	/* Number of task identifiers. */
-	EDGETPU_FW_THREAD_COUNT = 14,
+	EDGETPU_FW_THREAD_COUNT = 17,
 };
 
 /* Statistics related to a single thread in firmware. */
@@ -225,8 +237,8 @@ struct edgetpu_usage_stats {
 	DECLARE_HASHTABLE(uid_hash_table, UID_HASH_BITS);
 	/* component utilization values reported by firmware */
 	int32_t component_utilization[EDGETPU_USAGE_COMPONENT_COUNT];
-	int64_t counter[EDGETPU_COUNTER_COUNT];
-	int64_t max_watermark[EDGETPU_MAX_WATERMARK_TYPE_COUNT];
+	int64_t counter[EDGETPU_COUNTER_COUNT][EDGETPU_USAGE_CLUSTERS_MAX];
+	int64_t max_watermark[EDGETPU_MAX_WATERMARK_TYPE_COUNT][EDGETPU_USAGE_CLUSTERS_MAX];
 	int32_t thread_stack_max[EDGETPU_FW_THREAD_COUNT];
 	struct mutex usage_stats_lock;
 };

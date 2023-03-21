@@ -26,6 +26,9 @@
 /* Pre-allocate 1 IOMMU domain per VCID */
 #define EDGETPU_NUM_PREALLOCATED_DOMAINS EDGETPU_NUM_VCIDS
 
+/* Number of TPU clusters for metrics handling. */
+#define EDGETPU_TPU_CLUSTER_COUNT 3
+
 /* Placeholder value */
 #define EDGETPU_TZ_MAILBOX_ID 31
 
