@@ -1035,6 +1035,10 @@ static int edgeptu_fs_add_interface(struct edgetpu_dev *etdev, struct edgetpu_de
 		return ret;
 	}
 
+	if (etiparams->name)
+		etiface->d_entry =
+			debugfs_create_symlink(etiparams->name, edgetpu_debugfs_dir,
+					       etdev->dev_name);
 	return 0;
 }
 
@@ -1070,6 +1074,7 @@ void edgetpu_fs_remove(struct edgetpu_dev *etdev)
 	for (i = 0; i < etdev->num_ifaces; i++) {
 		struct edgetpu_dev_iface *etiface = &etdev->etiface[i];
 
+		debugfs_remove(etiface->d_entry);
 		device_destroy(edgetpu_class, etiface->devno);
 		etiface->etcdev = NULL;
 		cdev_del(&etiface->cdev);
@@ -1125,4 +1130,6 @@ struct dentry *edgetpu_fs_debugfs_dir(void)
 MODULE_DESCRIPTION("Google EdgeTPU file operations");
 MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL v2");
+#ifdef GIT_REPO_TAG
 MODULE_INFO(gitinfo, GIT_REPO_TAG);
+#endif

@@ -276,34 +276,15 @@ static void edgetpu_platform_remove_irq(struct edgetpu_mobile_platform_dev *etmd
 		edgetpu_unregister_irq(etdev, etmdev->irq[i]);
 }
 
-/*
- * Fetch and set the firmware context region from device tree.
- */
-static int
-edgetpu_mobile_platform_set_fw_ctx_memory(struct edgetpu_mobile_platform_dev *etmdev)
+static inline const char *get_driver_commit(void)
 {
-	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
-	struct device *dev = etdev->dev;
-	struct resource r;
-	struct device_node *np;
-	int ret;
-
-	np = of_parse_phandle(dev->of_node, "memory-region", 1);
-	if (!np) {
-		etdev_warn(etdev, "No memory for firmware contexts");
-		return -ENODEV;
-	}
-
-	ret = of_address_to_resource(np, 0, &r);
-	of_node_put(np);
-	if (ret) {
-		etdev_warn(etdev, "No memory address for firmware contexts");
-		return ret;
-	}
-
-	etmdev->fw_ctx_paddr = r.start;
-	etmdev->fw_ctx_size = resource_size(&r);
-	return 0;
+#if IS_ENABLED(CONFIG_MODULE_SCMVERSION)
+	return THIS_MODULE->scmversion;
+#elif defined(GIT_REPO_TAG)
+	return GIT_REPO_TAG;
+#else
+	return "Unknown";
+#endif
 }
 
 static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
@@ -368,6 +349,9 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		goto out_cleanup_fw;
 	}
 
+	INIT_LIST_HEAD(&etmdev->fw_ctx_list);
+	mutex_init(&etmdev->fw_ctx_list_lock);
+
 	/*
 	 * Parses PMU before edgetpu_device_add so edgetpu_chip_pm_create can know whether to set
 	 * the is_block_down op.
@@ -416,12 +400,6 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 	if (ret)
 		etdev_warn(etdev, "Failed to create thermal device: %d", ret);
 
-	ret = edgetpu_mobile_platform_set_fw_ctx_memory(etmdev);
-	if (ret) {
-		etdev_err(etdev, "Failed to initialize fw context memory: %d", ret);
-		goto out_destroy_thermal;
-	}
-
 	ret = edgetpu_sync_fence_manager_create(etdev);
 	if (ret) {
 		etdev_err(etdev, "Failed to create DMA fence manager: %d", ret);
@@ -436,7 +414,8 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		}
 	}
 
-	dev_info(dev, "%s edgetpu initialized. Build: %s", etdev->dev_name, GIT_REPO_TAG);
+	dev_info(dev, "%s edgetpu initialized. Build: %s", etdev->dev_name, get_driver_commit());
+
 	/* Turn the device off unless a client request is already received. */
 	gcip_pm_shutdown(etdev->pm, false);
 

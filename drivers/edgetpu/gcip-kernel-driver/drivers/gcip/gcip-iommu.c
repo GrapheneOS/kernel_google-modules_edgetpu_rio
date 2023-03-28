@@ -102,7 +102,12 @@ static dma_addr_t iovad_alloc_iova_space(struct gcip_iommu_domain *domain, size_
 {
 	unsigned long iova, shift = gcip_iommu_domain_shift(domain);
 
-	iova = alloc_iova_fast(&domain->iova_space.iovad, size >> shift,
+	size = size >> shift;
+
+	if (size < (1 << (IOVA_RANGE_CACHE_MAX_SIZE - 1)))
+		size = roundup_pow_of_two(size);
+
+	iova = alloc_iova_fast(&domain->iova_space.iovad, size,
 			       domain->domain_pool->last_daddr >> shift, true);
 
 	return (dma_addr_t)iova << shift;

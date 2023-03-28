@@ -62,7 +62,7 @@ int edgetpu_thermal_create(struct edgetpu_dev *etdev)
 		.pm = etdev->pm,
 		.dentry = edgetpu_fs_debugfs_dir(),
 		.node_name = EDGETPU_COOLING_NAME,
-		.type = EDGETPU_COOLING_NAME,
+		.type = EDGETPU_COOLING_TYPE,
 		.data = etdev,
 		.get_rate = __edgetpu_thermal_get_rate,
 		.set_rate = __edgetpu_thermal_set_rate,

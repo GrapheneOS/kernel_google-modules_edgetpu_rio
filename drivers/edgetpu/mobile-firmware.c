@@ -13,6 +13,7 @@
 #include <linux/string.h>
 #include <linux/types.h>
 
+#include <gcip/gcip-alloc-helper.h>
 #include <gcip/gcip-image-config.h>
 
 #include "edgetpu.h"
@@ -34,29 +35,69 @@ static int image_config_map(void *data, dma_addr_t daddr, phys_addr_t paddr, siz
 {
 	struct edgetpu_dev *etdev = data;
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
-	bool ns = !(flags & GCIP_IMAGE_CONFIG_FLAGS_SECURE);
+	struct edgetpu_mobile_fw_ctx *fw_ctx;
+	int ret;
 
-	if (ns) {
-		if (paddr + size > etmdev->fw_ctx_size) {
-			etdev_err(etdev, "Insufficient firmware context memory");
-			return -ENOSPC;
-		}
-		/*
-		 * For non-secure mappings the physical addresses in image config are based on the
-		 * firmware context region.
-		 */
-		paddr += etmdev->fw_ctx_paddr;
+	if (flags & GCIP_IMAGE_CONFIG_FLAGS_SECURE)
+		return edgetpu_mmu_add_translation(etdev, daddr, paddr, size,
+						   IOMMU_READ | IOMMU_WRITE, EDGETPU_CONTEXT_KCI);
+
+	fw_ctx = kzalloc(sizeof(*fw_ctx), GFP_KERNEL);
+	if (!fw_ctx)
+		return -ENOMEM;
+
+	fw_ctx->daddr = daddr;
+	fw_ctx->size = size;
+	fw_ctx->sgt = gcip_alloc_noncontiguous(etdev->dev, size, GFP_KERNEL);
+	if (!fw_ctx->sgt) {
+		kfree(fw_ctx);
+		return -ENOMEM;
 	}
 
-	return edgetpu_mmu_add_translation(etdev, daddr, paddr, size,
-					   IOMMU_READ | IOMMU_WRITE, EDGETPU_CONTEXT_KCI);
+	ret = edgetpu_mmu_map_iova_sgt(etdev, daddr, fw_ctx->sgt, DMA_BIDIRECTIONAL, 0,
+				       EDGETPU_CONTEXT_KCI);
+	if (ret) {
+		gcip_free_noncontiguous(fw_ctx->sgt);
+		kfree(fw_ctx);
+		return ret;
+	}
+
+	mutex_lock(&etmdev->fw_ctx_list_lock);
+	list_add_tail(&fw_ctx->list, &etmdev->fw_ctx_list);
+	mutex_unlock(&etmdev->fw_ctx_list_lock);
+
+	return 0;
 }
 
 static void image_config_unmap(void *data, dma_addr_t daddr, size_t size, unsigned int flags)
 {
 	struct edgetpu_dev *etdev = data;
+	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
+	struct edgetpu_mobile_fw_ctx *fw_ctx = NULL, *cur;
 
-	edgetpu_mmu_remove_translation(etdev, daddr, size, EDGETPU_CONTEXT_KCI);
+	if (flags & GCIP_IMAGE_CONFIG_FLAGS_SECURE) {
+		edgetpu_mmu_remove_translation(etdev, daddr, size, EDGETPU_CONTEXT_KCI);
+		return;
+	}
+
+	mutex_lock(&etmdev->fw_ctx_list_lock);
+	list_for_each_entry(cur, &etmdev->fw_ctx_list, list) {
+		if (cur->daddr == daddr && cur->size == size) {
+			fw_ctx = cur;
+			list_del(&cur->list);
+			break;
+		}
+	}
+	mutex_unlock(&etmdev->fw_ctx_list_lock);
+
+	if (fw_ctx) {
+		edgetpu_mmu_unmap_iova_sgt(etdev, daddr, fw_ctx->sgt, DMA_BIDIRECTIONAL,
+					   EDGETPU_CONTEXT_KCI);
+		gcip_free_noncontiguous(fw_ctx->sgt);
+		kfree(fw_ctx);
+	} else {
+		etdev_warn(etdev, "Firmware context region SG table not found.");
+	}
 }
 
 static int mobile_firmware_after_create(struct edgetpu_firmware *et_fw)

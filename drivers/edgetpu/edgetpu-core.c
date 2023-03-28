@@ -657,8 +657,7 @@ int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size,
 			   struct edgetpu_coherent_mem *mem,
 			   enum edgetpu_context_id context_id)
 {
-	const u32 flags = EDGETPU_MMU_32 | EDGETPU_MMU_HOST |
-		EDGETPU_MMU_COHERENT;
+	const u32 flags = EDGETPU_MMU_CC_ACCESS | EDGETPU_MMU_HOST | EDGETPU_MMU_COHERENT;
 
 	mem->vaddr = dma_alloc_coherent(etdev->dev, size, &mem->dma_addr,
 					GFP_KERNEL);

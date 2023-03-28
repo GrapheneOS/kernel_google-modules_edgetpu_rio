@@ -231,6 +231,7 @@ struct edgetpu_dev_iface {
 	struct edgetpu_dev *etdev; /* Pointer to core device struct */
 	dev_t devno; /* char device dev_t */
 	const char *name; /* interface specific device name */
+	struct dentry *d_entry; /* debugfs symlink if not default device name iface */
 };
 
 /* Firmware crash_type codes */
