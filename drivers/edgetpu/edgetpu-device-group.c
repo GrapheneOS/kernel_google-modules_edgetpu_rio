@@ -1263,7 +1263,7 @@ uint edgetpu_group_get_fatal_errors(struct edgetpu_device_group *group)
 	uint fatal_errors;
 
 	mutex_lock(&group->lock);
-	fatal_errors = group->fatal_errors;
+	fatal_errors = edgetpu_group_get_fatal_errors_locked(group);
 	mutex_unlock(&group->lock);
 	return fatal_errors;
 }

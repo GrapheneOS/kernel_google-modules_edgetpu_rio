@@ -190,15 +190,27 @@ edgetpu_device_group_is_disbanded(const struct edgetpu_device_group *group)
 }
 
 /*
- * Returns -ECANCELED if the status of group is ERRORED, otherwise returns
- * -EINVAL.
+ * Return fatal error status for the group.
+ *
+ * Caller holds @group->lock.
+ */
+static inline uint edgetpu_group_get_fatal_errors_locked(struct edgetpu_device_group *group)
+{
+	return group->fatal_errors;
+}
+
+/*
+ * Returns -ECANCELED if the status of group is ERRORED, otherwise returns -EINVAL.
  *
  * Caller holds @group->lock.
  */
 static inline int edgetpu_group_errno(struct edgetpu_device_group *group)
 {
-	if (edgetpu_device_group_is_errored(group))
+	if (edgetpu_device_group_is_errored(group)) {
+		etdev_err(group->etdev, "group %u error status 0x%x\n", group->workload_id,
+			  edgetpu_group_get_fatal_errors_locked(group));
 		return -ECANCELED;
+	}
 	return -EINVAL;
 }
 

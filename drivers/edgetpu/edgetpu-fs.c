@@ -28,6 +28,7 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/uidgid.h>
+#include <trace/events/edgetpu.h>
 
 #include <gcip/gcip-pm.h>
 
@@ -43,9 +44,6 @@
 #include "edgetpu.h"
 
 #include <soc/google/tpu-ext.h>
-
-#define CREATE_TRACE_POINTS
-#include <trace/events/edgetpu.h>
 
 #define DRIVER_VERSION "1.0"
 
