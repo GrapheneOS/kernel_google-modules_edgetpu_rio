@@ -104,8 +104,8 @@ static int edgetpu_external_mailbox_alloc(struct device *edgetpu_dev,
 
 	if (copy_from_user(&req.attr, (void __user *)client_info->attr, sizeof(req.attr))) {
 		if (!client_info->attr)
-			etdev_warn(client->etdev,
-				   "Illegal mailbox attributes, using VII mailbox attrs\n");
+			etdev_dbg(client->etdev,
+				  "Using VII mailbox attrs for external mailbox\n");
 		req.attr = group->mbox_attr;
 	}
 

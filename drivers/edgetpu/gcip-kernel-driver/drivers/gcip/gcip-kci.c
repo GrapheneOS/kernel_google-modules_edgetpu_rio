@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Kernel Control Interface, implements the protocol between AP kernel and GCIP firmware.
  *
@@ -477,7 +477,7 @@ int gcip_kci_init(struct gcip_kci *kci, const struct gcip_kci_args *args)
 	mailbox_args.timeout = args->timeout;
 	mailbox_args.ops = &gcip_mailbox_ops;
 	mailbox_args.data = kci;
-	mailbox_args.ignore_seq_order = false;
+	mailbox_args.ignore_seq_order = true;
 
 	ret = gcip_mailbox_init(&kci->mailbox, &mailbox_args);
 	if (ret)

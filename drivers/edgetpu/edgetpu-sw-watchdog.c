@@ -11,6 +11,7 @@
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 
+#include "edgetpu-device-group.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-kci.h"
 #include "edgetpu-sw-watchdog.h"
@@ -18,14 +19,17 @@
 static bool wdt_disable;
 module_param(wdt_disable, bool, 0660);
 
-/* Worker to execute action callback handler on watchdog bite. */
+/* Worker to handle sw watchdog timeout. */
 static void sw_wdt_handler_work(struct work_struct *work)
 {
 	struct edgetpu_sw_wdt_action_work *et_action_work =
 		container_of(work, struct edgetpu_sw_wdt_action_work, work);
+	struct edgetpu_dev *etdev = et_action_work->etdev;
 
-	if (et_action_work->edgetpu_sw_wdt_handler)
-		et_action_work->edgetpu_sw_wdt_handler(et_action_work->data);
+	etdev_err(etdev, "watchdog restart");
+	etdev->watchdog_timeout_count++;
+	edgetpu_fatal_error_notify(etdev, EDGETPU_ERROR_WATCHDOG_TIMEOUT);
+	edgetpu_firmware_watchdog_restart(etdev);
 }
 
 static void sw_wdt_start(struct edgetpu_sw_wdt *wdt)
@@ -58,20 +62,16 @@ static void sw_wdt_modify_rate(struct edgetpu_sw_wdt *wdt, unsigned long rate)
 	sw_wdt_start(wdt);
 }
 
-void edgetpu_watchdog_bite(struct edgetpu_dev *etdev, bool reset)
+void edgetpu_watchdog_bite(struct edgetpu_dev *etdev)
 {
 	if (!etdev->etdev_sw_wdt)
 		return;
 	/*
 	 * Stop sw wdog delayed worker, to reduce chance this explicit call
 	 * races with a sw wdog timeout.  May be in IRQ context, no sync,
-	 * worker may already be active.  If we race with a sw wdog restart
-	 * and need a chip reset, hopefully the P-channel reset will fail
-	 * and the bigger hammer chip reset will kick in at that point.
+	 * worker may already be active.
 	 */
 	cancel_delayed_work(&etdev->etdev_sw_wdt->dwork);
-	etdev_err(etdev, "watchdog %s", reset ? "reset" : "restart");
-	etdev->reset_needed = reset;
 	schedule_work(&etdev->etdev_sw_wdt->et_action_work.work);
 }
 
@@ -118,6 +118,7 @@ int edgetpu_sw_wdt_create(struct edgetpu_dev *etdev, unsigned long active_ms,
 	etdev_sw_wdt->hrtbeat_jiffs = etdev_sw_wdt->hrtbeat_dormant;
 	INIT_DELAYED_WORK(&etdev_sw_wdt->dwork, sw_wdt_work);
 	INIT_WORK(&etdev_sw_wdt->et_action_work.work, sw_wdt_handler_work);
+	etdev_sw_wdt->et_action_work.etdev = etdev;
 	etdev_sw_wdt->is_wdt_disabled = wdt_disable;
 	etdev->etdev_sw_wdt = etdev_sw_wdt;
 	return 0;
@@ -132,8 +133,6 @@ int edgetpu_sw_wdt_start(struct edgetpu_dev *etdev)
 	wdt = etdev->etdev_sw_wdt;
 	if (!wdt)
 		return -EINVAL;
-	if (!wdt->et_action_work.edgetpu_sw_wdt_handler)
-		etdev_err(etdev, "sw wdt handler not set\n");
 	sw_wdt_start(wdt);
 	return 0;
 }
@@ -170,17 +169,6 @@ void edgetpu_sw_wdt_destroy(struct edgetpu_dev *etdev)
 	if (counter)
 		etdev_warn(etdev, "Unbalanced WDT active counter: %d", counter);
 	kfree(wdt);
-}
-
-void edgetpu_sw_wdt_set_handler(struct edgetpu_dev *etdev,
-				void (*handler_cb)(void *), void *data)
-{
-	struct edgetpu_sw_wdt *et_sw_wdt = etdev->etdev_sw_wdt;
-
-	if (!et_sw_wdt)
-		return;
-	et_sw_wdt->et_action_work.edgetpu_sw_wdt_handler = handler_cb;
-	et_sw_wdt->et_action_work.data = data;
 }
 
 void edgetpu_sw_wdt_inc_active_ref(struct edgetpu_dev *etdev)

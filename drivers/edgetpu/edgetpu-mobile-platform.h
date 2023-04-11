@@ -48,6 +48,17 @@ struct edgetpu_mobile_platform_pwr {
 	void (*post_fw_start)(struct edgetpu_dev *etdev);
 };
 
+struct edgetpu_mobile_fw_ctx {
+	/* SG table for NS firmware context region mappings. */
+	struct sg_table *sgt;
+	/* DMA address of the NS firmware context region. */
+	dma_addr_t daddr;
+	/* Size of the NS firmware context region. */
+	size_t size;
+	/* List of all NS firmware context region mappings for the device. */
+	struct list_head list;
+};
+
 struct edgetpu_mobile_platform_dev {
 	/* Generic edgetpu device */
 	struct edgetpu_dev edgetpu_dev;
@@ -67,10 +78,10 @@ struct edgetpu_mobile_platform_dev {
 	phys_addr_t shared_mem_paddr;
 	/* Size of the shared memory region size */
 	size_t shared_mem_size;
-	/* Physical address of the firmware context region */
-	phys_addr_t fw_ctx_paddr;
-	/* Size of the firmware context region */
-	size_t fw_ctx_size;
+	/* List of all NS firmware context region mappings for the device. */
+	struct list_head fw_ctx_list;
+	/* Lock to protect @fw_ctx_list. */
+	struct mutex fw_ctx_list_lock;
 	/*
 	 * Pointer to GSA device for firmware authentication.
 	 * May be NULL if the chip does not support firmware authentication

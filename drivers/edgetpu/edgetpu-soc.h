@@ -12,7 +12,6 @@
 
 #include "edgetpu-internal.h"
 #include "edgetpu-kci.h"
-#include "edgetpu-thermal.h"
 
 /* SoC-specific calls for the following functions. */
 
@@ -50,6 +49,9 @@ void edgetpu_soc_handle_reverse_kci(struct edgetpu_dev *etdev,
 				    struct gcip_kci_response_element *resp);
 
 /* Init thermal subsystem SoC specifics for TPU */
-void edgetpu_soc_thermal_init(struct edgetpu_thermal *thermal);
+void edgetpu_soc_thermal_init(struct edgetpu_dev *etdev);
+
+/* De-init thermal subsystem SoC specifics for TPU */
+void edgetpu_soc_thermal_exit(struct edgetpu_dev *etdev);
 
 #endif /* __EDGETPU_SOC_H__ */

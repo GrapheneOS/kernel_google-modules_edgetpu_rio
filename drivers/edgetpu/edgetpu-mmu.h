@@ -18,14 +18,14 @@
 
 /* flags for MMU operations */
 
-/* Whether the TPU address to be allocated can be 64-bit wide. */
-#define EDGETPU_MMU_32		(0 << 0)
-#define EDGETPU_MMU_64		(1 << 0)
+/* Whether the TPU address allocated must be accessible to the control cluster. */
+#define EDGETPU_MMU_CC_ACCESS		(0 << 0)
+#define EDGETPU_MMU_CC_NO_ACCESS	(1 << 0)
 /* The memory will be mapped to host DRAM or dma-buf. */
-#define EDGETPU_MMU_HOST	(0 << 1)
-#define EDGETPU_MMU_DMABUF	(1 << 1)
+#define EDGETPU_MMU_HOST		(0 << 1)
+#define EDGETPU_MMU_DMABUF		(1 << 1)
 
-#define EDGETPU_MMU_COHERENT	(1 << 2)
+#define EDGETPU_MMU_COHERENT		(1 << 2)
 
 /*
  * The max possible value of token is (EDGETPU_DOMAIN_TOKEN_END - 1), which
@@ -74,8 +74,8 @@ static inline u32 map_to_mmu_flags(edgetpu_map_flag_t flags)
 {
 	u32 ret = 0;
 
-	ret |= (flags & EDGETPU_MAP_CPU_NONACCESSIBLE) ? EDGETPU_MMU_64 :
-							 EDGETPU_MMU_32;
+	ret |= (flags & EDGETPU_MAP_CPU_NONACCESSIBLE) ? EDGETPU_MMU_CC_NO_ACCESS :
+							 EDGETPU_MMU_CC_ACCESS;
 	ret |= (flags & EDGETPU_MAP_COHERENT) ? EDGETPU_MMU_COHERENT : 0;
 	return ret;
 }

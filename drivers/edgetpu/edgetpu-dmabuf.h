@@ -25,8 +25,10 @@ int edgetpu_map_dmabuf(struct edgetpu_device_group *group,
 /* unmap the dma-buf backed buffer from a device group */
 int edgetpu_unmap_dmabuf(struct edgetpu_device_group *group,
 			 tpu_addr_t tpu_addr);
+/* Creates a DMA sync fence manager. */
+int edgetpu_sync_fence_manager_create(struct edgetpu_dev *etdev);
 /* Create a DMA sync fence via ioctl */
-int edgetpu_sync_fence_create(struct edgetpu_device_group *group,
+int edgetpu_sync_fence_create(struct edgetpu_dev *etdev, struct edgetpu_device_group *group,
 			      struct edgetpu_create_sync_fence_data *datap);
 /* Signal a DMA sync fence, optionally specifying error status */
 int edgetpu_sync_fence_signal(struct edgetpu_signal_sync_fence_data *datap);

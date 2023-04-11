@@ -11,6 +11,8 @@
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
 
+#include <gcip/gcip-thermal.h>
+
 #include "edgetpu-config.h"
 #include "edgetpu-firmware.h"
 #include "edgetpu-internal.h"
@@ -18,6 +20,7 @@
 #include "edgetpu-mailbox.h"
 #include "edgetpu-mobile-platform.h"
 #include "edgetpu-pm.h"
+#include "edgetpu-sw-watchdog.h"
 #include "edgetpu-thermal.h"
 #include "mobile-firmware.h"
 #include "mobile-pm.h"
@@ -30,10 +33,8 @@
 #define BLOCK_DOWN_MAX_DELAY_US 1500
 
 enum edgetpu_pwr_state edgetpu_active_states[EDGETPU_NUM_STATES] = {
-	TPU_ACTIVE_UUD,
-	TPU_ACTIVE_SUD,
-	TPU_ACTIVE_UD,
-	TPU_ACTIVE_NOM,
+	TPU_ACTIVE_MIN, TPU_ACTIVE_ULTRA_LOW, TPU_ACTIVE_VERY_LOW, TPU_ACTIVE_SUB_LOW,
+	TPU_ACTIVE_LOW, TPU_ACTIVE_MEDIUM,    TPU_ACTIVE_NOM,
 };
 
 uint32_t *edgetpu_states_display = edgetpu_active_states;
@@ -146,10 +147,14 @@ static int mobile_pwr_policy_set(void *data, u64 val)
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
-	int ret;
+	int ret = -EAGAIN;
 
 	mutex_lock(&platform_pwr->policy_lock);
-	ret = edgetpu_thermal_kci_if_powered(etdev, val);
+
+	if (!gcip_pm_get_if_powered(etdev->pm, false)) {
+		ret = edgetpu_thermal_set_rate(etdev, val);
+		gcip_pm_put(etdev->pm);
+	}
 
 	if (ret) {
 		dev_err(etmdev->edgetpu_dev.dev,
@@ -184,14 +189,20 @@ DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_pwr_state, mobile_pwr_state_get, mobile_pwr_st
 DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_min_pwr_state, mobile_min_pwr_state_get, mobile_min_pwr_state_set,
 			"%llu\n");
 
-static int mobile_power_down(struct edgetpu_pm *etpm);
+static int mobile_power_down(void *data);
 
-static int mobile_power_up(struct edgetpu_pm *etpm)
+static int mobile_power_up(void *data)
 {
-	struct edgetpu_dev *etdev = etpm->etdev;
+	struct edgetpu_dev *etdev = (struct edgetpu_dev *)data;
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
 	int ret;
+
+	if (gcip_thermal_is_device_suspended(etdev->thermal)) {
+		etdev_warn_ratelimited(etdev,
+				       "power up rejected due to device thermal limit exceeded");
+		return -EAGAIN;
+	}
 
 	if (platform_pwr->is_block_down) {
 		int times = 0;
@@ -205,7 +216,7 @@ static int mobile_power_up(struct edgetpu_pm *etpm)
 			return -EAGAIN;
 	}
 
-	etdev_info(etpm->etdev, "Powering up\n");
+	etdev_info(etdev, "Powering up\n");
 
 	ret = pm_runtime_get_sync(etdev->dev);
 	if (ret) {
@@ -229,25 +240,25 @@ static int mobile_power_up(struct edgetpu_pm *etpm)
 	}
 
 	if (!etdev->firmware)
-		return 0;
+		goto out;
 
 	/*
 	 * Why this function uses edgetpu_firmware_*_locked functions without explicitly holding
 	 * edgetpu_firmware_lock:
 	 *
-	 * edgetpu_pm_get() is called in two scenarios - one is when the firmware loading is
+	 * gcip_pm_get() is called in two scenarios - one is when the firmware loading is
 	 * attempting, another one is when the user-space clients need the device be powered
 	 * (usually through acquiring the wakelock).
 	 *
 	 * For the first scenario edgetpu_firmware_is_loading() below shall return true.
 	 * For the second scenario we are indeed called without holding the firmware lock, but the
-	 * firmware loading procedures (i.e. the first scenario) always call edgetpu_pm_get() before
-	 * changing the firmware state, and edgetpu_pm_get() is blocked until this function
+	 * firmware loading procedures (i.e. the first scenario) always call gcip_pm_get() before
+	 * changing the firmware state, and gcip_pm_get() is blocked until this function
 	 * finishes. In short, we are protected by the PM lock.
 	 */
 
 	if (edgetpu_firmware_is_loading(etdev))
-		return 0;
+		goto out;
 
 	/* attempt firmware run */
 	switch (edgetpu_firmware_status_locked(etdev)) {
@@ -260,12 +271,16 @@ static int mobile_power_up(struct edgetpu_pm *etpm)
 	default:
 		break;
 	}
-	if (ret) {
-		mobile_power_down(etpm);
-	} else {
-		if (platform_pwr->post_fw_start)
-			platform_pwr->post_fw_start(etdev);
-	}
+
+	if (ret)
+		mobile_power_down(etdev);
+	else if (platform_pwr->post_fw_start)
+		platform_pwr->post_fw_start(etdev);
+
+out:
+	if (!ret)
+		edgetpu_mailbox_restore_active_mailbox_queues(etdev);
+
 	return ret;
 }
 
@@ -277,15 +292,17 @@ static void mobile_firmware_down(struct edgetpu_dev *etdev)
 		etdev_warn(etdev, "firmware shutdown failed: %d", ret);
 }
 
-static int mobile_power_down(struct edgetpu_pm *etpm)
+static int mobile_power_down(void *data)
 {
-	struct edgetpu_dev *etdev = etpm->etdev;
+	struct edgetpu_dev *etdev = (struct edgetpu_dev *)data;
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
 	int res = 0;
 	int min_state = platform_pwr->min_state;
 
 	etdev_info(etdev, "Powering down\n");
+
+	edgetpu_sw_wdt_stop(etdev);
 
 	if (min_state >= MIN_ACTIVE_STATE) {
 		etdev_info(etdev, "Power down skipped due to min state = %d\n", min_state);
@@ -342,10 +359,10 @@ static int mobile_power_down(struct edgetpu_pm *etpm)
 	return 0;
 }
 
-static int mobile_pm_after_create(struct edgetpu_pm *etpm)
+static int mobile_pm_after_create(void *data)
 {
 	int ret;
-	struct edgetpu_dev *etdev = etpm->etdev;
+	struct edgetpu_dev *etdev = (struct edgetpu_dev *)data;
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	struct device *dev = etdev->dev;
 	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
@@ -354,9 +371,8 @@ static int mobile_pm_after_create(struct edgetpu_pm *etpm)
 
 	ret = pm_runtime_get_sync(dev);
 	if (ret) {
-		pm_runtime_put_noidle(dev);
 		dev_err(dev, "pm_runtime_get_sync returned %d\n", ret);
-		return ret;
+		goto err_pm_runtime_put;
 	}
 
 	mutex_init(&platform_pwr->policy_lock);
@@ -374,17 +390,31 @@ static int mobile_pm_after_create(struct edgetpu_pm *etpm)
 		debugfs_create_file("policy", 0660, platform_pwr->debugfs_dir, etdev,
 				    &fops_tpu_pwr_policy);
 	}
-	return edgetpu_soc_pm_init(etdev);
+
+	ret = edgetpu_soc_pm_init(etdev);
+	if (ret)
+		goto err_debugfs_remove;
+
+	return 0;
+
+err_debugfs_remove:
+	debugfs_remove_recursive(platform_pwr->debugfs_dir);
+
+err_pm_runtime_put:
+	pm_runtime_put_noidle(dev);
+	pm_runtime_disable(dev);
+
+	return ret;
 }
 
-static void mobile_pm_before_destroy(struct edgetpu_pm *etpm)
+static void mobile_pm_before_destroy(void *data)
 {
-	struct edgetpu_dev *etdev = etpm->etdev;
+	struct edgetpu_dev *etdev = (struct edgetpu_dev *)data;
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
 
 	debugfs_remove_recursive(platform_pwr->debugfs_dir);
-	pm_runtime_disable(etpm->etdev->dev);
+	pm_runtime_disable(etdev->dev);
 	edgetpu_soc_pm_exit(etdev);
 }
 

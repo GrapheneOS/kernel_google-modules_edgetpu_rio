@@ -15,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/string.h> /* memcpy */
 
+#include <gcip/gcip-pm.h>
 #include <gcip/gcip-telemetry.h>
 
 #include "edgetpu-firmware.h"
@@ -440,8 +441,9 @@ int edgetpu_kci_update_usage(struct edgetpu_dev *etdev)
 	int ret = -EAGAIN;
 
 	/* Quick return if device is already powered down. */
-	if (!edgetpu_is_powered(etdev))
+	if (!gcip_pm_is_powered(etdev->pm))
 		return -EAGAIN;
+
 	/*
 	 * Lockout change in f/w load/unload status during usage update.
 	 * Skip usage update if the firmware is being updated now or is not
@@ -452,17 +454,19 @@ int edgetpu_kci_update_usage(struct edgetpu_dev *etdev)
 
 	if (edgetpu_firmware_status_locked(etdev) != GCIP_FW_VALID)
 		goto fw_unlock;
+
 	/*
-	 * This function may run in a worker that is being canceled when the
-	 * device is powering down, and the power down code holds the PM lock.
+	 * This function may run in a worker that is being canceled when the device is powering
+	 * down, and the power down code holds the PM lock.
 	 * Using trylock to prevent cancel_work_sync() waiting forever.
 	 */
-	if (!edgetpu_pm_trylock(etdev->pm))
+	if (!gcip_pm_trylock(etdev->pm))
 		goto fw_unlock;
 
-	if (edgetpu_is_powered(etdev))
+	if (gcip_pm_is_powered(etdev->pm))
 		ret = edgetpu_kci_update_usage_locked(etdev);
-	edgetpu_pm_unlock(etdev->pm);
+
+	gcip_pm_unlock(etdev->pm);
 
 fw_unlock:
 	edgetpu_firmware_unlock(etdev);
@@ -476,10 +480,11 @@ int edgetpu_kci_update_usage_locked(struct edgetpu_dev *etdev)
 {
 #define EDGETPU_USAGE_BUFFER_SIZE	4096
 	struct gcip_kci_command_element cmd = {
-		.code = GCIP_KCI_CODE_GET_USAGE,
+		.code = GCIP_KCI_CODE_GET_USAGE_V2,
 		.dma = {
 			.address = 0,
 			.size = 0,
+			.flags = EDGETPU_USAGE_METRIC_VERSION,
 		},
 	};
 	struct edgetpu_coherent_mem mem;
@@ -494,17 +499,26 @@ int edgetpu_kci_update_usage_locked(struct edgetpu_dev *etdev)
 		return ret;
 	}
 
+	/* TODO(b/271372136): remove v1 when v1 firmware no longer in use. */
+retry_v1:
+	if (etdev->usage_stats && etdev->usage_stats->use_metrics_v1)
+		cmd.code = GCIP_KCI_CODE_GET_USAGE_V1;
 	cmd.dma.address = mem.tpu_addr;
 	cmd.dma.size = EDGETPU_USAGE_BUFFER_SIZE;
 	memset(mem.vaddr, 0, sizeof(struct edgetpu_usage_header));
 	ret = gcip_kci_send_cmd_return_resp(etdev->etkci->kci, &cmd, &resp);
 
-	if (ret == GCIP_KCI_ERROR_UNIMPLEMENTED || ret == GCIP_KCI_ERROR_UNAVAILABLE)
+	if (ret == GCIP_KCI_ERROR_UNIMPLEMENTED || ret == GCIP_KCI_ERROR_UNAVAILABLE) {
+		if (etdev->usage_stats && !etdev->usage_stats->use_metrics_v1) {
+			etdev->usage_stats->use_metrics_v1 = true;
+			goto retry_v1;
+		}
 		etdev_dbg(etdev, "firmware does not report usage\n");
-	else if (ret == GCIP_KCI_ERROR_OK)
+	} else if (ret == GCIP_KCI_ERROR_OK) {
 		edgetpu_usage_stats_process_buffer(etdev, mem.vaddr);
-	else if (ret != -ETIMEDOUT)
+	} else if (ret != -ETIMEDOUT) {
 		etdev_warn_once(etdev, "error %d", ret);
+	}
 
 	edgetpu_iremap_free(etdev, &mem, EDGETPU_CONTEXT_KCI);
 
@@ -632,6 +646,40 @@ int edgetpu_kci_block_bus_speed_control(struct edgetpu_dev *etdev, bool block)
 
 	if (!etdev->etkci)
 		return -ENODEV;
+
+	return gcip_kci_send_cmd(etdev->etkci->kci, &cmd);
+}
+
+int edgetpu_kci_firmware_tracing_level(void *data, unsigned long level, unsigned long *active_level)
+{
+	struct edgetpu_dev *etdev = data;
+	struct gcip_kci_command_element cmd = {
+		.code = GCIP_KCI_CODE_FIRMWARE_TRACING_LEVEL,
+		.dma = {
+			.flags = (u32)level,
+		},
+	};
+	struct gcip_kci_response_element resp;
+	int ret;
+
+	if (!etdev->etkci)
+		return -ENODEV;
+
+	ret = gcip_kci_send_cmd_return_resp(etdev->etkci->kci, &cmd, &resp);
+	if (ret == GCIP_KCI_ERROR_OK)
+		*active_level = resp.retval;
+
+	return ret;
+}
+
+int edgetpu_kci_thermal_control(struct edgetpu_dev *etdev, bool enable)
+{
+	struct gcip_kci_command_element cmd = {
+		.code = GCIP_KCI_CODE_THERMAL_CONTROL,
+		.dma = {
+			.flags = (u32)enable,
+		},
+	};
 
 	return gcip_kci_send_cmd(etdev->etkci->kci, &cmd);
 }

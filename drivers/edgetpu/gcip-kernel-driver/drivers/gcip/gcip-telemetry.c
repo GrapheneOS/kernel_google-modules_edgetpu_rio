@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * GCIP telemetry: logging and tracing.
  *
@@ -126,6 +126,7 @@ void gcip_telemetry_fw_log(struct gcip_telemetry *log)
 		case GCIP_FW_LOG_LEVEL_WARN:
 			dev_warn(dev, "%s", buffer);
 			break;
+		case GCIP_FW_LOG_LEVEL_FATAL:
 		case GCIP_FW_LOG_LEVEL_ERROR:
 			dev_err(dev, "%s", buffer);
 			break;

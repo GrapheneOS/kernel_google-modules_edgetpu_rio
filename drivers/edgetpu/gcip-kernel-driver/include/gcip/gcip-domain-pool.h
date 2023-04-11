@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * GCIP IOMMU domain allocator.
  *
@@ -8,8 +8,11 @@
 #ifndef __GCIP_DOMAIN_POOL_H__
 #define __GCIP_DOMAIN_POOL_H__
 
+#include <linux/device.h>
 #include <linux/idr.h>
 #include <linux/iommu.h>
+#include <linux/mutex.h>
+#include <linux/types.h>
 
 struct gcip_domain_pool {
 	struct ida idp; /* ID allocator to keep track of used domains. */
@@ -20,6 +23,8 @@ struct gcip_domain_pool {
 	unsigned int size;
 	struct iommu_domain **array; /* Array holding the pointers to pre-allocated domains. */
 	struct device *dev; /* The device used for logging warnings/errors. */
+	struct list_head dynamic_domains; /* Tracks dynamically allocated domains for cleanup. */
+	struct mutex lock; /* Protects dynamic_domains. */
 };
 
 /*

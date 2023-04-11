@@ -9,17 +9,18 @@
 #include <linux/debugfs.h>
 #include <linux/workqueue.h>
 
+#include <gcip/gcip-pm.h>
+
 #include "edgetpu-config.h"
 #include "edgetpu-debug-dump.h"
 #include "edgetpu-device-group.h"
 #include "edgetpu-iremap-pool.h"
 #include "edgetpu-kci.h"
-#include "edgetpu-pm.h"
 
 static int edgetpu_get_debug_dump_set(void *data, u64 val)
 {
 	struct edgetpu_dev *etdev = data;
-	int ret = edgetpu_pm_get(etdev->pm);
+	int ret = gcip_pm_get(etdev->pm);
 
 	if (ret)
 		return ret;
@@ -28,7 +29,7 @@ static int edgetpu_get_debug_dump_set(void *data, u64 val)
 		etdev_warn(etdev, "FW refused debug dump request: %d", ret);
 		ret = -EOPNOTSUPP;
 	}
-	edgetpu_pm_put(etdev->pm);
+	gcip_pm_put(etdev->pm);
 	return ret;
 }
 
