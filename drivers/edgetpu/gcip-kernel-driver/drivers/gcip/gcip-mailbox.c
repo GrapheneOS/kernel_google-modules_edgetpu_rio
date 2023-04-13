@@ -24,7 +24,8 @@
 #define GET_CMD_QUEUE_HEAD() mailbox->ops->get_cmd_queue_head(mailbox)
 #define GET_CMD_QUEUE_TAIL() mailbox->ops->get_cmd_queue_tail(mailbox)
 #define INC_CMD_QUEUE_TAIL(inc) mailbox->ops->inc_cmd_queue_tail(mailbox, inc)
-#define ACQUIRE_CMD_QUEUE_LOCK(try) mailbox->ops->acquire_cmd_queue_lock(mailbox, try)
+#define ACQUIRE_CMD_QUEUE_LOCK(try, atomic)                                                        \
+	mailbox->ops->acquire_cmd_queue_lock(mailbox, try, atomic)
 #define RELEASE_CMD_QUEUE_LOCK() mailbox->ops->release_cmd_queue_lock(mailbox)
 
 #define GET_CMD_ELEM_SEQ(cmd) mailbox->ops->get_cmd_elem_seq(mailbox, cmd)
@@ -35,7 +36,8 @@
 #define GET_RESP_QUEUE_HEAD() mailbox->ops->get_resp_queue_head(mailbox)
 #define INC_RESP_QUEUE_HEAD(inc) mailbox->ops->inc_resp_queue_head(mailbox, inc)
 #define GET_RESP_QUEUE_TAIL() mailbox->ops->get_resp_queue_tail(mailbox)
-#define ACQUIRE_RESP_QUEUE_LOCK(try) mailbox->ops->acquire_resp_queue_lock(mailbox, try)
+#define ACQUIRE_RESP_QUEUE_LOCK(try, atomic)                                                       \
+	mailbox->ops->acquire_resp_queue_lock(mailbox, try, atomic)
 #define RELEASE_RESP_QUEUE_LOCK() mailbox->ops->release_resp_queue_lock(mailbox)
 
 #define GET_RESP_ELEM_SEQ(resp) mailbox->ops->get_resp_elem_seq(mailbox, resp)
@@ -107,12 +109,13 @@ static void gcip_mailbox_del_wait_resp(struct gcip_mailbox *mailbox, void *resp)
  * Returns 0 on success, or -ENOMEM if failed on allocation.
  */
 static int gcip_mailbox_push_wait_resp(struct gcip_mailbox *mailbox, void *resp,
-				       struct gcip_mailbox_resp_awaiter *awaiter)
+				       struct gcip_mailbox_resp_awaiter *awaiter, bool atomic)
 {
-	struct gcip_mailbox_wait_list_elem *entry = kzalloc(sizeof(*entry), GFP_KERNEL);
+	struct gcip_mailbox_wait_list_elem *entry;
 	unsigned long flags;
 	int ret;
 
+	entry = kzalloc(sizeof(*entry), atomic ? GFP_ATOMIC : GFP_KERNEL);
 	if (!entry)
 		return -ENOMEM;
 
@@ -148,8 +151,9 @@ static int gcip_mailbox_enqueue_cmd(struct gcip_mailbox *mailbox, void *cmd, voi
 {
 	int ret = 0;
 	u32 tail;
+	bool atomic = false;
 
-	ACQUIRE_CMD_QUEUE_LOCK(false);
+	ACQUIRE_CMD_QUEUE_LOCK(false, &atomic);
 
 	SET_CMD_ELEM_SEQ(cmd, mailbox->cur_seq);
 	/*
@@ -177,7 +181,7 @@ static int gcip_mailbox_enqueue_cmd(struct gcip_mailbox *mailbox, void *cmd, voi
 		/* Adds @resp to the wait_list only if the cmd can be pushed successfully. */
 		SET_RESP_ELEM_SEQ(resp, GET_CMD_ELEM_SEQ(cmd));
 		SET_RESP_ELEM_STATUS(resp, GCIP_MAILBOX_STATUS_WAITING_RESPONSE);
-		ret = gcip_mailbox_push_wait_resp(mailbox, resp, awaiter);
+		ret = gcip_mailbox_push_wait_resp(mailbox, resp, awaiter, atomic);
 		if (ret)
 			goto out;
 	}
@@ -324,9 +328,10 @@ static void *gcip_mailbox_fetch_responses(struct gcip_mailbox *mailbox, u32 *tot
 	const u32 elem_size = mailbox->resp_elem_size;
 	void *ret = NULL; /* Array of responses. */
 	void *prev_ptr = NULL; /* Temporary pointer to realloc ret. */
+	bool atomic = false;
 
 	/* Someone is working on consuming - we can leave early. */
-	if (!ACQUIRE_RESP_QUEUE_LOCK(true))
+	if (!ACQUIRE_RESP_QUEUE_LOCK(true, &atomic))
 		goto out;
 
 	head = GET_RESP_QUEUE_HEAD();
@@ -349,7 +354,8 @@ static void *gcip_mailbox_fetch_responses(struct gcip_mailbox *mailbox, u32 *tot
 			break;
 
 		prev_ptr = ret;
-		ret = krealloc(prev_ptr, (total + count) * elem_size, GFP_KERNEL);
+		ret = krealloc(prev_ptr, (total + count) * elem_size,
+			       atomic ? GFP_ATOMIC : GFP_KERNEL);
 		/*
 		 * Out-of-memory, we can return the previously fetched responses if any, or ENOMEM
 		 * otherwise.
@@ -387,8 +393,9 @@ static int gcip_mailbox_fetch_one_response(struct gcip_mailbox *mailbox, void *r
 {
 	u32 head;
 	u32 tail;
+	bool atomic;
 
-	if (!ACQUIRE_RESP_QUEUE_LOCK(true))
+	if (!ACQUIRE_RESP_QUEUE_LOCK(true, &atomic))
 		return 0;
 
 	head = GET_RESP_QUEUE_HEAD();

@@ -36,7 +36,7 @@ static void gcip_kci_inc_cmd_queue_tail(struct gcip_mailbox *mailbox, u32 inc)
 	kci->ops->inc_cmd_queue_tail(kci, inc);
 }
 
-static int gcip_kci_acquire_cmd_queue_lock(struct gcip_mailbox *mailbox, bool try)
+static int gcip_kci_acquire_cmd_queue_lock(struct gcip_mailbox *mailbox, bool try, bool *atomic)
 {
 	struct gcip_kci *kci = gcip_mailbox_get_data(mailbox);
 
@@ -102,9 +102,11 @@ static void gcip_kci_inc_resp_queue_head(struct gcip_mailbox *mailbox, u32 inc)
 	kci->ops->inc_resp_queue_head(kci, inc);
 }
 
-static int gcip_kci_acquire_resp_queue_lock(struct gcip_mailbox *mailbox, bool try)
+static int gcip_kci_acquire_resp_queue_lock(struct gcip_mailbox *mailbox, bool try, bool *atomic)
 {
 	struct gcip_kci *kci = gcip_mailbox_get_data(mailbox);
+
+	*atomic = true;
 
 	if (try)
 		return spin_trylock(&kci->resp_queue_lock);

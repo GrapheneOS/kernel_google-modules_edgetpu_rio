@@ -209,6 +209,13 @@ int edgetpu_kci_firmware_tracing_level(void *data, unsigned long level,
 int edgetpu_kci_thermal_control(struct edgetpu_dev *etdev, bool enable);
 
 /*
+ * Sends device properties to firmware.
+ * The KCI command will be sent only when @device_prop is initialized.
+ */
+int edgetpu_kci_set_device_properties(struct edgetpu_kci *gkci,
+				      struct edgetpu_dev_prop *device_prop);
+
+/*
  * Send an ack to the FW after handling a reverse KCI request.
  *
  * The FW may wait for a response from the kernel for an RKCI request so a

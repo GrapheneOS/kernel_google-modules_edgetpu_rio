@@ -452,6 +452,7 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 	etdev->state = ETDEV_STATE_NOFW;
 	etdev->freq_count = 0;
 	mutex_init(&etdev->freq_lock);
+	mutex_init(&etdev->device_prop.lock);
 	ret = edgetpu_soc_init(etdev);
 	if (ret)
 		return ret;

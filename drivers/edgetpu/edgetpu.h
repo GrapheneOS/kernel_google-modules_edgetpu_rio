@@ -608,4 +608,18 @@ struct edgetpu_test_ext_ioctl {
 #define EDGETPU_TEST_EXTERNAL \
 	_IOW(EDGETPU_IOCTL_BASE, 33, struct edgetpu_test_ext_ioctl)
 
+/* The size of device properties pre-agreed with firmware */
+#define EDGETPU_DEV_PROP_SIZE 256
+/*
+ * struct edgetpu_set_device_properties_ioctl
+ * @opaque:		Device properties defined by runtime and firmware.
+ */
+struct edgetpu_set_device_properties_ioctl {
+	__u8 opaque[EDGETPU_DEV_PROP_SIZE];
+};
+
+/* Registers device properties which will be passed down to firmware on boot. */
+#define EDGETPU_SET_DEVICE_PROPERTIES                                                              \
+	_IOW(EDGETPU_IOCTL_BASE, 34, struct edgetpu_set_device_properties_ioctl)
+
 #endif /* __EDGETPU_H__ */

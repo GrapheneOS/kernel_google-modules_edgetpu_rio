@@ -133,14 +133,18 @@ struct gcip_mailbox_ops {
 	void (*inc_cmd_queue_tail)(struct gcip_mailbox *mailbox, u32 inc);
 	/*
 	 * Acquires the lock of cmd_queue. If @try is true, "_trylock" functions can be used, but
-	 * also it can be ignored. Returns 1 if succeed, 0 if failed. This callback will be called
-	 * in the following situations.
+	 * also it can be ignored. If the lock will make the context atomic, @atomic must be set
+	 * to true. Returns 1 if succeed, 0 if failed.
+	 *
+	 * This callback will be called in the following situations.
 	 * - Enqueue a command to the cmd_queue.
+	 *
 	 * The lock can be mutex lock or spin lock and it will be released by calling
 	 * `release_cmd_queue_lock` callback.
+	 *
 	 * Context: normal.
 	 */
-	int (*acquire_cmd_queue_lock)(struct gcip_mailbox *mailbox, bool try);
+	int (*acquire_cmd_queue_lock)(struct gcip_mailbox *mailbox, bool try, bool *atomic);
 	/*
 	 * Releases the lock of cmd_queue which is acquired by calling `acquire_cmd_queue_lock`.
 	 * Context: normal.
@@ -184,15 +188,20 @@ struct gcip_mailbox_ops {
 	void (*inc_resp_queue_head)(struct gcip_mailbox *mailbox, u32 inc);
 	/*
 	 * Acquires the lock of resp_queue. If @try is true, "_trylock" functions can be used, but
-	 * also it can be ignored. Returns 1 if succeed, 0 if failed. This callback will be called
-	 * in the following situations.
+	 * also it can be ignored. If the lock will make the context atomic, @atomic must be set
+	 * to true. Returns 1 if succeed, 0 if failed.
+	 *
+	 * This callback will be called in the following situations:
 	 * - Fetch response(s) from the resp_queue.
+	 *
 	 * The lock can be a mutex lock or a spin lock. However, if @try is considered and the
 	 * "_trylock" is used, it must be a spin lock only.
+	 *
 	 * The lock will be released by calling `release_resp_queue_lock` callback.
+	 *
 	 * Context: normal and in_interrupt().
 	 */
-	int (*acquire_resp_queue_lock)(struct gcip_mailbox *mailbox, bool try);
+	int (*acquire_resp_queue_lock)(struct gcip_mailbox *mailbox, bool try, bool *atomic);
 	/*
 	 * Releases the lock of resp_queue which is acquired by calling `acquire_resp_queue_lock`.
 	 * Context: normal and in_interrupt().

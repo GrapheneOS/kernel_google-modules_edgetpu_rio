@@ -16,12 +16,19 @@
 #include <linux/of.h>
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
+#include <linux/version.h>
 
 #include <gcip/gcip-domain-pool.h>
 #include <gcip/gcip-iommu.h>
 #include <gcip/gcip-mem-pool.h>
 
-#define HAS_IOVAD_BEST_FIT_ALGO (IS_ENABLED(CONFIG_GCIP_TEST) || IS_ENABLED(CONFIG_ANDROID))
+/*
+ * TODO(b/277649169) Best fit IOVA allocator was removed in 6.1 GKI
+ * The API needs to either be upstreamed, integrated into this driver, or disabled for 6.1
+ * compatibility. For now, disable best-fit on all non-Android kernels and any GKI > 5.15.
+ */
+#define HAS_IOVAD_BEST_FIT_ALGO (LINUX_VERSION_CODE < KERNEL_VERSION(5, 16, 0) && \
+				 (IS_ENABLED(CONFIG_GCIP_TEST) || IS_ENABLED(CONFIG_ANDROID)))
 
 /* Macros for manipulating @gcip_map_flags parameter. */
 #define GCIP_MAP_FLAGS_GET_VALUE(ATTR, flags)                                                      \
@@ -104,8 +111,17 @@ static dma_addr_t iovad_alloc_iova_space(struct gcip_iommu_domain *domain, size_
 
 	size = size >> shift;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 17, 0)
+	/*
+	 * alloc_iova_fast() makes use of a cache of recently freed IOVA pages which does not
+	 * behave correctly for non-power-of-two amounts of pages. Round up the number of
+	 * pages being allocated to ensure it's a safe number of pages.
+	 *
+	 * This rounding is done automatically as of 5.17
+	 */
 	if (size < (1 << (IOVA_RANGE_CACHE_MAX_SIZE - 1)))
 		size = roundup_pow_of_two(size);
+#endif
 
 	iova = alloc_iova_fast(&domain->iova_space.iovad, size,
 			       domain->domain_pool->last_daddr >> shift, true);

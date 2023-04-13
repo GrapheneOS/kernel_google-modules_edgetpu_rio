@@ -684,6 +684,28 @@ int edgetpu_kci_thermal_control(struct edgetpu_dev *etdev, bool enable)
 	return gcip_kci_send_cmd(etdev->etkci->kci, &cmd);
 }
 
+int edgetpu_kci_set_device_properties(struct edgetpu_kci *etkci, struct edgetpu_dev_prop *dev_prop)
+{
+	struct gcip_kci_command_element cmd = {
+		.code = GCIP_KCI_CODE_SET_DEVICE_PROPERTIES,
+	};
+	int ret = 0;
+
+	if (!etkci || !etkci->kci)
+		return -ENODEV;
+
+	mutex_lock(&dev_prop->lock);
+	if (!dev_prop->initialized)
+		goto out;
+
+	ret = edgetpu_kci_send_cmd_with_data(etkci, &cmd, &dev_prop->opaque,
+					     sizeof(dev_prop->opaque));
+
+out:
+	mutex_unlock(&dev_prop->lock);
+	return ret;
+}
+
 int edgetpu_kci_resp_rkci_ack(struct edgetpu_dev *etdev, struct gcip_kci_response_element *rkci_cmd)
 {
 	struct gcip_kci_command_element cmd = {

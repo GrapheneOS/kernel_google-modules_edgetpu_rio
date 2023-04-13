@@ -655,6 +655,26 @@ static int edgetpu_ioctl_test_external(struct edgetpu_client *client,
 	return ret;
 }
 
+static int
+edgetpu_ioctl_set_device_properties(struct edgetpu_dev *etdev,
+				    struct edgetpu_set_device_properties_ioctl __user *argp)
+{
+	struct edgetpu_dev_prop *device_prop = &etdev->device_prop;
+	struct edgetpu_set_device_properties_ioctl ibuf;
+
+	if (copy_from_user(&ibuf, argp, sizeof(ibuf)))
+		return -EFAULT;
+
+	mutex_lock(&device_prop->lock);
+
+	memcpy(&device_prop->opaque, &ibuf.opaque, sizeof(device_prop->opaque));
+	device_prop->initialized = true;
+
+	mutex_unlock(&device_prop->lock);
+
+	return 0;
+}
+
 long edgetpu_ioctl(struct file *file, uint cmd, ulong arg)
 {
 	struct edgetpu_client *client = file->private_data;
@@ -748,6 +768,9 @@ long edgetpu_ioctl(struct file *file, uint cmd, ulong arg)
 		break;
 	case EDGETPU_TEST_EXTERNAL:
 		ret = edgetpu_ioctl_test_external(client, argp);
+		break;
+	case EDGETPU_SET_DEVICE_PROPERTIES:
+		ret = edgetpu_ioctl_set_device_properties(client->etdev, argp);
 		break;
 	default:
 		return -ENOTTY; /* unknown command */
