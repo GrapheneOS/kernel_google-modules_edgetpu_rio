@@ -29,6 +29,8 @@
 #include <linux/uaccess.h>
 #include <linux/uidgid.h>
 
+#include <gcip/gcip-pm.h>
+
 #include "edgetpu-config.h"
 #include "edgetpu-device-group.h"
 #include "edgetpu-dmabuf.h"
@@ -36,7 +38,6 @@
 #include "edgetpu-internal.h"
 #include "edgetpu-kci.h"
 #include "edgetpu-mapping.h"
-#include "edgetpu-pm.h"
 #include "edgetpu-telemetry.h"
 #include "edgetpu-wakelock.h"
 #include "edgetpu.h"
@@ -124,7 +125,7 @@ static int edgetpu_fs_release(struct inode *inode, struct file *file)
 
 	/* count was zero if client previously released its wake lock */
 	if (wakelock_count)
-		edgetpu_pm_put(etdev->pm);
+		gcip_pm_put(etdev->pm);
 	return 0;
 }
 
@@ -214,7 +215,7 @@ static int edgetpu_ioctl_finalize_group(struct edgetpu_client *client)
 	if (!group)
 		goto out_unlock;
 	/* Finalization has to be performed with device on. */
-	ret = edgetpu_pm_get(client->etdev->pm);
+	ret = gcip_pm_get(client->etdev->pm);
 	if (ret) {
 		etdev_err(client->etdev, "%s: pm_get failed (%d)",
 			  __func__, ret);
@@ -227,7 +228,7 @@ static int edgetpu_ioctl_finalize_group(struct edgetpu_client *client)
 	edgetpu_wakelock_lock(client->wakelock);
 	ret = edgetpu_device_group_finalize(group);
 	edgetpu_wakelock_unlock(client->wakelock);
-	edgetpu_pm_put(client->etdev->pm);
+	gcip_pm_put(client->etdev->pm);
 out_unlock:
 	UNLOCK(client);
 	return ret;
@@ -386,11 +387,12 @@ static int edgetpu_ioctl_sync_fence_create(
 	if (copy_from_user(&data, (void __user *)datap, sizeof(data)))
 		return -EFAULT;
 	LOCK(client);
-	if (!client->group)
-		/* TODO(b/258868303): Require a group, disallow creating a fence we can't track. */
-		etdev_warn(client->etdev,
-			   "client creating sync fence not joined to a device group");
-	ret = edgetpu_sync_fence_create(client->group, &data);
+	if (!client->group) {
+		etdev_err(client->etdev, "client creating sync fence not joined to a device group");
+		UNLOCK(client);
+		return -EINVAL;
+	}
+	ret = edgetpu_sync_fence_create(client->etdev, client->group, &data);
 	UNLOCK(client);
 	if (ret)
 		return ret;
@@ -483,7 +485,7 @@ static int edgetpu_ioctl_release_wakelock(struct edgetpu_client *client)
 	if (!count) {
 		if (client->group)
 			edgetpu_group_close_and_detach_mailbox(client->group);
-		edgetpu_pm_put(client->etdev->pm);
+		gcip_pm_put(client->etdev->pm);
 	}
 	edgetpu_wakelock_unlock(client->wakelock);
 	UNLOCK(client);
@@ -499,7 +501,7 @@ static int edgetpu_ioctl_acquire_wakelock(struct edgetpu_client *client)
 {
 	int count = 0;
 	int ret = 0;
-	struct edgetpu_thermal *thermal = client->etdev->thermal;
+	struct gcip_thermal *thermal = client->etdev->thermal;
 
 	trace_edgetpu_acquire_wakelock_start(current->pid);
 
@@ -512,19 +514,17 @@ static int edgetpu_ioctl_acquire_wakelock(struct edgetpu_client *client)
 	 */
 	client->pid = current->pid;
 	client->tgid = current->tgid;
-	edgetpu_thermal_lock(thermal);
-	if (edgetpu_thermal_is_suspended(thermal))
+	if (gcip_thermal_is_device_suspended(thermal))
 		/* TPU is thermal suspended, so fail acquiring wakelock */
 		ret = -EAGAIN;
-	edgetpu_thermal_unlock(thermal);
 
 	if (ret) {
 		etdev_warn_ratelimited(client->etdev,
-				       "wakelock acquire rejected due to thermal suspend");
+		       "wakelock acquire rejected due to device thermal limit exceeded");
 		goto error_client_unlock;
 	}
 
-	ret = edgetpu_pm_get(client->etdev->pm);
+	ret = gcip_pm_get(client->etdev->pm);
 	if (ret) {
 		etdev_warn(client->etdev, "pm_get failed (%d)", ret);
 		goto error_client_unlock;
@@ -551,7 +551,7 @@ error_wakelock_unlock:
 
 	/* Balance the power up count due to pm_get above.*/
 	if (ret || count)
-		edgetpu_pm_put(client->etdev->pm);
+		gcip_pm_put(client->etdev->pm);
 
 error_client_unlock:
 	UNLOCK(client);
@@ -801,15 +801,28 @@ static const struct file_operations mappings_ops = {
 	.release = single_release,
 };
 
+static int syncfences_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, edgetpu_sync_fence_debugfs_show, inode->i_private);
+}
+
+static const struct file_operations syncfences_ops = {
+	.open = syncfences_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.owner = THIS_MODULE,
+	.release = single_release,
+};
+
 static int edgetpu_pm_debugfs_set_wakelock(void *data, u64 val)
 {
 	struct edgetpu_dev *etdev = data;
 	int ret = 0;
 
 	if (val)
-		ret = edgetpu_pm_get(etdev->pm);
+		ret = gcip_pm_get(etdev->pm);
 	else
-		edgetpu_pm_put(etdev->pm);
+		gcip_pm_put(etdev->pm);
 	return ret;
 }
 DEFINE_DEBUGFS_ATTRIBUTE(fops_wakelock, NULL, edgetpu_pm_debugfs_set_wakelock,
@@ -825,6 +838,7 @@ static void edgetpu_fs_setup_debugfs(struct edgetpu_dev *etdev)
 	}
 	debugfs_create_file("mappings", 0440, etdev->d_entry,
 			    etdev, &mappings_ops);
+	debugfs_create_file("syncfences", 0440, etdev->d_entry, etdev, &syncfences_ops);
 	debugfs_create_file("wakelock", 0220, etdev->d_entry, etdev,
 			    &fops_wakelock);
 }
@@ -1021,6 +1035,10 @@ static int edgeptu_fs_add_interface(struct edgetpu_dev *etdev, struct edgetpu_de
 		return ret;
 	}
 
+	if (etiparams->name)
+		etiface->d_entry =
+			debugfs_create_symlink(etiparams->name, edgetpu_debugfs_dir,
+					       etdev->dev_name);
 	return 0;
 }
 
@@ -1056,26 +1074,13 @@ void edgetpu_fs_remove(struct edgetpu_dev *etdev)
 	for (i = 0; i < etdev->num_ifaces; i++) {
 		struct edgetpu_dev_iface *etiface = &etdev->etiface[i];
 
+		debugfs_remove(etiface->d_entry);
 		device_destroy(edgetpu_class, etiface->devno);
 		etiface->etcdev = NULL;
 		cdev_del(&etiface->cdev);
 	}
 	debugfs_remove_recursive(etdev->d_entry);
 }
-
-static int syncfences_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, edgetpu_sync_fence_debugfs_show,
-			   inode->i_private);
-}
-
-static const struct file_operations syncfences_ops = {
-	.open = syncfences_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.owner = THIS_MODULE,
-	.release = single_release,
-};
 
 static void edgetpu_debugfs_global_setup(void)
 {
@@ -1084,9 +1089,6 @@ static void edgetpu_debugfs_global_setup(void)
 		pr_warn(DRIVER_NAME " error creating edgetpu debugfs dir\n");
 		return;
 	}
-
-	debugfs_create_file("syncfences", 0440, edgetpu_debugfs_dir, NULL,
-			    &syncfences_ops);
 }
 
 int __init edgetpu_fs_init(void)
@@ -1128,4 +1130,6 @@ struct dentry *edgetpu_fs_debugfs_dir(void)
 MODULE_DESCRIPTION("Google EdgeTPU file operations");
 MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL v2");
+#ifdef GIT_REPO_TAG
 MODULE_INFO(gitinfo, GIT_REPO_TAG);
+#endif

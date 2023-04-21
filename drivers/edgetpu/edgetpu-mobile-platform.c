@@ -13,13 +13,17 @@
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 
+#include <gcip/gcip-pm.h>
+
 #include "edgetpu-config.h"
+#include "edgetpu-dmabuf.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-iremap-pool.h"
 #include "edgetpu-mmu.h"
 #include "edgetpu-mobile-platform.h"
 #include "edgetpu-soc.h"
 #include "edgetpu-telemetry.h"
+#include "edgetpu-thermal.h"
 #include "mobile-firmware.h"
 #include "mobile-pm.h"
 
@@ -56,7 +60,7 @@ static int edgetpu_platform_setup_fw_region(struct edgetpu_mobile_platform_dev *
 	struct resource r;
 	struct device_node *np;
 	int err;
-	size_t region_map_size = EDGETPU_DEFAULT_FW_SIZE_MAX + EDGETPU_DEFAULT_REMAPPED_DATA_SIZE;
+	size_t region_map_size = EDGETPU_MAX_FW_LIMIT;
 
 	np = of_parse_phandle(dev->of_node, "memory-region", 0);
 	if (!np) {
@@ -93,7 +97,7 @@ static int edgetpu_platform_setup_fw_region(struct edgetpu_mobile_platform_dev *
 	}
 
 	etmdev->fw_region_paddr = r.start;
-	etmdev->fw_region_size = EDGETPU_DEFAULT_FW_SIZE_MAX;
+	etmdev->fw_region_size = EDGETPU_DEFAULT_FW_LIMIT;
 
 	etmdev->remapped_data_addr = EDGETPU_INSTRUCTION_REMAP_BASE + etmdev->fw_region_size;
 	etmdev->remapped_data_size = EDGETPU_DEFAULT_REMAPPED_DATA_SIZE;
@@ -272,34 +276,15 @@ static void edgetpu_platform_remove_irq(struct edgetpu_mobile_platform_dev *etmd
 		edgetpu_unregister_irq(etdev, etmdev->irq[i]);
 }
 
-/*
- * Fetch and set the firmware context region from device tree.
- */
-static int
-edgetpu_mobile_platform_set_fw_ctx_memory(struct edgetpu_mobile_platform_dev *etmdev)
+static inline const char *get_driver_commit(void)
 {
-	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
-	struct device *dev = etdev->dev;
-	struct resource r;
-	struct device_node *np;
-	int ret;
-
-	np = of_parse_phandle(dev->of_node, "memory-region", 1);
-	if (!np) {
-		etdev_warn(etdev, "No memory for firmware contexts");
-		return -ENODEV;
-	}
-
-	ret = of_address_to_resource(np, 0, &r);
-	of_node_put(np);
-	if (ret) {
-		etdev_warn(etdev, "No memory address for firmware contexts");
-		return ret;
-	}
-
-	etmdev->fw_ctx_paddr = r.start;
-	etmdev->fw_ctx_size = resource_size(&r);
-	return 0;
+#if IS_ENABLED(CONFIG_MODULE_SCMVERSION)
+	return THIS_MODULE->scmversion;
+#elif defined(GIT_REPO_TAG)
+	return GIT_REPO_TAG;
+#else
+	return "Unknown";
+#endif
 }
 
 static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
@@ -364,6 +349,9 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		goto out_cleanup_fw;
 	}
 
+	INIT_LIST_HEAD(&etmdev->fw_ctx_list);
+	mutex_init(&etmdev->fw_ctx_list_lock);
+
 	/*
 	 * Parses PMU before edgetpu_device_add so edgetpu_chip_pm_create can know whether to set
 	 * the is_block_down op.
@@ -408,30 +396,35 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		goto out_tel_exit;
 	}
 
-	etdev_dbg(etdev, "Creating thermal device");
-	etdev->thermal = devm_tpu_thermal_create(etdev->dev, etdev);
-	ret = edgetpu_mobile_platform_set_fw_ctx_memory(etmdev);
+	ret = edgetpu_thermal_create(etdev);
+	if (ret)
+		etdev_warn(etdev, "Failed to create thermal device: %d", ret);
+
+	ret = edgetpu_sync_fence_manager_create(etdev);
 	if (ret) {
-		etdev_err(etdev, "Failed to initialize fw context memory: %d", ret);
-		goto out_destroy_fw;
+		etdev_err(etdev, "Failed to create DMA fence manager: %d", ret);
+		goto out_destroy_thermal;
 	}
 
 	if (etmdev->after_probe) {
 		ret = etmdev->after_probe(etmdev);
 		if (ret) {
 			dev_err(dev, "after_probe callback failed: %d", ret);
-			goto out_destroy_fw;
+			goto out_destroy_thermal;
 		}
 	}
 
-	dev_info(dev, "%s edgetpu initialized. Build: %s", etdev->dev_name, GIT_REPO_TAG);
+	dev_info(dev, "%s edgetpu initialized. Build: %s", etdev->dev_name, get_driver_commit());
+
 	/* Turn the device off unless a client request is already received. */
-	edgetpu_pm_shutdown(etdev, false);
+	gcip_pm_shutdown(etdev->pm, false);
 
 	edgetpu_debug_pointer = etdev;
 
 	return 0;
-out_destroy_fw:
+
+out_destroy_thermal:
+	edgetpu_thermal_destroy(etdev);
 	edgetpu_mobile_firmware_destroy(etdev);
 out_tel_exit:
 	edgetpu_telemetry_exit(etdev);
@@ -445,7 +438,7 @@ out_cleanup_fw:
 	edgetpu_platform_cleanup_fw_region(etmdev);
 out_shutdown:
 	dev_dbg(dev, "Probe finished with error %d, powering down", ret);
-	edgetpu_pm_shutdown(etdev, true);
+	gcip_pm_shutdown(etdev->pm, true);
 	return ret;
 }
 
@@ -454,15 +447,16 @@ static int edgetpu_mobile_platform_remove(struct platform_device *pdev)
 	struct edgetpu_dev *etdev = platform_get_drvdata(pdev);
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 
+	edgetpu_thermal_destroy(etdev);
 	edgetpu_mobile_firmware_destroy(etdev);
 	edgetpu_platform_remove_irq(etmdev);
-	edgetpu_pm_get(etdev->pm);
+	gcip_pm_get(etdev->pm);
 	edgetpu_telemetry_exit(etdev);
 	edgetpu_device_remove(etdev);
 	edgetpu_iremap_pool_destroy(etdev);
 	edgetpu_platform_cleanup_fw_region(etmdev);
-	edgetpu_pm_put(etdev->pm);
-	edgetpu_pm_shutdown(etdev, true);
+	gcip_pm_put(etdev->pm);
+	gcip_pm_shutdown(etdev->pm, true);
 	edgetpu_mobile_pm_destroy(etdev);
 
 	edgetpu_debug_pointer = NULL;

@@ -22,6 +22,8 @@
 #include <linux/types.h>
 #include <linux/uidgid.h>
 
+#include <gcip/gcip-firmware.h>
+
 #include "edgetpu-config.h"
 #include "edgetpu-debug-dump.h"
 #include "edgetpu-device-group.h"
@@ -29,6 +31,7 @@
 #include "edgetpu-kci.h"
 #include "edgetpu-mailbox.h"
 #include "edgetpu-mmu.h"
+#include "edgetpu-pm.h"
 #include "edgetpu-soc.h"
 #include "edgetpu-sw-watchdog.h"
 #include "edgetpu-telemetry.h"
@@ -392,6 +395,24 @@ int edgetpu_get_state_errno_locked(struct edgetpu_dev *etdev)
 	return 0;
 }
 
+static struct gcip_fw_tracing *edgetpu_firmware_tracing_create(struct edgetpu_dev *etdev)
+{
+	const struct gcip_fw_tracing_args fw_tracing_args = {
+		.dev = etdev->dev,
+		.pm = etdev->pm,
+		.dentry = edgetpu_fs_debugfs_dir(),
+		.data = etdev,
+		.set_level = edgetpu_kci_firmware_tracing_level,
+	};
+
+	return gcip_firmware_tracing_create(&fw_tracing_args);
+}
+
+static void edgetpu_firmware_tracing_destroy(struct gcip_fw_tracing *fw_tracing)
+{
+	gcip_firmware_tracing_destroy(fw_tracing);
+}
+
 int edgetpu_device_add(struct edgetpu_dev *etdev,
 		       const struct edgetpu_mapped_resource *regs,
 		       const struct edgetpu_iface_params *iface_params,
@@ -487,6 +508,12 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 	if (ret)
 		etdev_warn(etdev, "debug dump init fail: %d", ret);
 
+	etdev->fw_tracing = edgetpu_firmware_tracing_create(etdev);
+	if (IS_ERR(etdev->fw_tracing)) {
+		etdev_warn(etdev, "firmware tracing create fail: %ld", PTR_ERR(etdev->fw_tracing));
+		etdev->fw_tracing = NULL;
+	}
+
 	edgetpu_chip_init(etdev);
 	/* No limit on DMA segment size */
 	dma_set_max_seg_size(etdev->dev, UINT_MAX);
@@ -506,6 +533,7 @@ remove_dev:
 void edgetpu_device_remove(struct edgetpu_dev *etdev)
 {
 	edgetpu_chip_exit(etdev);
+	edgetpu_firmware_tracing_destroy(etdev->fw_tracing);
 	edgetpu_debug_dump_exit(etdev);
 	edgetpu_mailbox_remove_all(etdev->mailbox_manager);
 	edgetpu_usage_stats_exit(etdev);
@@ -629,8 +657,7 @@ int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size,
 			   struct edgetpu_coherent_mem *mem,
 			   enum edgetpu_context_id context_id)
 {
-	const u32 flags = EDGETPU_MMU_32 | EDGETPU_MMU_HOST |
-		EDGETPU_MMU_COHERENT;
+	const u32 flags = EDGETPU_MMU_CC_ACCESS | EDGETPU_MMU_HOST | EDGETPU_MMU_COHERENT;
 
 	mem->vaddr = dma_alloc_coherent(etdev->dev, size, &mem->dma_addr,
 					GFP_KERNEL);
@@ -666,8 +693,8 @@ void edgetpu_handle_firmware_crash(struct edgetpu_dev *etdev,
 		etdev_err(etdev, "firmware unrecoverable crash");
 		etdev->firmware_crash_count++;
 		edgetpu_fatal_error_notify(etdev, EDGETPU_ERROR_FW_CRASH);
-		/* Restart firmware without chip reset */
-		edgetpu_watchdog_bite(etdev, false);
+		/* Restart firmware */
+		edgetpu_watchdog_bite(etdev);
 	} else {
 		etdev_err(etdev, "firmware non-fatal crash event: %u",
 			  crash_type);

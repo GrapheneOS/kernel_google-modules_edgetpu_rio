@@ -15,6 +15,9 @@
 #include <linux/string.h>
 #include <linux/types.h>
 
+#include <gcip/gcip-pm.h>
+#include <gcip/gcip-thermal.h>
+
 #include "edgetpu.h"
 #include "edgetpu-debug-dump.h"
 #include "edgetpu-device-group.h"
@@ -22,9 +25,9 @@
 #include "edgetpu-firmware-util.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-kci.h"
-#include "edgetpu-pm.h"
 #include "edgetpu-sw-watchdog.h"
 #include "edgetpu-telemetry.h"
+#include "edgetpu-usage-stats.h"
 
 static char *firmware_name;
 module_param(firmware_name, charp, 0660);
@@ -177,7 +180,11 @@ static int edgetpu_firmware_handshake(struct edgetpu_firmware *et_fw)
 	if (ret)
 		etdev_warn(etdev, "telemetry KCI error: %d", ret);
 
-	ret = edgetpu_thermal_restore(etdev);
+	ret = gcip_firmware_tracing_restore_on_powering(etdev->fw_tracing);
+	if (ret)
+		etdev_warn(etdev, "firmware tracing restore error: %d", ret);
+
+	ret = gcip_thermal_restore_on_powering(etdev->thermal);
 	if (ret)
 		etdev_warn(etdev, "thermal restore error: %d", ret);
 
@@ -187,9 +194,9 @@ static int edgetpu_firmware_handshake(struct edgetpu_firmware *et_fw)
 }
 
 /*
- * Do edgetpu_pm_get() but prevent it from running the loaded firmware.
+ * Do gcip_pm_get() but prevent it from running the loaded firmware.
  *
- * On success, caller must later call edgetpu_pm_put() to decrease the reference count.
+ * On success, caller must later call gcip_pm_put() to decrease the reference count.
  *
  * Caller holds firmware lock.
  */
@@ -201,7 +208,7 @@ static int edgetpu_firmware_pm_get(struct edgetpu_firmware *et_fw)
 	/* Prevent platform-specific code from trying to run the previous firmware */
 	et_fw->p->status = GCIP_FW_LOADING;
 	etdev_dbg(et_fw->etdev, "Requesting power up for firmware run\n");
-	ret = edgetpu_pm_get(et_fw->etdev->pm);
+	ret = gcip_pm_get(et_fw->etdev->pm);
 	if (ret)
 		et_fw->p->status = prev;
 	return ret;
@@ -333,6 +340,7 @@ static int edgetpu_firmware_run_locked(struct edgetpu_firmware *et_fw,
 				       enum edgetpu_firmware_flags flags)
 {
 	const struct edgetpu_firmware_chip_data *chip_fw = et_fw->p->chip_fw;
+	struct edgetpu_dev *etdev = et_fw->etdev;
 	struct edgetpu_firmware_desc new_fw_desc;
 	int ret;
 
@@ -343,7 +351,7 @@ static int edgetpu_firmware_run_locked(struct edgetpu_firmware *et_fw,
 	if (ret)
 		goto out_failed;
 
-	etdev_dbg(et_fw->etdev, "run fw %s flags=%#x", name, flags);
+	etdev_dbg(etdev, "run fw %s flags=%#x", name, flags);
 	if (chip_fw->prepare_run) {
 		ret = chip_fw->prepare_run(et_fw, &new_fw_desc.buf);
 		if (ret)
@@ -361,6 +369,9 @@ static int edgetpu_firmware_run_locked(struct edgetpu_firmware *et_fw,
 	if (!ret)
 		edgetpu_sw_wdt_start(et_fw->etdev);
 	edgetpu_firmware_set_state(et_fw, ret);
+	/* If previous firmware was metrics v1-only reset that flag and probe this again. */
+	if (etdev->usage_stats)
+		etdev->usage_stats->use_metrics_v1 = false;
 	return ret;
 
 out_unload_new_fw:
@@ -388,7 +399,7 @@ int edgetpu_firmware_run(struct edgetpu_dev *etdev, const char *name,
 	ret = edgetpu_firmware_pm_get(et_fw);
 	if (!ret) {
 		ret = edgetpu_firmware_run_locked(et_fw, name, flags);
-		edgetpu_pm_put(etdev->pm);
+		gcip_pm_put(etdev->pm);
 	}
 
 	edgetpu_firmware_load_unlock(etdev);
@@ -589,15 +600,13 @@ static const struct attribute_group edgetpu_firmware_attr_group = {
 	.attrs = dev_attrs,
 };
 
-static void edgetpu_firmware_wdt_timeout_action(void *data)
+void edgetpu_firmware_watchdog_restart(struct edgetpu_dev *etdev)
 {
 	int ret;
-	struct edgetpu_dev *etdev = data;
 	struct edgetpu_firmware *et_fw = etdev->firmware;
 
-	etdev->watchdog_timeout_count++;
 	/* Don't attempt f/w restart if device is off. */
-	if (!edgetpu_is_powered(etdev))
+	if (!gcip_pm_is_powered(etdev->pm))
 		return;
 
 	/*
@@ -605,7 +614,6 @@ static void edgetpu_firmware_wdt_timeout_action(void *data)
 	 * groups the CLOSE_DEVICE KCIs won't be sent.
 	 */
 	edgetpu_handshake_clear_fw_state(&etdev->mailbox_manager->open_devices);
-	edgetpu_fatal_error_notify(etdev, EDGETPU_ERROR_WATCHDOG_TIMEOUT);
 
 	/* Another procedure is loading the firmware, let it do the work. */
 	if (edgetpu_firmware_is_loading(etdev))
@@ -617,7 +625,7 @@ static void edgetpu_firmware_wdt_timeout_action(void *data)
 	ret = edgetpu_firmware_pm_get(et_fw);
 	if (!ret) {
 		ret = edgetpu_firmware_restart_locked(etdev, true);
-		edgetpu_pm_put(etdev->pm);
+		gcip_pm_put(etdev->pm);
 	}
 	edgetpu_firmware_unlock(etdev);
 }
@@ -663,10 +671,7 @@ int edgetpu_firmware_create(struct edgetpu_dev *etdev,
 	ret = edgetpu_sw_wdt_create(etdev, EDGETPU_ACTIVE_DEV_BEAT_MS,
 				    EDGETPU_DORMANT_DEV_BEAT_MS);
 	if (ret)
-		etdev_err(etdev, "Failed to create sw wdt instance\n");
-	else
-		edgetpu_sw_wdt_set_handler(
-			etdev, edgetpu_firmware_wdt_timeout_action, etdev);
+		etdev_warn(etdev, "Failed to create software watchdog\n");
 	return 0;
 
 out_device_remove_group:

@@ -14,6 +14,8 @@
 #include <linux/mmzone.h> /* MAX_ORDER_NR_PAGES */
 #include <linux/slab.h>
 
+#include <gcip/gcip-pm.h>
+
 #include "edgetpu-device-group.h"
 #include "edgetpu-iremap-pool.h"
 #include "edgetpu-kci.h"
@@ -938,7 +940,12 @@ static int edgetpu_mailbox_external_alloc_enable(struct edgetpu_client *client,
 	group = edgetpu_device_group_get(client->group);
 	mutex_unlock(&client->group_lock);
 
-	if (edgetpu_pm_get_if_powered(group->etdev->pm, false)) {
+	if (gcip_pm_get_if_powered(group->etdev->pm, true)) {
+		mutex_lock(&group->lock);
+		ret = edgetpu_mailbox_external_alloc(group, req);
+		mutex_unlock(&group->lock);
+		goto out;
+	} else {
 		mutex_lock(&group->lock);
 		ret = edgetpu_mailbox_external_alloc(group, req);
 		if (ret) {
@@ -948,16 +955,11 @@ static int edgetpu_mailbox_external_alloc_enable(struct edgetpu_client *client,
 		edgetpu_mailbox_init_external_mailbox(group->ext_mailbox);
 		ret = edgetpu_mailbox_activate_external_mailbox(group);
 		mutex_unlock(&group->lock);
-		edgetpu_pm_put(group->etdev->pm);
-		goto out;
-	} else {
-		mutex_lock(&group->lock);
-		ret = edgetpu_mailbox_external_alloc(group, req);
-		mutex_unlock(&group->lock);
+		gcip_pm_put(group->etdev->pm);
 		goto out;
 	}
 err:
-	edgetpu_pm_put(group->etdev->pm);
+	gcip_pm_put(group->etdev->pm);
 out:
 	edgetpu_device_group_put(group);
 	return ret;
@@ -975,15 +977,15 @@ static int edgetpu_mailbox_external_disable_free(struct edgetpu_client *client)
 	group = edgetpu_device_group_get(client->group);
 	mutex_unlock(&client->group_lock);
 
-	if (edgetpu_pm_get_if_powered(group->etdev->pm, false)) {
-		mutex_lock(&group->lock);
-		edgetpu_mailbox_external_disable_free_locked(group);
-		mutex_unlock(&group->lock);
-		edgetpu_pm_put(group->etdev->pm);
-	} else {
+	if (gcip_pm_get_if_powered(group->etdev->pm, true)) {
 		mutex_lock(&group->lock);
 		edgetpu_mailbox_external_free(group);
 		mutex_unlock(&group->lock);
+	} else {
+		mutex_lock(&group->lock);
+		edgetpu_mailbox_external_disable_free_locked(group);
+		mutex_unlock(&group->lock);
+		gcip_pm_put(group->etdev->pm);
 	}
 
 	edgetpu_device_group_put(group);
@@ -1133,11 +1135,11 @@ int edgetpu_mailbox_activate_bulk(struct edgetpu_dev *etdev, u32 mailbox_map, s1
 	mutex_unlock(&eh->lock);
 	/*
 	 * We are observing OPEN_DEVICE KCI fails while other KCIs (usage update / shutdown) still
-	 * succeed and no firmware crash is reported. Kick off the firmware restart when we are
-	 * facing this and hope this can rescue the device from the bad state.
+	 * succeed and no firmware crash is reported. Kick off a firmware restart when we are
+	 * facing this and hope it can rescue the device from the bad state.
 	 */
 	if (ret == -ETIMEDOUT)
-		edgetpu_watchdog_bite(etdev, false);
+		edgetpu_watchdog_bite(etdev);
 	return ret;
 
 }

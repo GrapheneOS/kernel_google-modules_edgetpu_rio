@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Framework for parsing the firmware image configuration.
  *
@@ -13,8 +13,9 @@
 #include <linux/types.h>
 
 #define GCIP_FW_NUM_VERSIONS 4
-#define GCIP_IMG_CFG_MAX_IOMMU_MAPPINGS 22
+#define GCIP_IMG_CFG_MAX_IOMMU_MAPPINGS 20
 #define GCIP_IMG_CFG_MAX_NS_IOMMU_MAPPINGS 5
+#define GCIP_IMG_CFG_MAX_PROTECTED_MEMORY_MAPPINGS 3
 
 #define GCIP_FW_PRIV_LEVEL_GSA 0
 #define GCIP_FW_PRIV_LEVEL_TZ 1
@@ -43,6 +44,8 @@ struct gcip_image_config {
 		 */
 		__u32 image_config_value;
 	} iommu_mappings[GCIP_IMG_CFG_MAX_IOMMU_MAPPINGS];
+	__u32 protected_memory_regions[GCIP_IMG_CFG_MAX_PROTECTED_MEMORY_MAPPINGS];
+	__u32 secure_telemetry_region_start;
 	__u32 remapped_data_start;
 	__u32 remapped_data_size;
 	__u32 num_ns_iommu_mappings;
@@ -92,27 +95,19 @@ struct gcip_image_config_parser {
 /* For decoding the size of ns_iommu_mappings. */
 static inline u32 gcip_ns_config_to_size(u32 cfg)
 {
-	u32 size;
-
 	if (cfg & GCIP_IMG_CFG_SIZE_MODE_BIT)
-		size = (cfg & GCIP_IMG_CFG_NS_SIZE_MASK) << PAGE_SHIFT;
-	else
-		size = (cfg & GCIP_IMG_CFG_NS_SIZE_MASK) << GCIP_IMG_CFG_MB_SHIFT;
+		return (cfg & GCIP_IMG_CFG_NS_SIZE_MASK) << PAGE_SHIFT;
 
-	return size;
+	return (cfg & GCIP_IMG_CFG_NS_SIZE_MASK) << GCIP_IMG_CFG_MB_SHIFT;
 }
 
 /* For decoding the size of iommu_mappings. */
 static inline u32 gcip_config_to_size(u32 cfg)
 {
-	u32 page_size;
-
 	if (cfg & GCIP_IMG_CFG_SIZE_MODE_BIT)
-		page_size = cfg & GCIP_IMG_CFG_SECURE_SIZE_MASK;
-	else
-		page_size = BIT(cfg & GCIP_IMG_CFG_SECURE_SIZE_MASK);
+		return (cfg & GCIP_IMG_CFG_SECURE_SIZE_MASK) << PAGE_SHIFT;
 
-	return page_size << PAGE_SHIFT;
+	return BIT(cfg & GCIP_IMG_CFG_SECURE_SIZE_MASK) << PAGE_SHIFT;
 }
 
 /*

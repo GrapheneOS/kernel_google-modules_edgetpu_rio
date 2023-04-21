@@ -2,13 +2,14 @@
 /*
  * Edge TPU functions for GSX01 SoCs.
  *
- * Copyright (C) 2022 Google LLC
+ * Copyright (C) 2022-2023 Google LLC
  */
 
 #include <linux/acpm_dvfs.h>
 #include <linux/device.h>
 #include <linux/errno.h>
 #include <linux/gsa/gsa_tpu.h>
+#include <linux/notifier.h>
 #include <linux/platform_device.h>
 #include <linux/thermal.h>
 #include <linux/types.h>
@@ -16,13 +17,14 @@
 #include <soc/google/exynos_pm_qos.h>
 #include <soc/google/gs_tmu_v3.h>
 
+#include <gcip/gcip-pm.h>
+#include <gcip/gcip-thermal.h>
+
 #include "edgetpu-internal.h"
 #include "edgetpu-firmware.h"
 #include "edgetpu-kci.h"
 #include "edgetpu-mobile-platform.h"
-#include "edgetpu-pm.h"
 #include "edgetpu-soc.h"
-#include "edgetpu-thermal.h"
 #include "mobile-firmware.h"
 #include "mobile-soc-gsx01.h"
 
@@ -314,10 +316,10 @@ long edgetpu_soc_pm_get_rate(struct edgetpu_dev *etdev, int flags)
 		return -EINVAL;
 
 	/* We need to keep TPU being powered to ensure CMU read is valid. */
-	if (!edgetpu_pm_get_if_powered(etdev->pm, false))
+	if (gcip_pm_get_if_powered(etdev->pm, true))
 		return 0;
 	pll_con3 = readl(cmu_base + PLL_CON3_OFFSET);
-	edgetpu_pm_put(etdev->pm);
+	gcip_pm_put(etdev->pm);
 
 	/*
 	 * Below values must match the CMU PLL (pll_con3_pll_tpu) values in the spec and firmware.
@@ -326,13 +328,22 @@ long edgetpu_soc_pm_get_rate(struct edgetpu_dev *etdev, int flags)
 	 */
 	switch (TO_PLL_DIV_M(pll_con3)) {
 	case 221:
-		curr_state = TPU_ACTIVE_UUD;
+		curr_state = TPU_ACTIVE_MIN;
+		break;
+	case 222:
+		curr_state = TPU_ACTIVE_ULTRA_LOW;
 		break;
 	case 153:
-		curr_state = TPU_ACTIVE_SUD;
+		curr_state = TPU_ACTIVE_VERY_LOW;
+		break;
+	case 174:
+		curr_state = TPU_ACTIVE_SUB_LOW;
 		break;
 	case 206:
-		curr_state = TPU_ACTIVE_UD;
+		curr_state = TPU_ACTIVE_LOW;
+		break;
+	case 118:
+		curr_state = TPU_ACTIVE_MEDIUM;
 		break;
 	case 182:
 		curr_state = TPU_ACTIVE_NOM;
@@ -565,22 +576,38 @@ void edgetpu_soc_pm_exit(struct edgetpu_dev *etdev)
 	exynos_pm_qos_remove_request(&etdev->soc_data->mif_min);
 }
 
-static int tpu_pause_callback(enum thermal_pause_state action, void *dev)
+static int tpu_pause_callback(enum thermal_pause_state action, void *data)
 {
+	struct gcip_thermal *thermal = data;
 	int ret = -EINVAL;
 
-	if (!dev)
+	if (!thermal)
 		return ret;
 
 	if (action == THERMAL_SUSPEND)
-		ret = edgetpu_thermal_suspend(dev);
+		ret = gcip_thermal_suspend_device(thermal);
 	else if (action == THERMAL_RESUME)
-		ret = edgetpu_thermal_resume(dev);
+		ret = gcip_thermal_resume_device(thermal);
 
 	return ret;
 }
 
-void edgetpu_soc_thermal_init(struct edgetpu_thermal *thermal)
+void edgetpu_soc_thermal_init(struct edgetpu_dev *etdev)
 {
-	register_tpu_thermal_pause_cb(tpu_pause_callback, thermal->dev);
+	struct gcip_thermal *thermal = etdev->thermal;
+	struct notifier_block *nb = gcip_thermal_get_notifier_block(thermal);
+
+	register_tpu_thermal_pause_cb(tpu_pause_callback, thermal);
+
+	if (etdev->soc_data->bcl_dev)
+		exynos_pm_qos_add_notifier(PM_QOS_TPU_FREQ_MAX, nb);
+}
+
+void edgetpu_soc_thermal_exit(struct edgetpu_dev *etdev)
+{
+	struct gcip_thermal *thermal = etdev->thermal;
+	struct notifier_block *nb = gcip_thermal_get_notifier_block(thermal);
+
+	if (etdev->soc_data->bcl_dev)
+		exynos_pm_qos_remove_notifier(PM_QOS_TPU_FREQ_MAX, nb);
 }
