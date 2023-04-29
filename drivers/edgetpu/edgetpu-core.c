@@ -384,11 +384,10 @@ int edgetpu_get_state_errno_locked(struct edgetpu_dev *etdev)
 {
 	switch (etdev->state) {
 	case ETDEV_STATE_BAD:
-		return -ENODEV;
+	case ETDEV_STATE_NOFW:
+		return -EIO;
 	case ETDEV_STATE_FWLOADING:
 		return -EAGAIN;
-	case ETDEV_STATE_NOFW:
-		return -EINVAL;
 	default:
 		break;
 	}
@@ -450,8 +449,6 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 	etdev->vcid_pool = (1u << EDGETPU_NUM_VCIDS) - 1;
 	mutex_init(&etdev->state_lock);
 	etdev->state = ETDEV_STATE_NOFW;
-	etdev->freq_count = 0;
-	mutex_init(&etdev->freq_lock);
 	mutex_init(&etdev->device_prop.lock);
 	ret = edgetpu_soc_init(etdev);
 	if (ret)

@@ -136,20 +136,6 @@ static void gcip_kci_set_resp_elem_seq(struct gcip_mailbox *mailbox, void *resp,
 	elem->seq = seq;
 }
 
-static u16 gcip_kci_get_resp_elem_status(struct gcip_mailbox *mailbox, void *resp)
-{
-	struct gcip_kci_response_element *elem = resp;
-
-	return elem->status;
-}
-
-static void gcip_kci_set_resp_elem_status(struct gcip_mailbox *mailbox, void *resp, u16 status)
-{
-	struct gcip_kci_response_element *elem = resp;
-
-	elem->status = status;
-}
-
 static void gcip_kci_acquire_wait_list_lock(struct gcip_mailbox *mailbox, bool irqsave,
 					    unsigned long *flags)
 {
@@ -273,8 +259,6 @@ static const struct gcip_mailbox_ops gcip_mailbox_ops = {
 	.release_resp_queue_lock = gcip_kci_release_resp_queue_lock,
 	.get_resp_elem_seq = gcip_kci_get_resp_elem_seq,
 	.set_resp_elem_seq = gcip_kci_set_resp_elem_seq,
-	.get_resp_elem_status = gcip_kci_get_resp_elem_status,
-	.set_resp_elem_status = gcip_kci_set_resp_elem_status,
 	.acquire_wait_list_lock = gcip_kci_acquire_wait_list_lock,
 	.release_wait_list_lock = gcip_kci_release_wait_list_lock,
 	.wait_for_cmd_queue_not_full = gcip_kci_wait_for_cmd_queue_not_full,

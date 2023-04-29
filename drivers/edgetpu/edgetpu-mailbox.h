@@ -329,7 +329,8 @@ void edgetpu_mailbox_restore_active_mailbox_queues(struct edgetpu_dev *etdev);
  * Otherwise, activate the external mailbox with id @mailbox_id.
  */
 int edgetpu_mailbox_enable_ext(struct edgetpu_client *client, int mailbox_id,
-			       struct edgetpu_external_mailbox_req *ext_mailbox_req);
+			       struct edgetpu_external_mailbox_req *ext_mailbox_req,
+			       u32 client_priv);
 
 /*
  * Notify firmware of an external mailboxes becoming inactive.
@@ -342,8 +343,8 @@ int edgetpu_mailbox_disable_ext(struct edgetpu_client *client, int mailbox_id);
  * Returns what edgetpu_kci_open_device() returned.
  * Caller ensures device is powered on.
  */
-int edgetpu_mailbox_activate_bulk(struct edgetpu_dev *etdev, u32 mailbox_map, s16 vcid,
-				  bool first_open);
+int edgetpu_mailbox_activate_bulk(struct edgetpu_dev *etdev, u32 mailbox_map, u32 client_priv,
+				  s16 vcid, bool first_open);
 
 /*
  * Activates @mailbox_id, OPEN_DEVICE KCI will be sent.
@@ -354,7 +355,8 @@ int edgetpu_mailbox_activate_bulk(struct edgetpu_dev *etdev, u32 mailbox_map, s1
  * Returns what edgetpu_kci_open_device() returned.
  * Caller ensures device is powered on.
  */
-int edgetpu_mailbox_activate(struct edgetpu_dev *etdev, u32 mailbox_id, s16 vcid, bool first_open);
+int edgetpu_mailbox_activate(struct edgetpu_dev *etdev, u32 mailbox_id, u32 client_priv, s16 vcid,
+			     bool first_open);
 
 /*
  * Similar to edgetpu_mailbox_activate_bulk() but sends CLOSE_DEVICE KCI with the @mailbox_map

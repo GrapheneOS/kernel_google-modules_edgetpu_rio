@@ -88,10 +88,21 @@ static inline bool gcip_valid_circ_queue_size(u32 size, u32 wrap_bit)
 
 struct gcip_mailbox;
 
+/*
+ * A struct wraps the IP-defined response to manage additional information such as status needed by
+ * the logic of GCIP.
+ */
+struct gcip_mailbox_async_resp {
+	/* Status code. Must be one of GCIP_MAILBOX_STATUS_*. */
+	uint16_t status;
+	/* IP-defined response. */
+	void *resp;
+};
+
 /* Wrapper struct for responses consumed by a thread other than the one which sent the command. */
 struct gcip_mailbox_resp_awaiter {
 	/* Response. */
-	void *resp;
+	struct gcip_mailbox_async_resp async_resp;
 	/* The work which will be executed when the timeout occurs. */
 	struct delayed_work timeout_work;
 	/*
@@ -217,16 +228,6 @@ struct gcip_mailbox_ops {
 	 * Context: normal and in_interrupt().
 	 */
 	void (*set_resp_elem_seq)(struct gcip_mailbox *mailbox, void *resp, u64 seq);
-	/*
-	 * Gets the status of @resp queue element.
-	 * Context: normal and in_interrupt().
-	 */
-	u16 (*get_resp_elem_status)(struct gcip_mailbox *mailbox, void *resp);
-	/*
-	 * Sets the status of @resp queue element.
-	 * Context: normal and in_interrupt().
-	 */
-	void (*set_resp_elem_status)(struct gcip_mailbox *mailbox, void *resp, u16 status);
 
 	/*
 	 * Acquires the lock of wait_list. If @irqsave is true, "_irqsave" functions can be used to

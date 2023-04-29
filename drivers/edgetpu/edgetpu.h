@@ -182,6 +182,7 @@ struct edgetpu_mailbox_attr {
 	__u32 cmdq_tail_doorbell: 1; /* auto doorbell on cmd queue tail move */
 	/* Type of memory partitions to be used for this group, exact meaning is chip-dependent. */
 	__u32 partition_type    : 1;
+	__u32 client_priv : 1; /* client privilege level */
 };
 
 /*

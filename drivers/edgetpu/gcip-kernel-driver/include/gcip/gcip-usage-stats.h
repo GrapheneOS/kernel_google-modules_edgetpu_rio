@@ -152,6 +152,8 @@ enum gcip_usage_stats_component_utilization_type {
 	GCIP_USAGE_STATS_COMPONENT_UTILIZATION_IP,
 	/* A compute core. */
 	GCIP_USAGE_STATS_COMPONENT_UTILIZATION_CORES,
+	/* The DSP or TPU Control Core (R52). */
+	GCIP_USAGE_STATS_COMPONENT_UTILIZATION_CONTROL,
 
 	/* The number of total types. Must be located at the end of this enum. */
 	GCIP_USAGE_STATS_COMPONENT_UTILIZATION_NUM_TYPES,
@@ -302,6 +304,10 @@ enum gcip_usage_stats_thread_stats_thread_id {
 	 * DSP cores.
 	 */
 	GCIP_USAGE_STATS_THREAD_DSP_CORE_MANAGER,
+	/* The driving thread for intercore message handling. */
+	GCIP_USAGE_STATS_THREAD_INTERCORE_SUBORDINATE,
+	/* The thread that executes callback when the timer expires. */
+	GCIP_USAGE_STATS_THREAD_TIMER_SERVICE,
 
 	/* The number of total threads. Must be located at the end of this enum. */
 	GCIP_USAGE_STATS_THREAD_NUM_TYPES,

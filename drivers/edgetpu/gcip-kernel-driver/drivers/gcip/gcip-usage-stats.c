@@ -84,7 +84,8 @@ gcip_usage_stats_find_core_usage_entry_locked(int32_t uid, uint8_t core_id,
 static unsigned int gcip_usage_stats_find_dvfs_freq_index(struct gcip_usage_stats *ustats,
 							  uint32_t dvfs_freq)
 {
-	int i, nums, idx = 0;
+	int i, nums, closest_freq_idx, idx = 0;
+	uint32_t cur_freq, closest_freq = 0;
 
 	mutex_lock(&ustats->dvfs_freqs_lock);
 
@@ -94,8 +95,10 @@ static unsigned int gcip_usage_stats_find_dvfs_freq_index(struct gcip_usage_stat
 	 */
 	if (ustats->dvfs_freqs_num) {
 		for (i = ustats->dvfs_freqs_num - 1; i >= 0; i--) {
-			if (dvfs_freq == ustats->dvfs_freqs[i])
+			if (dvfs_freq == ustats->dvfs_freqs[i]) {
 				idx = i;
+				break;
+			}
 		}
 
 		if (i < 0)
@@ -117,9 +120,19 @@ static unsigned int gcip_usage_stats_find_dvfs_freq_index(struct gcip_usage_stat
 	}
 
 	for (i = nums - 1; i >= 0; i--) {
-		if (dvfs_freq >= ustats->ops->get_default_dvfs_freq(i, ustats->data))
+		cur_freq = ustats->ops->get_default_dvfs_freq(i, ustats->data);
+
+		if (dvfs_freq == cur_freq)
 			return i;
+
+		if (dvfs_freq > cur_freq && closest_freq < cur_freq) {
+			closest_freq = cur_freq;
+			closest_freq_idx = i;
+		}
 	}
+
+	if (closest_freq)
+		return closest_freq_idx;
 
 	dev_warn(ustats->dev,
 		 "Failed to find the freq from the default ones of the kernel driver, freq=%u",
@@ -328,7 +341,6 @@ static ssize_t gcip_usage_stats_component_utilization_show(struct device *dev,
 		container_of(dev_attr, struct gcip_usage_stats_attr, dev_attr);
 	struct gcip_usage_stats *ustats = attr->ustats;
 	int32_t val;
-	ssize_t written;
 
 	ustats->ops->update_usage_kci(ustats->data);
 
@@ -339,11 +351,7 @@ static ssize_t gcip_usage_stats_component_utilization_show(struct device *dev,
 
 	mutex_unlock(&ustats->usage_stats_lock);
 
-	written = scnprintf(buf, PAGE_SIZE, "%d\n", val);
-	if (written < 0)
-		return written;
-
-	return written;
+	return scnprintf(buf, PAGE_SIZE, "%d\n", val);
 }
 
 /* Following functions are related to `COUNTER` metrics. */
@@ -396,10 +404,16 @@ static ssize_t gcip_usage_stats_counter_show(struct device *dev, struct device_a
 		container_of(dev_attr, struct gcip_usage_stats_attr, dev_attr);
 	struct gcip_usage_stats *ustats = attr->ustats;
 	ssize_t written = 0;
-	int subcomponent = ustats->version >= GCIP_USAGE_STATS_V2 ? attr->subcomponent : 0;
-	int i;
+	int subcomponent, i;
 
 	ustats->ops->update_usage_kci(ustats->data);
+
+	/*
+	 * We need to decide @subcomponent after calling `update_usage_kci` because IP kernel
+	 * drivers may want to change the version of @ustats to lower one if the firmware doesn't
+	 * support a higher version.
+	 */
+	subcomponent = ustats->version >= GCIP_USAGE_STATS_V2 ? attr->subcomponent : 0;
 
 	mutex_lock(&ustats->usage_stats_lock);
 
@@ -579,10 +593,16 @@ static ssize_t gcip_usage_stats_max_watermark_show(struct device *dev,
 		container_of(dev_attr, struct gcip_usage_stats_attr, dev_attr);
 	struct gcip_usage_stats *ustats = attr->ustats;
 	ssize_t written = 0;
-	int subcomponent = ustats->version >= GCIP_USAGE_STATS_V2 ? attr->subcomponent : 0;
-	int i;
+	int subcomponent, i;
 
 	ustats->ops->update_usage_kci(ustats->data);
+
+	/*
+	 * We need to decide @subcomponent after calling `update_usage_kci` because IP kernel
+	 * drivers may want to change the version of @ustats to lower one if the firmware doesn't
+	 * support a higher version.
+	 */
+	subcomponent = ustats->version >= GCIP_USAGE_STATS_V2 ? attr->subcomponent : 0;
 
 	mutex_lock(&ustats->usage_stats_lock);
 
@@ -710,6 +730,8 @@ static ssize_t gcip_usage_stats_dvfs_freqs_show(struct device *dev,
 					     ustats->dvfs_freqs[i]);
 		mutex_unlock(&ustats->dvfs_freqs_lock);
 	}
+
+	written += scnprintf(buf + written, PAGE_SIZE - written, "\n");
 
 	return written;
 }
