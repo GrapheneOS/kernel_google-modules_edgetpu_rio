@@ -17,22 +17,6 @@
 #include <gcip/gcip-mailbox.h>
 
 /*
- * The status field in a firmware response is set to this by us when the response is fetched from
- * the queue.
- */
-#define GCIP_KCI_STATUS_OK GCIP_MAILBOX_STATUS_OK
-/*
- * gcip_kci#mailbox.wait_list uses this value to record the status of responses that haven't been
- * received yet.
- */
-#define GCIP_KCI_STATUS_WAITING_RESPONSE GCIP_MAILBOX_STATUS_WAITING_RESPONSE
-/*
- * Used when an expected response is not received, see the documentation of
- * gcip_mailbox_handle_response() for details.
- */
-#define GCIP_KCI_STATUS_NO_RESPONSE GCIP_MAILBOX_STATUS_NO_RESPONSE
-
-/*
  * Command/response sequence numbers capped at half the range of the 64-bit value range. The second
  * half is reserved for incoming requests from firmware.
  * These are tagged with the MSB set.
@@ -62,9 +46,9 @@ struct gcip_kci_response_element {
 	u64 seq;
 	u16 code;
 	/*
-	 * Reserved for host use - firmware can't touch this.
-	 * If a value is written here it will be discarded and overwritten during response
-	 * processing.  However, when repurposed as an RKCI command, the FW can set this field.
+	 * Firmware can set some data according to the type of the response.
+	 * TODO(b/279386960): as we don't manage the status of responses using this field anymore,
+	 *                    rename this field to more reasonable name.
 	 */
 	u16 status;
 	/*

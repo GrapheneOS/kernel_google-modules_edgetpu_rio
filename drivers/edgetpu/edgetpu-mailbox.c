@@ -1006,7 +1006,8 @@ void edgetpu_mailbox_external_disable_free_locked(struct edgetpu_device_group *g
 	edgetpu_mailbox_external_free(group);
 }
 
-static int edgetpu_mailbox_external_enable_by_id(struct edgetpu_client *client, int mailbox_id)
+static int edgetpu_mailbox_external_enable_by_id(struct edgetpu_client *client, int mailbox_id,
+						 u32 client_priv)
 {
 	int ret;
 
@@ -1019,7 +1020,7 @@ static int edgetpu_mailbox_external_enable_by_id(struct edgetpu_client *client, 
 
 	etdev_dbg(client->etdev, "Enabling mailbox: %d\n", mailbox_id);
 
-	ret = edgetpu_mailbox_activate(client->etdev, mailbox_id, -1, false);
+	ret = edgetpu_mailbox_activate(client->etdev, mailbox_id, client_priv, -1, false);
 	if (ret)
 		etdev_err(client->etdev, "Activate mailbox %d failed: %d", mailbox_id, ret);
 	else
@@ -1066,7 +1067,8 @@ int edgetpu_mailbox_activate_external_mailbox(struct edgetpu_device_group *group
 	for (i = 0; i < ext_mailbox->count; i++)
 		mbox_map |= BIT(ext_mailbox->descriptors[i].mailbox->mailbox_id);
 
-	ret = edgetpu_mailbox_activate_bulk(ext_mailbox->etdev, mbox_map, vcid, false);
+	ret = edgetpu_mailbox_activate_bulk(ext_mailbox->etdev, mbox_map,
+					    group->mbox_attr.client_priv, vcid, false);
 
 	if (ret)
 		etdev_err(group->etdev, "Activate mailbox bulk failed: %d", ret);
@@ -1102,12 +1104,13 @@ void edgetpu_mailbox_deactivate_external_mailbox(struct edgetpu_device_group *gr
 }
 
 int edgetpu_mailbox_enable_ext(struct edgetpu_client *client, int mailbox_id,
-			       struct edgetpu_external_mailbox_req *ext_mailbox_req)
+			       struct edgetpu_external_mailbox_req *ext_mailbox_req,
+			       u32 client_priv)
 {
 	if (mailbox_id == EDGETPU_MAILBOX_ID_USE_ASSOC)
 		return edgetpu_mailbox_external_alloc_enable(client, ext_mailbox_req);
 	else
-		return edgetpu_mailbox_external_enable_by_id(client, mailbox_id);
+		return edgetpu_mailbox_external_enable_by_id(client, mailbox_id, client_priv);
 }
 
 int edgetpu_mailbox_disable_ext(struct edgetpu_client *client, int mailbox_id)
@@ -1118,16 +1121,16 @@ int edgetpu_mailbox_disable_ext(struct edgetpu_client *client, int mailbox_id)
 		return edgetpu_mailbox_external_disable_by_id(client, mailbox_id);
 }
 
-int edgetpu_mailbox_activate_bulk(struct edgetpu_dev *etdev, u32 mailbox_map, s16 vcid,
-				  bool first_open)
+int edgetpu_mailbox_activate_bulk(struct edgetpu_dev *etdev, u32 mailbox_map, u32 client_priv,
+				  s16 vcid, bool first_open)
 {
 	struct edgetpu_handshake *eh = &etdev->mailbox_manager->open_devices;
 	int ret = 0;
 
 	mutex_lock(&eh->lock);
 	if (mailbox_map & ~eh->fw_state)
-		ret = edgetpu_kci_open_device(etdev->etkci, mailbox_map & ~eh->fw_state, vcid,
-					      first_open);
+		ret = edgetpu_kci_open_device(etdev->etkci, mailbox_map & ~eh->fw_state,
+					      client_priv, vcid, first_open);
 	if (!ret) {
 		eh->state |= mailbox_map;
 		eh->fw_state |= mailbox_map;
@@ -1144,9 +1147,10 @@ int edgetpu_mailbox_activate_bulk(struct edgetpu_dev *etdev, u32 mailbox_map, s1
 
 }
 
-int edgetpu_mailbox_activate(struct edgetpu_dev *etdev, u32 mailbox_id, s16 vcid, bool first_open)
+int edgetpu_mailbox_activate(struct edgetpu_dev *etdev, u32 mailbox_id, u32 client_priv, s16 vcid,
+			     bool first_open)
 {
-	return edgetpu_mailbox_activate_bulk(etdev, BIT(mailbox_id), vcid, first_open);
+	return edgetpu_mailbox_activate_bulk(etdev, BIT(mailbox_id), client_priv, vcid, first_open);
 }
 
 void edgetpu_mailbox_deactivate_bulk(struct edgetpu_dev *etdev, u32 mailbox_map)

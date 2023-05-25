@@ -14,6 +14,11 @@
 #include <linux/platform_device.h>
 
 #include <gcip/gcip-pm.h>
+#include <gcip/gcip-iommu.h>
+
+#if HAS_IOVAD_BEST_FIT_ALGO
+#include <linux/dma-iommu.h>
+#endif
 
 #include "edgetpu-config.h"
 #include "edgetpu-dmabuf.h"
@@ -161,7 +166,7 @@ int edgetpu_chip_acquire_ext_mailbox(struct edgetpu_client *client,
 		mutex_unlock(&etmdev->tz_mailbox_lock);
 		return -EBUSY;
 	}
-	ret = edgetpu_mailbox_enable_ext(client, EDGETPU_TZ_MAILBOX_ID, NULL);
+	ret = edgetpu_mailbox_enable_ext(client, EDGETPU_TZ_MAILBOX_ID, NULL, 0);
 	if (!ret)
 		etmdev->secure_client = client;
 	mutex_unlock(&etmdev->tz_mailbox_lock);
@@ -279,7 +284,7 @@ static void edgetpu_platform_remove_irq(struct edgetpu_mobile_platform_dev *etmd
 static inline const char *get_driver_commit(void)
 {
 #if IS_ENABLED(CONFIG_MODULE_SCMVERSION)
-	return THIS_MODULE->scmversion;
+	return THIS_MODULE->scmversion ?: "scmversion missing";
 #elif defined(GIT_REPO_TAG)
 	return GIT_REPO_TAG;
 #else
@@ -348,6 +353,10 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		dev_err(dev, "failed to initialize remapped memory pool: %d", ret);
 		goto out_cleanup_fw;
 	}
+
+#if HAS_IOVAD_BEST_FIT_ALGO
+	iommu_dma_enable_best_fit_algo(dev);
+#endif
 
 	INIT_LIST_HEAD(&etmdev->fw_ctx_list);
 	mutex_init(&etmdev->fw_ctx_list_lock);

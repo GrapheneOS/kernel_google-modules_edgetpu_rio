@@ -15,7 +15,12 @@
 #if !defined(_TRACE_EDGETPU_H) || defined(TRACE_HEADER_MULTI_READ)
 #define _TRACE_EDGETPU_H
 
+#include <linux/stringify.h>
 #include <linux/tracepoint.h>
+
+#include "../../../edgetpu.h"
+
+#define EDGETPU_TRACE_SYSTEM __stringify(TRACE_SYSTEM)
 
 TRACE_EVENT(edgetpu_map_buffer_start,
 
@@ -202,8 +207,4 @@ TRACE_EVENT(edgetpu_release_wakelock_end,
 #endif /* _TRACE_EDGETPU_H */
 
 /* This part must be outside protection */
-#undef TRACE_INCLUDE_PATH
-#define TRACE_INCLUDE_PATH .
-#define TRACE_INCLUDE_FILE trace/events/edgetpu
-
 #include <trace/define_trace.h>

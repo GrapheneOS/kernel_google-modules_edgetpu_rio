@@ -109,7 +109,8 @@ static int edgetpu_external_mailbox_alloc(struct device *edgetpu_dev,
 		req.attr = group->mbox_attr;
 	}
 
-	ret = edgetpu_mailbox_enable_ext(client, EDGETPU_MAILBOX_ID_USE_ASSOC, &req);
+	ret = edgetpu_mailbox_enable_ext(client, EDGETPU_MAILBOX_ID_USE_ASSOC, &req,
+					 group->mbox_attr.client_priv);
 	if (ret)
 		goto error_put_group;
 	mutex_lock(&group->lock);

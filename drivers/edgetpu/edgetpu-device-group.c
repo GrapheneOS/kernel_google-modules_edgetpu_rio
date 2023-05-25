@@ -83,7 +83,8 @@ static int edgetpu_group_activate(struct edgetpu_device_group *group)
 		return 0;
 
 	mailbox_id = edgetpu_group_context_id_locked(group);
-	ret = edgetpu_mailbox_activate(group->etdev, mailbox_id, group->vcid, !group->activated);
+	ret = edgetpu_mailbox_activate(group->etdev, mailbox_id, group->mbox_attr.client_priv,
+				       group->vcid, !group->activated);
 	if (ret) {
 		etdev_err(group->etdev, "activate mailbox for VCID %d failed with %d", group->vcid,
 			  ret);
@@ -1263,7 +1264,7 @@ uint edgetpu_group_get_fatal_errors(struct edgetpu_device_group *group)
 	uint fatal_errors;
 
 	mutex_lock(&group->lock);
-	fatal_errors = group->fatal_errors;
+	fatal_errors = edgetpu_group_get_fatal_errors_locked(group);
 	mutex_unlock(&group->lock);
 	return fatal_errors;
 }

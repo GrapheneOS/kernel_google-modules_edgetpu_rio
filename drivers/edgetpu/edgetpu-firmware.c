@@ -188,6 +188,10 @@ static int edgetpu_firmware_handshake(struct edgetpu_firmware *et_fw)
 	if (ret)
 		etdev_warn(etdev, "thermal restore error: %d", ret);
 
+	ret = edgetpu_kci_set_device_properties(etdev->etkci, &etdev->device_prop);
+	if (ret)
+		dev_warn(etdev->dev, "Failed to pass device_prop to fw: %d\n", ret);
+
 	/* Set debug dump buffer in FW */
 	edgetpu_get_debug_dump(etdev, 0);
 	return 0;
@@ -371,7 +375,7 @@ static int edgetpu_firmware_run_locked(struct edgetpu_firmware *et_fw,
 	edgetpu_firmware_set_state(et_fw, ret);
 	/* If previous firmware was metrics v1-only reset that flag and probe this again. */
 	if (etdev->usage_stats)
-		etdev->usage_stats->use_metrics_v1 = false;
+		etdev->usage_stats->ustats.version = EDGETPU_USAGE_METRIC_VERSION;
 	return ret;
 
 out_unload_new_fw:
