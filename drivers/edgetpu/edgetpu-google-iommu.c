@@ -38,14 +38,13 @@ struct edgetpu_iommu {
 	struct idr domain_id_pool;
 	struct mutex pool_lock;		/* protects access of @domain_id_pool */
 	bool context_0_default;		/* is context 0 domain the default? */
-	bool aux_enabled;
 	/*
 	 * Holds a pool of pre-allocated IOMMU domains if the chip config specifies this is
 	 * required.
 	 * The implementation will fall back to dynamically allocated domains otherwise.
 	 */
 	struct gcip_domain_pool domain_pool;
-
+	struct ida pasid_pool;
 };
 
 struct edgetpu_iommu_map_params {
@@ -84,9 +83,6 @@ get_domain_by_context_id(struct edgetpu_dev *etdev,
 	struct edgetpu_iommu *etiommu = etdev->mmu_cookie;
 	uint pasid;
 
-	/* always return the default domain when AUX is not supported */
-	if (!etiommu->aux_enabled)
-		return iommu_get_domain_for_dev(dev);
 	if (ctx_id == EDGETPU_CONTEXT_INVALID)
 		return NULL;
 	if (ctx_id & EDGETPU_CONTEXT_DOMAIN_TOKEN)
@@ -182,7 +178,6 @@ static int check_default_domain(struct edgetpu_dev *etdev,
 {
 	struct iommu_domain *domain;
 	int ret;
-	uint pasid;
 
 	domain = iommu_get_domain_for_dev(etdev->dev);
 	/* if default domain exists then we are done */
@@ -191,30 +186,20 @@ static int check_default_domain(struct edgetpu_dev *etdev,
 		goto out;
 	}
 	etdev_warn(etdev, "device group has no default iommu domain\n");
-	/* no default domain and no AUX - we can't have any domain */
-	if (!etiommu->aux_enabled)
-		return -EINVAL;
 
 	domain = gcip_domain_pool_alloc(&etiommu->domain_pool);
 	if (!domain) {
 		etdev_warn(etdev, "iommu domain alloc failed");
 		return -EINVAL;
 	}
-	ret = iommu_aux_attach_device(domain, etdev->dev);
+
+	ret = iommu_attach_device(domain, etdev->dev);
 	if (ret) {
-		etdev_warn(etdev, "Attach IOMMU aux failed: %d", ret);
+		etdev_warn(etdev, "Attach default domain failed: %d", ret);
 		gcip_domain_pool_free(&etiommu->domain_pool, domain);
 		return ret;
 	}
-	pasid = iommu_aux_get_pasid(domain, etdev->dev);
-	/* the default domain must have pasid = 0 */
-	if (pasid != 0) {
-		etdev_warn(etdev, "Invalid PASID %d returned from iommu\n",
-			   pasid);
-		iommu_aux_detach_device(domain, etdev->dev);
-		gcip_domain_pool_free(&etiommu->domain_pool, domain);
-		return -EINVAL;
-	}
+
 out:
 	etiommu->domains[0] = domain;
 	return 0;
@@ -239,11 +224,6 @@ int edgetpu_mmu_attach(struct edgetpu_dev *etdev, void *mmu_info)
 	else
 		dev_warn(etdev->dev, "device has no iommu group\n");
 
-	iommu_dev_enable_feature(etdev->dev, IOMMU_DEV_FEAT_AUX);
-	if (!iommu_dev_feature_enabled(etdev->dev, IOMMU_DEV_FEAT_AUX))
-		etdev_warn(etdev, "AUX domains not supported\n");
-	else
-		etiommu->aux_enabled = true;
 	ret = check_default_domain(etdev, etiommu);
 	if (ret)
 		goto err_free;
@@ -252,6 +232,8 @@ int edgetpu_mmu_attach(struct edgetpu_dev *etdev, void *mmu_info)
 	if (ret)
 		etdev_warn(etdev, "Failed to register fault handler! (%d)\n",
 			   ret);
+
+	ida_init(&etiommu->pasid_pool);
 
 	/* etiommu initialization done */
 	etdev->mmu_cookie = etiommu;
@@ -278,8 +260,7 @@ void edgetpu_mmu_detach(struct edgetpu_dev *etdev)
 	for (i = etiommu->context_0_default ? 1 : 0; i < EDGETPU_NCONTEXTS;
 	     i++) {
 		if (etiommu->domains[i])
-			iommu_aux_detach_device(etiommu->domains[i],
-						etdev->dev);
+			iommu_detach_device_pasid(etiommu->domains[i], etdev->dev, i);
 	}
 
 	if (etiommu->iommu_group)
@@ -293,6 +274,7 @@ void edgetpu_mmu_detach(struct edgetpu_dev *etdev)
 		     etiommu);
 	idr_destroy(&etiommu->domain_id_pool);
 	gcip_domain_pool_destroy(&etiommu->domain_pool);
+	ida_destroy(&etiommu->pasid_pool);
 	kfree(etiommu);
 	etdev->mmu_cookie = NULL;
 }
@@ -591,12 +573,6 @@ void edgetpu_mmu_tpu_unmap_sgt(struct edgetpu_dev *etdev, tpu_addr_t tpu_addr,
 	iommu_unmap(domain, tpu_addr, sg_dma_len(sgt->sgl));
 }
 
-/* to be returned when domain aux is not supported */
-static struct edgetpu_iommu_domain invalid_etdomain = {
-	.pasid = IOMMU_PASID_INVALID,
-	.token = EDGETPU_DOMAIN_TOKEN_END,
-};
-
 struct edgetpu_iommu_domain *edgetpu_mmu_alloc_domain(struct edgetpu_dev *etdev)
 {
 	struct edgetpu_iommu_domain *etdomain;
@@ -604,8 +580,6 @@ struct edgetpu_iommu_domain *edgetpu_mmu_alloc_domain(struct edgetpu_dev *etdev)
 	struct iommu_domain *domain;
 	int token;
 
-	if (!etiommu->aux_enabled)
-		return &invalid_etdomain;
 	domain = gcip_domain_pool_alloc(&etiommu->domain_pool);
 	if (!domain) {
 		etdev_warn(etdev, "iommu domain allocation failed");
@@ -638,7 +612,7 @@ void edgetpu_mmu_free_domain(struct edgetpu_dev *etdev,
 {
 	struct edgetpu_iommu *etiommu = etdev->mmu_cookie;
 
-	if (!etdomain || etdomain == &invalid_etdomain)
+	if (!etdomain)
 		return;
 	if (etdomain->pasid != IOMMU_PASID_INVALID) {
 		etdev_warn(etdev, "Domain should be detached before free");
@@ -657,37 +631,29 @@ int edgetpu_mmu_attach_domain(struct edgetpu_dev *etdev,
 	struct edgetpu_iommu *etiommu = etdev->mmu_cookie;
 	struct iommu_domain *domain;
 	int ret;
-	uint pasid;
+	int pasid;
 
-	/* Changes nothing if domain AUX is not supported. */
-	if (!etiommu->aux_enabled)
-		return 0;
 	if (etdomain->pasid != IOMMU_PASID_INVALID)
 		return -EINVAL;
+
+	/* PASID=0 is reserved for the default domain */
+	pasid = ida_alloc_range(&etiommu->pasid_pool, 1, EDGETPU_NCONTEXTS - 1, GFP_KERNEL);
+	if (pasid <= 0) {
+		etdev_warn(etdev, "No pasid available for attaching domain: %d", pasid);
+		return pasid;
+	}
+
 	domain = etdomain->iommu_domain;
-	ret = iommu_aux_attach_device(domain, etdev->dev);
+	ret = iommu_attach_device_pasid(domain, etdev->dev, pasid);
 	if (ret) {
-		etdev_warn(etdev, "Attach IOMMU aux failed: %d", ret);
+		etdev_warn(etdev, "Attach IOMMU domain to pasid=%d failed: %d", pasid, ret);
+		ida_free(&etiommu->pasid_pool, pasid);
 		return ret;
 	}
-	pasid = iommu_aux_get_pasid(domain, etdev->dev);
-	if (pasid <= 0 || pasid >= EDGETPU_NCONTEXTS) {
-		etdev_warn(etdev, "Invalid PASID %d returned from iommu",
-			   pasid);
-		ret = -EINVAL;
-		goto err_detach;
-	}
-	/* the IOMMU driver returned a duplicate PASID */
-	if (etiommu->domains[pasid]) {
-		ret = -EBUSY;
-		goto err_detach;
-	}
+
 	etiommu->domains[pasid] = domain;
 	etdomain->pasid = pasid;
 	return 0;
-err_detach:
-	iommu_aux_detach_device(domain, etdev->dev);
-	return ret;
 }
 
 void edgetpu_mmu_detach_domain(struct edgetpu_dev *etdev,
@@ -696,11 +662,10 @@ void edgetpu_mmu_detach_domain(struct edgetpu_dev *etdev,
 	struct edgetpu_iommu *etiommu = etdev->mmu_cookie;
 	uint pasid = etdomain->pasid;
 
-	if (!etiommu->aux_enabled)
-		return;
 	if (pasid <= 0 || pasid >= EDGETPU_NCONTEXTS)
 		return;
 	etiommu->domains[pasid] = NULL;
 	etdomain->pasid = IOMMU_PASID_INVALID;
-	iommu_aux_detach_device(etdomain->iommu_domain, etdev->dev);
+	iommu_detach_device_pasid(etdomain->iommu_domain, etdev->dev, pasid);
+	ida_free(&etiommu->pasid_pool, pasid);
 }
