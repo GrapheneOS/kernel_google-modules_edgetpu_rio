@@ -163,6 +163,18 @@ enum edgetpu_dev_state {
 	ETDEV_STATE_BAD = 3,	/* firmware/device is in unusable state. */
 };
 
+/*
+ * struct edgetpu_dev_prop
+ * @lock:		Protects initialized and opaque.
+ * @initialized:	Set to true when this struct object is initialized.
+ * @opaque:		Device properties defined by runtime and firmware.
+ */
+struct edgetpu_dev_prop {
+	struct mutex lock;
+	bool initialized;
+	u8 opaque[EDGETPU_DEV_PROP_SIZE];
+};
+
 /* a mark to know whether we read valid versions from the firmware header */
 #define EDGETPU_INVALID_KCI_VERSION (~0u)
 
@@ -210,6 +222,8 @@ struct edgetpu_dev {
 	/* version read from the firmware binary file */
 	struct edgetpu_fw_version fw_version;
 	atomic_t job_count;	/* times joined to a device group */
+	/* To save device properties */
+	struct edgetpu_dev_prop device_prop;
 
 	/* counts of error events */
 	uint firmware_crash_count;
@@ -219,10 +233,6 @@ struct edgetpu_dev {
 	/* debug dump handlers */
 	edgetpu_debug_dump_handlers *debug_dump_handlers;
 	struct work_struct debug_dump_work;
-
-	struct mutex freq_lock;	/* protects below freq_* variables */
-	uint32_t *freq_table;	/* Array to record reported frequencies by f/w */
-	uint32_t freq_count;	/* Number of entries in freq_table */
 };
 
 struct edgetpu_dev_iface {

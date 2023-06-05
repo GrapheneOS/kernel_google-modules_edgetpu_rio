@@ -28,7 +28,8 @@ edgetpu-objs	:= edgetpu-async.o \
 		   edgetpu-mapping.o \
 		   edgetpu-sw-watchdog.o \
 		   edgetpu-telemetry.o \
-		   edgetpu-thermal.o
+		   edgetpu-thermal.o \
+		   edgetpu-trace.o
 
 ifndef CONFIG_EDGETPU_TEST
 # Unit testing doesn't need this because GCIP is compiled as a built-in there.

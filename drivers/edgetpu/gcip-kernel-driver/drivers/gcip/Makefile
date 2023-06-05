@@ -17,7 +17,8 @@ gcip-objs		:= gcip-alloc-helper.o \
 			   gcip-mem-pool.o \
 			   gcip-pm.o \
 			   gcip-telemetry.o \
-			   gcip-thermal.o
+			   gcip-thermal.o \
+			   gcip-usage-stats.o
 
 CURRENT_DIR=$(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 

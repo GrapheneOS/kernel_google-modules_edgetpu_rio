@@ -17,6 +17,7 @@
 
 #include <gcip/gcip-pm.h>
 #include <gcip/gcip-telemetry.h>
+#include <gcip/gcip-usage-stats.h>
 
 #include "edgetpu-firmware.h"
 #include "edgetpu-internal.h"
@@ -47,12 +48,15 @@
 #endif
 
 /* A macro for KCIs to leave early when the device state is known to be bad. */
-#define RETURN_ERRNO_IF_ETDEV_NOT_GOOD(etkci)                                                      \
+#define RETURN_ERRNO_IF_ETDEV_NOT_GOOD(etkci, opstring)                                            \
 	do {                                                                                       \
 		struct edgetpu_mailbox *mailbox = etkci->mailbox;                                  \
 		int ret = edgetpu_get_state_errno_locked(mailbox->etdev);                          \
-		if (ret)                                                                           \
+		if (ret) {                                                                         \
+			etdev_err(mailbox->etdev, "%s failed: device state %u (%d)",               \
+				  opstring, mailbox->etdev->state, ret);                           \
 			return ret;                                                                \
+		}                                                                                  \
 	} while (0)
 
 static int edgetpu_kci_alloc_queue(struct edgetpu_dev *etdev, struct edgetpu_mailbox *mailbox,
@@ -501,16 +505,17 @@ int edgetpu_kci_update_usage_locked(struct edgetpu_dev *etdev)
 
 	/* TODO(b/271372136): remove v1 when v1 firmware no longer in use. */
 retry_v1:
-	if (etdev->usage_stats && etdev->usage_stats->use_metrics_v1)
+	if (etdev->usage_stats && etdev->usage_stats->ustats.version == GCIP_USAGE_STATS_V1)
 		cmd.code = GCIP_KCI_CODE_GET_USAGE_V1;
 	cmd.dma.address = mem.tpu_addr;
 	cmd.dma.size = EDGETPU_USAGE_BUFFER_SIZE;
-	memset(mem.vaddr, 0, sizeof(struct edgetpu_usage_header));
+	memset(mem.vaddr, 0, sizeof(struct gcip_usage_stats_header));
 	ret = gcip_kci_send_cmd_return_resp(etdev->etkci->kci, &cmd, &resp);
 
 	if (ret == GCIP_KCI_ERROR_UNIMPLEMENTED || ret == GCIP_KCI_ERROR_UNAVAILABLE) {
-		if (etdev->usage_stats && !etdev->usage_stats->use_metrics_v1) {
-			etdev->usage_stats->use_metrics_v1 = true;
+		if (etdev->usage_stats &&
+		    etdev->usage_stats->ustats.version != GCIP_USAGE_STATS_V1) {
+			etdev->usage_stats->ustats.version = GCIP_USAGE_STATS_V1;
 			goto retry_v1;
 		}
 		etdev_dbg(etdev, "firmware does not report usage\n");
@@ -578,10 +583,11 @@ int edgetpu_kci_get_debug_dump(struct edgetpu_kci *etkci, tpu_addr_t tpu_addr, s
 	return gcip_kci_send_cmd(etkci->kci, &cmd);
 }
 
-int edgetpu_kci_open_device(struct edgetpu_kci *etkci, u32 mailbox_map, s16 vcid, bool first_open)
+int edgetpu_kci_open_device(struct edgetpu_kci *etkci, u32 mailbox_map, u32 client_priv, s16 vcid,
+			    bool first_open)
 {
 	const struct edgetpu_kci_open_device_detail detail = {
-		.mailbox_map = mailbox_map,
+		.client_priv = client_priv,
 		.vcid = vcid,
 		.flags = (mailbox_map << 1) | first_open,
 	};
@@ -595,8 +601,7 @@ int edgetpu_kci_open_device(struct edgetpu_kci *etkci, u32 mailbox_map, s16 vcid
 	if (!etkci || !etkci->kci)
 		return -ENODEV;
 
-	RETURN_ERRNO_IF_ETDEV_NOT_GOOD(etkci);
-
+	RETURN_ERRNO_IF_ETDEV_NOT_GOOD(etkci, "open device");
 	if (vcid < 0)
 		return gcip_kci_send_cmd(etkci->kci, &cmd);
 
@@ -615,7 +620,7 @@ int edgetpu_kci_close_device(struct edgetpu_kci *etkci, u32 mailbox_map)
 	if (!etkci || !etkci->kci)
 		return -ENODEV;
 
-	RETURN_ERRNO_IF_ETDEV_NOT_GOOD(etkci);
+	RETURN_ERRNO_IF_ETDEV_NOT_GOOD(etkci, "close device");
 
 	return gcip_kci_send_cmd(etkci->kci, &cmd);
 }
@@ -682,6 +687,28 @@ int edgetpu_kci_thermal_control(struct edgetpu_dev *etdev, bool enable)
 	};
 
 	return gcip_kci_send_cmd(etdev->etkci->kci, &cmd);
+}
+
+int edgetpu_kci_set_device_properties(struct edgetpu_kci *etkci, struct edgetpu_dev_prop *dev_prop)
+{
+	struct gcip_kci_command_element cmd = {
+		.code = GCIP_KCI_CODE_SET_DEVICE_PROPERTIES,
+	};
+	int ret = 0;
+
+	if (!etkci || !etkci->kci)
+		return -ENODEV;
+
+	mutex_lock(&dev_prop->lock);
+	if (!dev_prop->initialized)
+		goto out;
+
+	ret = edgetpu_kci_send_cmd_with_data(etkci, &cmd, &dev_prop->opaque,
+					     sizeof(dev_prop->opaque));
+
+out:
+	mutex_unlock(&dev_prop->lock);
+	return ret;
 }
 
 int edgetpu_kci_resp_rkci_ack(struct edgetpu_dev *etdev, struct gcip_kci_response_element *rkci_cmd)

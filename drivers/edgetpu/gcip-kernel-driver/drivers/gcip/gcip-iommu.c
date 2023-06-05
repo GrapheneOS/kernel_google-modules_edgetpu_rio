@@ -8,7 +8,6 @@
 #include <linux/bitops.h>
 #include <linux/device.h>
 #include <linux/dma-direction.h>
-#include <linux/dma-iommu.h>
 #include <linux/dma-mapping.h>
 #include <linux/genalloc.h>
 #include <linux/iova.h>
@@ -16,12 +15,15 @@
 #include <linux/of.h>
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
+#include <linux/version.h>
 
 #include <gcip/gcip-domain-pool.h>
 #include <gcip/gcip-iommu.h>
 #include <gcip/gcip-mem-pool.h>
 
-#define HAS_IOVAD_BEST_FIT_ALGO (IS_ENABLED(CONFIG_GCIP_TEST) || IS_ENABLED(CONFIG_ANDROID))
+#if HAS_IOVAD_BEST_FIT_ALGO
+#include <linux/dma-iommu.h>
+#endif
 
 /* Macros for manipulating @gcip_map_flags parameter. */
 #define GCIP_MAP_FLAGS_GET_VALUE(ATTR, flags)                                                      \
@@ -104,8 +106,17 @@ static dma_addr_t iovad_alloc_iova_space(struct gcip_iommu_domain *domain, size_
 
 	size = size >> shift;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 17, 0)
+	/*
+	 * alloc_iova_fast() makes use of a cache of recently freed IOVA pages which does not
+	 * behave correctly for non-power-of-two amounts of pages. Round up the number of
+	 * pages being allocated to ensure it's a safe number of pages.
+	 *
+	 * This rounding is done automatically as of 5.17
+	 */
 	if (size < (1 << (IOVA_RANGE_CACHE_MAX_SIZE - 1)))
 		size = roundup_pow_of_two(size);
+#endif
 
 	iova = alloc_iova_fast(&domain->iova_space.iovad, size,
 			       domain->domain_pool->last_daddr >> shift, true);
