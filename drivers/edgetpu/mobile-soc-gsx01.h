@@ -11,7 +11,7 @@
 #include <linux/kernel.h>
 #include <linux/mutex.h>
 #include <linux/types.h>
-#include <soc/google/bcl.h>
+#include <bcl.h>
 #include <soc/google/exynos_pm_qos.h>
 
 /* SoC data for GSx01 platforms */

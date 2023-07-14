@@ -7,7 +7,7 @@
 
 #include <linux/delay.h>
 #include <linux/iopoll.h>
-#include <soc/google/bcl.h>
+#include <bcl.h>
 
 #include "edgetpu-config.h"
 #include "edgetpu-internal.h"

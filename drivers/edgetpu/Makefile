@@ -11,6 +11,8 @@ KBUILD_OPTIONS	+= CONFIG_GCIP=y
 
 -include $(KERNEL_SRC)/../private/google-modules/soc/gs/Makefile.include
 
+EXTRA_SYMBOLS += $(OUT_DIR)/../private/google-modules/power/mitigation/Module.symvers
+
 GCIP_DIR=gcip-kernel-driver/drivers/gcip
 
 modules modules_install:
