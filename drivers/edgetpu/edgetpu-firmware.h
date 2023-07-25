@@ -137,13 +137,6 @@ struct edgetpu_firmware_chip_data {
 };
 
 /*
- * Returns the chip-specific IOVA where the firmware is mapped.
- *
- * Debug purpose only.
- */
-unsigned long edgetpu_chip_firmware_iova(struct edgetpu_dev *etdev);
-
-/*
  * Load and run firmware.
  * @name: the name passed into underlying request_firmware API
  * @flags: edgetpu_firmware_flags for the image
@@ -214,5 +207,8 @@ uint32_t edgetpu_firmware_get_cl(struct edgetpu_firmware *et_fw);
 
 /* Returns the build time of the image in seconds since 1970. */
 uint64_t edgetpu_firmware_get_build_time(struct edgetpu_firmware *et_fw);
+
+/* Returns the flavor of the firmware image. */
+enum gcip_fw_flavor edgetpu_firmware_get_flavor(struct edgetpu_dev *etdev);
 
 #endif /* __EDGETPU_FIRMWARE_H__ */

@@ -11,8 +11,9 @@
 #include <linux/kernel.h>
 #include <linux/mutex.h>
 #include <linux/types.h>
-#include <bcl.h>
 #include <soc/google/exynos_pm_qos.h>
+
+struct bcl_device;
 
 /* SoC data for GSx01 platforms */
 struct edgetpu_soc_data {

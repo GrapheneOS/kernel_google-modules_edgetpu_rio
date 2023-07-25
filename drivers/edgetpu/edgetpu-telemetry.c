@@ -166,8 +166,8 @@ void edgetpu_telemetry_irq_handler(struct edgetpu_dev *etdev)
 static void telemetry_mappings_show(struct gcip_telemetry *tel, struct edgetpu_coherent_mem *mem,
 				    struct seq_file *s)
 {
-	seq_printf(s, "  %#llx %lu %s %#llx %pad\n", mem->tpu_addr,
-		   DIV_ROUND_UP(mem->size, PAGE_SIZE), tel->name, mem->host_addr, &mem->dma_addr);
+	seq_printf(s, "  %pad %lu %s %#llx\n", &mem->dma_addr,
+		   DIV_ROUND_UP(mem->size, PAGE_SIZE), tel->name, mem->host_addr);
 }
 
 void edgetpu_telemetry_mappings_show(struct edgetpu_dev *etdev,

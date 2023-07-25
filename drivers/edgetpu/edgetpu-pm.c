@@ -52,12 +52,25 @@ static int __maybe_unused edgetpu_pm_suspend(struct device *dev)
 	struct edgetpu_dev *etdev = dev_get_drvdata(dev);
 	struct gcip_pm *pm = etdev->pm;
 	struct edgetpu_list_device_client *lc;
+	int count;
 
-	if (!pm || !gcip_pm_is_powered(pm))
+	if (unlikely(!pm))
 		return 0;
 
-	etdev_warn_ratelimited(etdev, "cannot suspend with power up count = %d\n",
-			       gcip_pm_get_count(pm));
+	if (!gcip_pm_trylock(pm)) {
+		etdev_warn_ratelimited(etdev, "cannot suspend during power state transition\n");
+		return -EAGAIN;
+	}
+
+	count = gcip_pm_get_count(pm);
+	gcip_pm_unlock(etdev->pm);
+
+	if (!count) {
+		etdev_info_ratelimited(etdev, "suspended\n");
+		return 0;
+	}
+
+	etdev_warn_ratelimited(etdev, "cannot suspend with power up count = %d\n", count);
 
 	if (!mutex_trylock(&etdev->clients_lock))
 		return -EAGAIN;

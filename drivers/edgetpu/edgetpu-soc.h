@@ -54,4 +54,10 @@ void edgetpu_soc_thermal_init(struct edgetpu_dev *etdev);
 /* De-init thermal subsystem SoC specifics for TPU */
 void edgetpu_soc_thermal_exit(struct edgetpu_dev *etdev);
 
+/* Activates the context of @pasid. */
+int edgetpu_soc_activate_context(struct edgetpu_dev *etdev, int pasid);
+
+/* Deactivates the context of @pasid. */
+void edgetpu_soc_deactivate_context(struct edgetpu_dev *etdev, int pasid);
+
 #endif /* __EDGETPU_SOC_H__ */

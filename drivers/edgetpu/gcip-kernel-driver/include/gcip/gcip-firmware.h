@@ -126,8 +126,8 @@ void gcip_firmware_tracing_destroy(struct gcip_fw_tracing *fw_tracing);
 /*
  * Restore the previous firmware tracing level.
  *
- * This function is designed to restore the firmware tracing level during power management calls and
- * thus it assumes the caller holds the pm lock.
+ * This function is designed to restore the thermal state during firmware load and thus it assumes
+ * the caller will kept the block powered.
  */
 int gcip_firmware_tracing_restore_on_powering(struct gcip_fw_tracing *fw_tracing);
 

@@ -96,8 +96,8 @@ int edgetpu_iremap_alloc(struct edgetpu_dev *etdev, size_t size,
 	mem->tpu_addr = etmempool->base_tpu_addr + offset;
 	mem->phys_addr = etmempool->base_phys_addr + offset;
 	mem->size = size;
-	etdev_dbg(etdev, "%s @ %pK IOVA = %#llx size = %zu",
-		  __func__, mem->vaddr, mem->dma_addr, size);
+	etdev_dbg(etdev, "%s @ %pK IOVA = %pad size = %zu", __func__, mem->vaddr, &mem->dma_addr,
+		  size);
 
 	return 0;
 }
@@ -113,8 +113,8 @@ void edgetpu_iremap_free(struct edgetpu_dev *etdev,
 		return;
 	}
 
-	etdev_dbg(etdev, "%s @ %llx IOVA = %llx size = %zu",
-		  __func__, (u64)mem->vaddr, mem->dma_addr, mem->size);
+	etdev_dbg(etdev, "%s @ %pK IOVA = %pad size = %zu", __func__, mem->vaddr, &mem->dma_addr,
+		  mem->size);
 	gen_pool_free(etmempool->gen_pool, (unsigned long)mem->vaddr,
 		      mem->size);
 	mem->vaddr = NULL;
@@ -151,8 +151,7 @@ int edgetpu_iremap_mmap(struct edgetpu_dev *etdev, struct vm_area_struct *vma,
 
 	offset = mem->vaddr - etmempool->base_vaddr;
 	phys = etmempool->base_phys_addr + offset;
-	etdev_dbg(etdev, "%s: virt = %llx phys = %llx\n",
-		  __func__, (u64)mem->vaddr, phys);
+	etdev_dbg(etdev, "%s: virt = %pK phys = %pap\n", __func__, mem->vaddr, &phys);
 	vma_size = vma->vm_end - vma->vm_start;
 	map_size = min(vma_size, mem->size);
 	ret = remap_pfn_range(vma, vma->vm_start, phys >> PAGE_SHIFT,

@@ -37,6 +37,15 @@
 	(LINUX_VERSION_CODE < KERNEL_VERSION(5, 16, 0) &&                                          \
 	 (IS_ENABLED(CONFIG_GCIP_TEST) || IS_ENABLED(CONFIG_ANDROID)))
 
+/* This feature was actually added in Linux 6.2, but backported to the 6.1 Android Common Kernel.*/
+#define HAS_IOMMU_PASID (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0))
+
+#define HAS_AUX_DOMAINS (LINUX_VERSION_CODE <= KERNEL_VERSION(5, 17, 0))
+
+#if HAS_IOMMU_PASID
+#include <linux/idr.h>
+#endif
+
 /*
  * Helpers for manipulating @gcip_map_flags parameter of the `gcip_iommu_domain_{map,unmap}_sg`
  * functions.
@@ -56,6 +65,12 @@
 	(GCIP_MAP_FLAGS_DMA_COHERENT_OFFSET + GCIP_MAP_FLAGS_DMA_COHERENT_BIT_SIZE)
 #define GCIP_MAP_FLAGS_DMA_ATTR_BIT_SIZE 10
 #define GCIP_MAP_FLAGS_DMA_ATTR_TO_FLAGS(attr) ((u64)(attr) << GCIP_MAP_FLAGS_DMA_ATTR_OFFSET)
+
+#define GCIP_MAP_FLAGS_RESTRICT_IOVA_OFFSET                                                       \
+	(GCIP_MAP_FLAGS_DMA_ATTR_OFFSET + GCIP_MAP_FLAGS_DMA_ATTR_BIT_SIZE)
+#define GCIP_MAP_FLAGS_RESTRICT_IOVA_BIT_SIZE 1
+#define GCIP_MAP_FLAGS_RESTRICT_IOVA_TO_FLAGS(restrict)                                           \
+	((u64)(restrict) << GCIP_MAP_FLAGS_RESTRICT_IOVA_OFFSET)
 
 struct gcip_iommu_domain_ops;
 
@@ -91,6 +106,13 @@ struct gcip_iommu_domain_pool {
 	size_t granule;
 	bool best_fit;
 	enum gcip_iommu_domain_type domain_type;
+	ioasid_t min_pasid;
+	ioasid_t max_pasid;
+#if HAS_IOMMU_PASID
+	struct ida pasid_pool;
+#elif HAS_AUX_DOMAINS
+	bool aux_enabled;
+#endif
 };
 
 /*
@@ -104,11 +126,13 @@ struct gcip_iommu_domain {
 	struct gcip_iommu_domain_pool *domain_pool;
 	struct iommu_domain *domain;
 	bool legacy_mode;
+	bool default_domain;
 	union {
 		struct iova_domain iovad;
 		struct gcip_mem_pool mem_pool;
 	} iova_space;
 	const struct gcip_iommu_domain_ops *ops;
+	ioasid_t pasid; /* Only valid if attached */
 };
 
 /*
@@ -125,8 +149,9 @@ struct gcip_iommu_domain_ops {
 	 * Only domains which are allocated after calling this callback will be affected.
 	 */
 	void (*enable_best_fit_algo)(struct gcip_iommu_domain *domain);
-	/* Allocates @size of buffer and returns its IOVA. */
-	dma_addr_t (*alloc_iova_space)(struct gcip_iommu_domain *domain, size_t size);
+	/* Allocates @size of IOVA space, optionally restricted to 32 bits, returns start IOVA. */
+	dma_addr_t (*alloc_iova_space)(struct gcip_iommu_domain *domain, size_t size,
+				       bool restrict_iova);
 	/* Releases @size of buffer which was allocated to @iova. */
 	void (*free_iova_space)(struct gcip_iommu_domain *domain, dma_addr_t iova, size_t size);
 };
@@ -215,6 +240,40 @@ struct gcip_iommu_domain *gcip_iommu_domain_pool_alloc_domain(struct gcip_iommu_
 void gcip_iommu_domain_pool_free_domain(struct gcip_iommu_domain_pool *pool,
 					struct gcip_iommu_domain *domain);
 
+/* Sets the range of valid PASIDs to be used when attaching a domain
+ *
+ * @min: The smallest acceptable value to be assigned to an attached domain
+ * @max: The largest acceptable value to be assigned to an attached domain
+ */
+void gcip_iommu_domain_pool_set_pasid_range(struct gcip_iommu_domain_pool *pool, ioasid_t min,
+					    ioasid_t max);
+
+/*
+ * Attaches a GCIP IOMMU domain
+ *
+ * Before calling this function, you must set the valid PASID range by calling
+ * `gcip_iommu_domain_pool_set_pasid_range()`.
+ *
+ * @pool: IOMMU domain pool @domain was allocated from
+ * @domain: The GCIP IOMMU domain to attach
+ *
+ * Returns:
+ * * >= 0    - The PASID the domain was successfully attached with
+ * * -ENOSYS - This device does not support attaching multiple domains
+ * * other   - Failed to attach the domain or obtain a PASID for it
+ */
+int gcip_iommu_domain_pool_attach_domain(struct gcip_iommu_domain_pool *pool,
+					 struct gcip_iommu_domain *domain);
+
+/*
+ * Detaches a GCIP IOMMU domain
+ *
+ * @pool: IOMMU domain pool @domain was allocated from and attached by
+ * @domain: The GCIP IOMMU domain to detach
+ */
+void gcip_iommu_domain_pool_detach_domain(struct gcip_iommu_domain_pool *pool,
+					  struct gcip_iommu_domain *domain);
+
 /*
  * Returns whether @domain is using legacy mode or not.
  *
@@ -238,14 +297,16 @@ static inline bool gcip_iommu_domain_is_legacy_mode(struct gcip_iommu_domain *do
  *               00 = DMA_BIDIRECTIONAL (host/device can write buffer)
  *               01 = DMA_TO_DEVICE     (host can write buffer)
  *               10 = DMA_FROM_DEVICE   (device can write buffer)
- *               (See https://docs.kernel.org/core-api/dma-api-howto.html#dma-direction)
+ *               (See [REDACTED]
  *   [2:2]   - Coherent Mapping:
  *               0 = Create non-coherent mappings of the buffer.
  *               1 = Create coherent mappings of the buffer.
  *   [12:3]  - DMA_ATTR:
  *               Not used in the non-legacy mode.
- *               (See https://www.kernel.org/doc/Documentation/core-api/dma-attributes.rst)
- *   [63:13] - RESERVED
+ *               (See [REDACTED]
+ *   [13:13] - RESTRICT_IOVA:
+ *               Restrict the IOVA assignment to 32 bit address window.
+ *   [63:14] - RESERVED
  *               Set RESERVED bits to 0 to ensure backwards compatibility.
  *
  * One can use `GCIP_MAP_FLAGS_DMA_*_TO_FLAGS` macros to generate a flag.

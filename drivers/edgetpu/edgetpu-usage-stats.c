@@ -236,10 +236,8 @@ void edgetpu_usage_stats_init(struct edgetpu_dev *etdev)
 	int ret;
 
 	ustats = devm_kzalloc(etdev->dev, sizeof(*etdev->usage_stats), GFP_KERNEL);
-	if (!ustats) {
-		etdev_warn(etdev, "failed to allocate memory for usage stats\n");
+	if (!ustats)
 		return;
-	}
 
 	args.version = EDGETPU_USAGE_METRIC_VERSION;
 	args.dev = etdev->dev;

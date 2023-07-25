@@ -233,6 +233,11 @@ struct gcip_kci_ops {
 	 * Context: normal.
 	 */
 	int (*update_usage)(struct gcip_kci *kci);
+	/*
+	 * Checks if the block is off.
+	 * Context: in_interrupt().
+	 */
+	bool (*is_block_off)(struct gcip_kci *kci);
 };
 
 struct gcip_kci {

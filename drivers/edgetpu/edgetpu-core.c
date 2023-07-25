@@ -22,6 +22,7 @@
 #include <linux/types.h>
 #include <linux/uidgid.h>
 
+#include <gcip/gcip-config.h>
 #include <gcip/gcip-firmware.h>
 
 #include "edgetpu-config.h"
@@ -285,7 +286,11 @@ int edgetpu_mmap(struct edgetpu_client *client, struct vm_area_struct *vma)
 	/* Mark the VMA's pages as uncacheable. */
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 	/* Disable fancy things to ensure our event counters work. */
+#if GCIP_HAS_VMA_FLAGS_API
+	vm_flags_set(vma, VM_DONTCOPY | VM_DONTEXPAND | VM_DONTDUMP);
+#else
 	vma->vm_flags |= VM_DONTCOPY | VM_DONTEXPAND | VM_DONTDUMP;
+#endif
 
 	/* map all CSRs for debug purpose */
 	if (type == VMA_FULL_CSR) {
@@ -477,9 +482,11 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 		goto remove_mboxes;
 	}
 
-	ret = edgetpu_chip_setup_mmu(etdev);
-	if (ret)
+	ret = edgetpu_mmu_attach(etdev);
+	if (ret) {
+		dev_err(etdev->dev, "failed to attach IOMMU: %d", ret);
 		goto remove_mboxes;
+	}
 
 	edgetpu_usage_stats_init(etdev);
 
@@ -519,7 +526,7 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 
 remove_usage_stats:
 	edgetpu_usage_stats_exit(etdev);
-	edgetpu_chip_remove_mmu(etdev);
+	edgetpu_mmu_detach(etdev);
 remove_mboxes:
 	edgetpu_mailbox_remove_all(etdev->mailbox_manager);
 remove_dev:
@@ -535,7 +542,7 @@ void edgetpu_device_remove(struct edgetpu_dev *etdev)
 	edgetpu_debug_dump_exit(etdev);
 	edgetpu_mailbox_remove_all(etdev->mailbox_manager);
 	edgetpu_usage_stats_exit(etdev);
-	edgetpu_chip_remove_mmu(etdev);
+	edgetpu_mmu_detach(etdev);
 	edgetpu_fs_remove(etdev);
 }
 
@@ -656,29 +663,73 @@ int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size,
 			   enum edgetpu_context_id context_id)
 {
 	const u32 flags = EDGETPU_MMU_CC_ACCESS | EDGETPU_MMU_HOST | EDGETPU_MMU_COHERENT;
+	int ret;
 
 	mem->vaddr = dma_alloc_coherent(etdev->dev, size, &mem->dma_addr,
 					GFP_KERNEL);
 	if (!mem->vaddr)
 		return -ENOMEM;
+
 	edgetpu_x86_coherent_mem_init(mem);
-	mem->tpu_addr =
-		edgetpu_mmu_tpu_map(etdev, mem->dma_addr, size,
-				    DMA_BIDIRECTIONAL, context_id, flags);
-	if (!mem->tpu_addr) {
-		dma_free_coherent(etdev->dev, size, mem->vaddr, mem->dma_addr);
-		mem->vaddr = NULL;
-		return -EINVAL;
+
+	/* If this context's mappings reside in the default domain, we're done */
+	if (edgetpu_mmu_is_context_using_default_domain(etdev, context_id)) {
+		mem->tpu_addr = mem->dma_addr;
+		mem->size = size;
+		return 0;
 	}
+
+	/*
+	 * dma_get_sgtable may not always be available, and coherent buffers are always physically
+	 * contiguous, so create a 1-entry sgt by hand.
+	 */
+	mem->client_sgt = kzalloc(sizeof(*mem->client_sgt), GFP_KERNEL);
+	if (!mem->client_sgt) {
+		ret = -ENOMEM;
+		goto err_free_coherent;
+	}
+	mem->client_sgt->sgl = kzalloc(sizeof(*mem->client_sgt->sgl), GFP_KERNEL);
+	if (!mem->client_sgt->sgl) {
+		ret = -ENOMEM;
+		goto err_free_sgt;
+	}
+	mem->client_sgt->nents = 1;
+	mem->client_sgt->orig_nents = 1;
+	sg_set_page(mem->client_sgt->sgl, virt_to_page(mem->vaddr), PAGE_ALIGN(size), 0);
+
+	ret = edgetpu_mmu_map_sgt(etdev, mem->client_sgt, context_id, DMA_BIDIRECTIONAL, 0, flags);
+	if (!ret) {
+		etdev_err(etdev, "Failed to map coherent buffer to context %#X\n", context_id);
+		ret = -EIO;
+		goto err_free_sgl;
+	}
+
+	mem->tpu_addr = sg_dma_address(mem->client_sgt->sgl);
 	mem->size = size;
 	return 0;
+
+err_free_sgl:
+	kfree(mem->client_sgt->sgl);
+err_free_sgt:
+	kfree(mem->client_sgt);
+	mem->client_sgt = NULL;
+err_free_coherent:
+	dma_free_coherent(etdev->dev, size, mem->vaddr, mem->dma_addr);
+	mem->vaddr = NULL;
+	return ret;
 }
 
 void edgetpu_free_coherent(struct edgetpu_dev *etdev,
 			   struct edgetpu_coherent_mem *mem,
 			   enum edgetpu_context_id context_id)
 {
-	edgetpu_mmu_tpu_unmap(etdev, mem->tpu_addr, mem->size, context_id);
+	if (!edgetpu_mmu_is_context_using_default_domain(etdev, context_id)) {
+		edgetpu_mmu_unmap_sgt(etdev, mem->client_sgt, context_id, DMA_BIDIRECTIONAL,
+				      /*dma_attrs=*/0, /*mmu_flags=*/0);
+		kfree(mem->client_sgt->sgl);
+		kfree(mem->client_sgt);
+		mem->client_sgt = NULL;
+	}
 	edgetpu_x86_coherent_mem_set_wb(mem);
 	dma_free_coherent(etdev->dev, mem->size, mem->vaddr, mem->dma_addr);
 	mem->vaddr = NULL;

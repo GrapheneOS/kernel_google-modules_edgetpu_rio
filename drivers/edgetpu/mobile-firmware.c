@@ -216,8 +216,8 @@ static int mobile_firmware_gsa_authenticate(struct edgetpu_mobile_platform_dev *
 	}
 
 	memcpy(header_vaddr, fw_buf->vaddr, MOBILE_FW_HEADER_SIZE);
-	etdev_dbg(etdev, "Requesting GSA image load. meta = %llX payload = %llX", header_dma_addr,
-		  (u64)etmdev->fw_region_paddr);
+	etdev_dbg(etdev, "Requesting GSA image load. meta = %pad payload = %pap", &header_dma_addr,
+		  &etmdev->fw_region_paddr);
 
 	ret = gsa_load_tpu_fw_image(etmdev->gsa_dev, header_dma_addr,
 				    etmdev->fw_region_paddr);
@@ -247,8 +247,8 @@ static int mobile_firmware_update_remapped_data_region(struct edgetpu_dev *etdev
 		    config->remapped_region_start)
 		return -EINVAL;
 
-	etdev_dbg(etdev, "Moving remapped data from %#llx to %#llx\n", etmdev->remapped_data_addr,
-		  remapped_data_addr);
+	etdev_dbg(etdev, "Moving remapped data from %pad to %pad\n", &etmdev->remapped_data_addr,
+		  &remapped_data_addr);
 
 	if (etmdev->shared_mem_vaddr) {
 		/* No need to free the VII queues since allocated groups will block fw loading. */
@@ -511,16 +511,4 @@ int edgetpu_mobile_firmware_create(struct edgetpu_dev *etdev)
 void edgetpu_mobile_firmware_destroy(struct edgetpu_dev *etdev)
 {
 	edgetpu_firmware_destroy(etdev);
-}
-
-unsigned long edgetpu_chip_firmware_iova(struct edgetpu_dev *etdev)
-{
-	/*
-	 * On mobile platforms, firmware address translation may happen in 1 or 2 stages:
-	 * 1.- Instruction remap registers.
-	 * 2.- IOMMU translation (when not running in GSA privilege).
-	 * In either case, the address seen by the TPU's CPU core will remain constant, and
-	 * equal to the macro below.
-	 */
-	return EDGETPU_INSTRUCTION_REMAP_BASE;
 }

@@ -242,6 +242,13 @@ static bool gcip_kci_before_handle_resp(struct gcip_mailbox *mailbox, const void
 	return true;
 }
 
+static inline bool gcip_kci_is_block_off(struct gcip_mailbox *mailbox)
+{
+	struct gcip_kci *kci = gcip_mailbox_get_data(mailbox);
+
+	return kci->ops->is_block_off ? kci->ops->is_block_off(kci) : false;
+}
+
 static const struct gcip_mailbox_ops gcip_mailbox_ops = {
 	.get_cmd_queue_head = gcip_kci_get_cmd_queue_head,
 	.get_cmd_queue_tail = gcip_kci_get_cmd_queue_tail,
@@ -265,6 +272,7 @@ static const struct gcip_mailbox_ops gcip_mailbox_ops = {
 	.after_enqueue_cmd = gcip_kci_after_enqueue_cmd,
 	.after_fetch_resps = gcip_kci_after_fetch_resps,
 	.before_handle_resp = gcip_kci_before_handle_resp,
+	.is_block_off = gcip_kci_is_block_off,
 };
 
 /*
@@ -357,7 +365,7 @@ static int gcip_reverse_kci_remove_resp(struct gcip_reverse_kci *rkci,
 	 * Prevents the compiler from discarding and reloading its cached value additionally forces
 	 * the CPU to order against subsequent memory references.
 	 * Shamelessly stolen from:
-	 * https://www.kernel.org/doc/html/latest/core-api/circular-buffers.html
+	 * [REDACTED]
 	 */
 	head = smp_load_acquire(&rkci->head);
 	tail = rkci->tail;

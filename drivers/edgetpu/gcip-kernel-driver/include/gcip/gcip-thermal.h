@@ -110,8 +110,8 @@ bool gcip_thermal_is_device_suspended(struct gcip_thermal *thermal);
 /*
  * Restores the previous thermal state.
  *
- * This function is designed to restore the thermal state during power management calls and thus it
- * assumes the caller holds the pm lock.
+ * This function is designed to restore the thermal state during firmware load and thus it assumes
+ * the caller will kept the block powered.
  */
 int gcip_thermal_restore_on_powering(struct gcip_thermal *thermal);
 

@@ -5,9 +5,9 @@
  * Copyright (C) 2021 Google, Inc.
  */
 
+#include <bcl.h>
 #include <linux/delay.h>
 #include <linux/iopoll.h>
-#include <bcl.h>
 
 #include "edgetpu-config.h"
 #include "edgetpu-internal.h"
@@ -83,6 +83,7 @@ static void rio_patch_lpm(struct edgetpu_dev *etdev)
 	EDGETPU_LPM_IMEM_OPS_SET(etdev, 200, 0x0bc95001);
 	EDGETPU_LPM_IMEM_OPS_SET(etdev, 201, 0x14171018);
 	EDGETPU_LPM_IMEM_OPS_SET(etdev, 202, 0x02001118);
+
 	/* psm_1_state_table_0_trans_1_next_state */
 	edgetpu_dev_write_32_sync(etdev, 0x1c2020, 0x00000000);
 	/* psm_1_state_table_0_trans_1_seq_addr */
@@ -93,6 +94,15 @@ static void rio_patch_lpm(struct edgetpu_dev *etdev)
 	edgetpu_dev_write_32_sync(etdev, 0x1c2034, 0x00000001);
 	/* trigger_csr_events_en_5_hi */
 	edgetpu_dev_write_32_sync(etdev, 0x1c012c, 0x00000003);
+
+        /*
+         * FRC clocking fix for b/287661979.
+         *
+         * Increases the delay between cluster clock enablement and logic
+         * retention/restore activation.
+         */
+	EDGETPU_LPM_IMEM_OPS_SET(etdev, 3, 0x21261101);
+	EDGETPU_LPM_IMEM_OPS_SET(etdev, 4, 0x11111005);
 }
 
 static int rio_lpm_up(struct edgetpu_dev *etdev)
@@ -144,14 +154,13 @@ static int rio_lpm_up(struct edgetpu_dev *etdev)
 
 static bool rio_is_block_down(struct edgetpu_dev *etdev)
 {
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	int timeout_cnt = 0;
 	int curr_state;
 
 	do {
 		/* Delay 20us per retry till blk shutdown finished */
 		usleep_range(SHUTDOWN_DELAY_US_MIN, SHUTDOWN_DELAY_US_MAX);
-		curr_state = readl(etmdev->pmu_status);
+		curr_state = readl(etdev->pmu_status);
 		if (!curr_state)
 			return true;
 		timeout_cnt++;
@@ -173,7 +182,7 @@ int edgetpu_chip_pm_create(struct edgetpu_dev *etdev)
 
 	platform_pwr->lpm_up = rio_lpm_up;
 	platform_pwr->lpm_down = rio_lpm_down;
-	if (etmdev->pmu_status)
+	if (etdev->pmu_status)
 		platform_pwr->is_block_down = rio_is_block_down;
 	platform_pwr->post_fw_start = rio_post_fw_start;
 

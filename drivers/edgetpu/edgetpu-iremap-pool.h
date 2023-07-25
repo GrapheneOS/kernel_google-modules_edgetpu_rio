@@ -27,7 +27,7 @@ void edgetpu_iremap_pool_destroy(struct edgetpu_dev *etdev);
 /*
  * Attempt to allocate memory in the instruction remap pool if the device
  * has one.
- * Fall back to dma_alloc_coherent and edgetpu_mmu_tpu_map otherwise.
+ * Fall back to dma_alloc_coherent and edgetpu_mmu_map_sgt otherwise.
  */
 int edgetpu_iremap_alloc(struct edgetpu_dev *etdev, size_t size,
 			 struct edgetpu_coherent_mem *mem,

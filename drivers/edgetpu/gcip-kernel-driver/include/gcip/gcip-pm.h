@@ -23,6 +23,8 @@ struct gcip_pm {
 	int count;
 	/* Flag indicating a deferred power down is pending. Protected by @lock */
 	bool power_down_pending;
+	/* The worker to asynchronously call gcip_pm_put(). */
+	struct work_struct put_async_work;
 
 	/* Callbacks. See struct gcip_pm_args. */
 	void *data;
@@ -98,6 +100,12 @@ int gcip_pm_get(struct gcip_pm *pm);
  * GCIP_ASYNC_POWER_DOWN_RETRY_DELAY ms.
  */
 void gcip_pm_put(struct gcip_pm *pm);
+
+/* Schedules an asynchronous job to execute gcip_pm_put(). */
+void gcip_pm_put_async(struct gcip_pm *pm);
+
+/* Flushes the pending pm_put work if any. */
+void gcip_pm_flush_put_work(struct gcip_pm *pm);
 
 /* Gets the power up counter. Note that this is checked without PM lock. */
 int gcip_pm_get_count(struct gcip_pm *pm);

@@ -143,7 +143,6 @@ int gcip_firmware_tracing_restore_on_powering(struct gcip_fw_tracing *fw_tracing
 	if (!fw_tracing)
 		return 0;
 
-	gcip_pm_lockdep_assert_held(fw_tracing->pm);
 	mutex_lock(&fw_tracing->lock);
 
 	fw_tracing->active_level = GCIP_FW_TRACING_DEFAULT_VOTE;

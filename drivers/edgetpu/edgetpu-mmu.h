@@ -13,6 +13,8 @@
 #include <linux/scatterlist.h>
 #include <linux/version.h>
 
+#include <gcip/gcip-iommu.h>
+
 #include "edgetpu-internal.h"
 #include "edgetpu.h"
 
@@ -39,7 +41,7 @@ struct edgetpu_iommu_domain {
 	 * edgetpu_mmu_detach_domain().
 	 */
 	uint pasid;
-	struct iommu_domain *iommu_domain;
+	struct gcip_iommu_domain *gdomain;
 	/*
 	 * A token set by edgetpu_mmu_alloc_domain(). See the description of
 	 * edgetpu_mmu_add_translation() about @context_id for more details.
@@ -106,13 +108,20 @@ static inline unsigned long map_to_dma_attr(edgetpu_map_flag_t flags, bool map)
 	return attr;
 }
 
-int edgetpu_mmu_attach(struct edgetpu_dev *dev, void *mmu_info);
+int edgetpu_mmu_attach(struct edgetpu_dev *dev);
 void edgetpu_mmu_detach(struct edgetpu_dev *dev);
 
 int edgetpu_mmu_map(struct edgetpu_dev *dev, struct edgetpu_mapping *map,
 		    enum edgetpu_context_id context_id, u32 mmu_flags);
 void edgetpu_mmu_unmap(struct edgetpu_dev *dev, struct edgetpu_mapping *map,
 		       enum edgetpu_context_id context_id);
+
+int edgetpu_mmu_map_sgt(struct edgetpu_dev *etdev, struct sg_table *sgt,
+			enum edgetpu_context_id context_id, enum dma_data_direction dir,
+			unsigned long dma_attrs, u32 mmu_flags);
+void edgetpu_mmu_unmap_sgt(struct edgetpu_dev *etdev, struct sg_table *sgt,
+			   enum edgetpu_context_id context_id, enum dma_data_direction dir,
+			   unsigned long dma_attrs, u32 mmu_flags);
 
 /**
  * Maps TPU IOVA @iova to @sgt.
@@ -121,9 +130,6 @@ void edgetpu_mmu_unmap(struct edgetpu_dev *dev, struct edgetpu_mapping *map,
  * Description: Request TPU to map @iova to the pages presented by @sgt.
  *
  * Returns 0 on success, -errno on error.
- *
- * Note: Caller should use edgetpu_mmu_reserve() before calling this method if
- * the target @iova isn't acquired from edgetpu_mmu_alloc(@etdev).
  */
 int edgetpu_mmu_map_iova_sgt(struct edgetpu_dev *etdev, tpu_addr_t iova,
 			     struct sg_table *sgt, enum dma_data_direction dir,
@@ -137,36 +143,6 @@ void edgetpu_mmu_unmap_iova_sgt_attrs(struct edgetpu_dev *etdev,
 	edgetpu_mmu_unmap_iova_sgt_attrs(e, i, s, d, c, 0)
 
 /**
- * Allocates an IOVA in the internal MMU.
- * @size: size needed to be allocated in bytes.
- *
- * Description: Allocates a TPU address to be mapped via
- * edgetpu_mmu_add_translation().
- *
- * If the chip doesn't have an internal MMU then return zero.
- *
- * Returns zero on error.
- */
-tpu_addr_t edgetpu_mmu_alloc(struct edgetpu_dev *etdev, size_t size,
-			     u32 mmu_flags);
-/**
- * Marks the IOVA region [@tpu_addr, @tpu_addr + @size) as reserved.
- *
- * Description: Use this function to mark the region as reserved and prevents
- * it from being allocated by edgetpu_mmu_alloc().
- *
- * Use edgetpu_mmu_free() to release the reserved area.
- */
-void edgetpu_mmu_reserve(struct edgetpu_dev *etdev, tpu_addr_t tpu_addr,
-			 size_t size);
-/*
- * Free the IOVA allocated by edgetpu_mmu_alloc() or reserved by
- * edgetpu_mmu_reserve().
- */
-void edgetpu_mmu_free(struct edgetpu_dev *etdev, tpu_addr_t tpu_addr,
-		      size_t size);
-
-/**
  * Add an IOVA translation to the chip MMU/IOMMU.
  * @iova: I/O virtual address (TPU VA) to map to paddr.
  * @paddr: Physical/next-stage target address to which iova is to be mapped.
@@ -177,10 +153,6 @@ void edgetpu_mmu_free(struct edgetpu_dev *etdev, tpu_addr_t tpu_addr,
  * Description: Add a mapping from iova -> paddr to the MMU for the chip.
  * paddr can be considered a physical address from the TPU's viewpoint, but
  * may actually be another IOVA for another IOMMU downstream of the chip MMU.
- *
- * Note: for chipsets with edgetpu_mmu_alloc() support, @iova passed to this
- * function must be either allocated from edgetpu_mmu_alloc() or reserved by
- * edgetpu_mmu_reserve().
  *
  * For chipsets with IOMMU AUX domain support, @context_id can be used to
  * specify a detached IOMMU domain by value
@@ -196,67 +168,6 @@ int edgetpu_mmu_add_translation(struct edgetpu_dev *etdev, unsigned long iova,
 void edgetpu_mmu_remove_translation(struct edgetpu_dev *etdev,
 				    unsigned long iova, size_t size,
 				    enum edgetpu_context_id context_id);
-
-/**
- * Add a TPU mapping for a local DMA mapping
- * @down_addr: DMA (or physical) addr of memory downstream from TPU
- * @size: size of memory area in bytes
- * @dir: DMA direction of mapping
- * @context_id: context ID for the mapping
- * @mmu_flags: the flag or'ed with EDGETPU_MMU_* macros
- *
- * Description: For chips with internal MMUs, add the required internal MMU
- * mapping for the TPU to access @down_addr, the DMA or physical address of the
- * buffer as returned by the Linux DMA API when the DMA mapping was created.
- * This can be used with, for example, buffers allocated using
- * dma_alloc_coherent(), which are mapped appropriately for any downstream IOMMU
- * and must be mapped to the TPU internal MMU as well.
- *
- * For a chip that doesn't have an internal MMU but has the IOMMU domain AUX
- * feature, perform the necessary mapping to @context_id and return the
- * downstream DMA address.
- *
- * Returns zero on error.
- */
-tpu_addr_t edgetpu_mmu_tpu_map(struct edgetpu_dev *etdev, dma_addr_t down_addr,
-			       size_t size, enum dma_data_direction dir,
-			       enum edgetpu_context_id context_id,
-			       u32 mmu_flags);
-
-/* Unmap a TPU mapping created by edgetpu_mmu_tpu_map */
-void edgetpu_mmu_tpu_unmap(struct edgetpu_dev *etdev,
-			   tpu_addr_t tpu_addr, size_t size,
-			   enum edgetpu_context_id context_id);
-
-/**
- * Add a TPU mapping towards an SG table.
- * @sgt: An SG table that is already mapped to @etdev->dev, i.e. dma_map_sg*
- *       has been called.
- * @dir: DMA direction of mapping
- * @context_id: context ID for the mapping
- * @mmu_flags: the flag or'ed with EDGETPU_MMU_* macros
- *
- * Description: For chips with internal MMUs, add the required internal MMU
- * mapping for the TPU to access the DMA addresses of @sgt.
- *
- * For a chip that doesn't have an internal MMU but has the IOMMU domain AUX
- * feature, perform the necessary mapping to @context_id and return the
- * downstream DMA address.
- *
- * Caller ensures the SG table has DMA addresses as compact as possible, that is
- * if @sgt->nents is greater than 1 then the DMA addresses are not continuous.
- *
- * Returns zero on error.
- */
-tpu_addr_t edgetpu_mmu_tpu_map_sgt(struct edgetpu_dev *etdev,
-				   struct sg_table *sgt,
-				   enum dma_data_direction dir,
-				   enum edgetpu_context_id context_id,
-				   u32 mmu_flags);
-/* Unmap a TPU mapping created by edgetpu_mmu_tpu_map_sgt */
-void edgetpu_mmu_tpu_unmap_sgt(struct edgetpu_dev *etdev, tpu_addr_t tpu_addr,
-			       struct sg_table *sgt,
-			       enum edgetpu_context_id context_id);
 
 /*
  * Allocates a IOMMU domain.
@@ -291,5 +202,18 @@ int edgetpu_mmu_attach_domain(struct edgetpu_dev *etdev,
 /* Detaches the domain from the MMU device. */
 void edgetpu_mmu_detach_domain(struct edgetpu_dev *etdev,
 			       struct edgetpu_iommu_domain *etdomain);
+
+/* TODO(b/281459896) Make domain comparisons internal to edgetpu-mmu.h */
+/*
+ * Returns whether mappings for a given context exist in the default domain.
+ *
+ * If a context represented by @ctx_id has been assigned the default IOMMU domain, either uniquely,
+ * or because AUX domains are not supported, this function returns true.
+ *
+ * This can be used to determine if a buffer which is already mapped for the default domain (such as
+ * coherent buffers or dma-bufs) needs to be remapped for specifically for the context.
+ */
+bool edgetpu_mmu_is_context_using_default_domain(struct edgetpu_dev *etdev,
+						 enum edgetpu_context_id ctx_id);
 
 #endif /* __EDGETPU_MMU_H__ */

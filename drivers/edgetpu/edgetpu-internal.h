@@ -73,14 +73,19 @@ typedef u64 tpu_addr_t;
 
 struct edgetpu_coherent_mem {
 	void *vaddr;		/* kernel VA, no allocation if NULL */
-	dma_addr_t dma_addr;	/* DMA handle for downstream IOMMU, if any */
-	tpu_addr_t tpu_addr;	/* DMA handle for TPU internal IOMMU, if any */
+	dma_addr_t dma_addr;	/* IOVA for default domain, returned by dma_alloc_coherent */
+	tpu_addr_t tpu_addr;	/*
+				 * IOVA for the domain of the context the memory was requested for.
+				 * Equal to dma_addr if requested for EDGETPU_CONTEXT_KCI.
+				 */
 	u64 host_addr;		/* address mapped on host for debugging */
 	u64 phys_addr;		/* physical address, if available */
 	size_t size;
 #ifdef CONFIG_X86
 	bool is_set_uc;		/* memory has been marked uncached on X86 */
 #endif
+	/* SGT used to map the coherent memory into the destination context. */
+	struct sg_table *client_sgt;
 };
 
 struct edgetpu_device_group;
@@ -233,6 +238,9 @@ struct edgetpu_dev {
 	/* debug dump handlers */
 	edgetpu_debug_dump_handlers *debug_dump_handlers;
 	struct work_struct debug_dump_work;
+
+	/* PMU status base address for block status, maybe NULL */
+	void __iomem *pmu_status;
 };
 
 struct edgetpu_dev_iface {
@@ -393,19 +401,6 @@ void edgetpu_chip_exit(struct edgetpu_dev *etdev);
 
 /* IRQ handler */
 irqreturn_t edgetpu_chip_irq_handler(int irq, void *arg);
-
-/*
- * Called from core to chip layer when MMU is needed during device init.
- *
- * Returns 0 on success, otherwise -errno.
- */
-int edgetpu_chip_setup_mmu(struct edgetpu_dev *etdev);
-
-/*
- * Reverts edgetpu_chip_setup_mmu().
- * This is called during device removal.
- */
-void edgetpu_chip_remove_mmu(struct edgetpu_dev *etdev);
 
 /* Device -> Core API */
 

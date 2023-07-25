@@ -33,20 +33,6 @@
 #define to_etfence(gfence) container_of(gfence, struct edgetpu_dma_fence, gfence)
 
 /*
- * Records objects for mapping a dma-buf to an edgetpu_dev.
- */
-struct dmabuf_map_entry {
-	struct dma_buf_attachment *attachment;
-	/* SG table returned by dma_buf_map_attachment() */
-	struct sg_table *sgt;
-	/*
-	 * The SG table that shrunk and condensed from @sgt with region [0, size), where @size is
-	 * the size field in edgetpu_dmabuf_map which owns this entry.
-	 */
-	struct sg_table shrunk_sgt;
-};
-
-/*
  * Records the mapping and other fields needed for mapping a dma-buf to a device
  * group.
  */
@@ -55,7 +41,9 @@ struct edgetpu_dmabuf_map {
 	u64 size; /* size of this mapping in bytes */
 	u32 mmu_flags;
 	struct dma_buf *dmabuf;
-	struct dmabuf_map_entry *map_entry;
+	struct dma_buf_attachment *attachment;
+	/* SG table returned by dma_buf_map_attachment(). Records default domain mapping. */
+	struct sg_table *dma_sgt;
 };
 
 /*
@@ -74,27 +62,17 @@ struct edgetpu_dma_fence {
 static const struct dma_fence_ops edgetpu_dma_fence_ops;
 
 /*
- * Maps @dmap->map_entry.
+ * Maps @dmap->map into its owning device group's context.
  *
  * Caller holds @group->lock.
  */
-static int etdev_map_dmabuf(struct edgetpu_dev *etdev,
-			    struct edgetpu_dmabuf_map *dmap,
-			    tpu_addr_t *tpu_addr_p)
+static int etdev_map_dmabuf(struct edgetpu_dev *etdev, struct edgetpu_dmabuf_map *dmap)
 {
 	struct edgetpu_device_group *group = dmap->map.priv;
 	const enum edgetpu_context_id ctx_id =
 		edgetpu_group_context_id_locked(group);
-	struct dmabuf_map_entry *entry = dmap->map_entry;
-	tpu_addr_t tpu_addr;
 
-	tpu_addr = edgetpu_mmu_tpu_map_sgt(etdev, &entry->shrunk_sgt,
-					   dmap->map.dir,
-					   ctx_id, dmap->mmu_flags);
-	if (!tpu_addr)
-		return -ENOSPC;
-	*tpu_addr_p = tpu_addr;
-	return 0;
+	return edgetpu_mmu_map(etdev, &dmap->map, ctx_id, dmap->mmu_flags);
 }
 
 /*
@@ -102,16 +80,13 @@ static int etdev_map_dmabuf(struct edgetpu_dev *etdev,
  *
  * Caller holds @group->lock.
  */
-static void etdev_unmap_dmabuf(struct edgetpu_dev *etdev,
-			       struct edgetpu_dmabuf_map *dmap,
-			       tpu_addr_t tpu_addr)
+static void etdev_unmap_dmabuf(struct edgetpu_dev *etdev, struct edgetpu_dmabuf_map *dmap)
 {
 	struct edgetpu_device_group *group = dmap->map.priv;
 	const enum edgetpu_context_id ctx_id =
 		edgetpu_group_context_id_locked(group);
-	struct dmabuf_map_entry *entry = dmap->map_entry;
 
-	edgetpu_mmu_tpu_unmap_sgt(etdev, tpu_addr, &entry->shrunk_sgt, ctx_id);
+	edgetpu_mmu_unmap(etdev, &dmap->map, ctx_id);
 }
 
 /*
@@ -126,62 +101,52 @@ static void dmabuf_map_callback_release(struct edgetpu_mapping *map)
 		container_of(map, struct edgetpu_dmabuf_map, map);
 	struct edgetpu_device_group *group = map->priv;
 	const enum dma_data_direction dir = map->dir;
-	struct dmabuf_map_entry *entry = dmap->map_entry;
-	tpu_addr_t tpu_addr = map->device_address;
 
-	if (tpu_addr)
-		etdev_unmap_dmabuf(group->etdev, dmap, tpu_addr);
-	sg_free_table(&entry->shrunk_sgt);
-	if (entry->sgt)
-		dma_buf_unmap_attachment(entry->attachment, entry->sgt, dir);
-	if (entry->attachment)
-		dma_buf_detach(dmap->dmabuf, entry->attachment);
+	if (dmap->map.device_address)
+		etdev_unmap_dmabuf(group->etdev, dmap);
+	sg_free_table(&dmap->map.sgt);
+	if (dmap->dma_sgt)
+		dma_buf_unmap_attachment(dmap->attachment, dmap->dma_sgt, dir);
+	if (dmap->attachment)
+		dma_buf_detach(dmap->dmabuf, dmap->attachment);
 	dma_buf_put(dmap->dmabuf);
 	edgetpu_device_group_put(group);
-	kfree(dmap->map_entry);
 	kfree(dmap);
 }
 
-static void entry_show_dma_addrs(struct dmabuf_map_entry *entry,
-				 struct seq_file *s)
+static void entry_show_dma_addrs(struct edgetpu_dmabuf_map *dmap, struct seq_file *s)
 {
-	struct sg_table *sgt = &entry->shrunk_sgt;
+	struct sg_table *sgt = &dmap->map.sgt;
+	struct scatterlist *sg = sgt->sgl;
+	uint i;
 
-	if (sgt->nents == 1) {
-		seq_printf(s, "%pad\n", &sg_dma_address(sgt->sgl));
-	} else {
-		uint i;
-		struct scatterlist *sg = sgt->sgl;
-
-		seq_puts(s, "[");
+	if (sgt->nents > 1) {
+		seq_puts(s, " dma=[");
 		for (i = 0; i < sgt->nents; i++) {
 			if (i)
 				seq_puts(s, ", ");
 			seq_printf(s, "%pad", &sg_dma_address(sg));
 			sg = sg_next(sg);
 		}
-		seq_puts(s, "]\n");
+		seq_puts(s, "]");
 	}
+	seq_puts(s, "\n");
 }
 
-static void dmabuf_map_callback_show(struct edgetpu_mapping *map,
-				     struct seq_file *s)
+static void dmabuf_map_callback_show(struct edgetpu_mapping *map, struct seq_file *s)
 {
 	struct edgetpu_dmabuf_map *dmap =
 		container_of(map, struct edgetpu_dmabuf_map, map);
 
-	seq_printf(s, "  <%s> iova=%#llx pages=%llu %s",
-		   dmap->dmabuf->exp_name, map->device_address,
-		   DIV_ROUND_UP(dmap->size, PAGE_SIZE),
-		   edgetpu_dma_dir_rw_s(map->dir));
-	seq_puts(s, " dma=");
-	entry_show_dma_addrs(dmap->map_entry, s);
+	seq_printf(s, "  %pad %llu %s %s %pad",
+		   &map->device_address, DIV_ROUND_UP(dmap->size, PAGE_SIZE),
+		   edgetpu_dma_dir_rw_s(map->dir), dmap->dmabuf->exp_name,
+		   &sg_dma_address(dmap->dma_sgt->sgl));
+	entry_show_dma_addrs(dmap, s);
 }
 
 /*
  * Allocates and properly sets fields of an edgetpu_dmabuf_map.
- *
- * Caller holds group->lock and checks @group is finalized.
  *
  * Returns the pointer on success, or NULL on failure.
  */
@@ -193,9 +158,6 @@ alloc_dmabuf_map(struct edgetpu_device_group *group, edgetpu_map_flag_t flags)
 
 	if (!dmap)
 		return NULL;
-	dmap->map_entry = kzalloc(sizeof(*dmap->map_entry), GFP_KERNEL);
-	if (!dmap->map_entry)
-		goto err_free;
 	dmap->mmu_flags = map_to_mmu_flags(flags) | EDGETPU_MMU_DMABUF;
 	map = &dmap->map;
 	map->flags = flags;
@@ -204,11 +166,6 @@ alloc_dmabuf_map(struct edgetpu_device_group *group, edgetpu_map_flag_t flags)
 	map->show = dmabuf_map_callback_show;
 	map->priv = edgetpu_device_group_get(group);
 	return dmap;
-
-err_free:
-	kfree(dmap->map_entry);
-	kfree(dmap);
-	return NULL;
 }
 
 /*
@@ -257,64 +214,14 @@ static int dup_sgt_in_region(struct sg_table *sgt, u64 size, struct sg_table *ou
 }
 
 /*
- * Copy the DMA addresses and lengths in region [0, @size) from
- * @sgt to @out.
- *
- * The DMA addresses will be condensed when possible.
- */
-static void shrink_sgt_dma_in_region(struct sg_table *sgt, u64 size, struct sg_table *out)
-{
-	u64 cur_offset = 0;
-	struct scatterlist *sg, *prv_sg = NULL, *cur_sg;
-
-	cur_sg = out->sgl;
-	out->nents = 0;
-	for (sg = sgt->sgl; sg;
-	     cur_offset += sg_dma_len(sg), sg = sg_next(sg)) {
-		u64 remain_size = size - cur_offset;
-		dma_addr_t dma;
-		size_t len;
-
-		dma = sg_dma_address(sg);
-		len = sg_dma_len(sg);
-		if (remain_size < sg_dma_len(sg))
-			len -= sg_dma_len(sg) - remain_size;
-		if (prv_sg &&
-		    sg_dma_address(prv_sg) + sg_dma_len(prv_sg) == dma) {
-			/* merge to previous sg */
-			sg_dma_len(prv_sg) += len;
-		} else {
-			sg_dma_address(cur_sg) = dma;
-			sg_dma_len(cur_sg) = len;
-			prv_sg = cur_sg;
-			cur_sg = sg_next(cur_sg);
-			out->nents++;
-		}
-		if (remain_size <= sg_dma_len(sg))
-			break;
-	}
-}
-
-static int entry_set_shrunk_sgt(struct dmabuf_map_entry *entry, u64 size)
-{
-	int ret;
-
-	ret = dup_sgt_in_region(entry->sgt, size, &entry->shrunk_sgt);
-	if (ret)
-		return ret;
-	shrink_sgt_dma_in_region(entry->sgt, size, &entry->shrunk_sgt);
-	return 0;
-}
-
-/*
  * Performs dma_buf_attach + dma_buf_map_attachment of @dmabuf to @etdev, and
- * sets @entry per the attaching result.
+ * sets @dmap per the attaching result.
  *
- * Fields of @entry will be set on success.
+ * Fields of @dmap will be set on success.
  */
-static int etdev_attach_dmabuf_to_entry(struct edgetpu_dev *etdev, struct dma_buf *dmabuf,
-					struct dmabuf_map_entry *entry, u64 size,
-					enum dma_data_direction dir)
+static int etdev_attach_dmabuf_to_mapping(struct edgetpu_dev *etdev, struct dma_buf *dmabuf,
+					  struct edgetpu_dmabuf_map *dmap, u64 size,
+					  enum dma_data_direction dir)
 {
 	struct dma_buf_attachment *attachment;
 	struct sg_table *sgt;
@@ -328,9 +235,9 @@ static int etdev_attach_dmabuf_to_entry(struct edgetpu_dev *etdev, struct dma_bu
 		ret = PTR_ERR(sgt);
 		goto err_detach;
 	}
-	entry->attachment = attachment;
-	entry->sgt = sgt;
-	ret = entry_set_shrunk_sgt(entry, size);
+	dmap->attachment = attachment;
+	dmap->dma_sgt = sgt;
+	ret = dup_sgt_in_region(dmap->dma_sgt, size, &dmap->map.sgt);
 	if (ret)
 		goto err_unmap;
 
@@ -340,8 +247,8 @@ err_unmap:
 	dma_buf_unmap_attachment(attachment, sgt, dir);
 err_detach:
 	dma_buf_detach(dmabuf, attachment);
-	entry->sgt = NULL;
-	entry->attachment = NULL;
+	dmap->dma_sgt = NULL;
+	dmap->attachment = NULL;
 	return ret;
 }
 
@@ -354,7 +261,6 @@ int edgetpu_map_dmabuf(struct edgetpu_device_group *group,
 	u64 size;
 	const enum dma_data_direction dir = map_flag_to_host_dma_dir(flags);
 	struct edgetpu_dmabuf_map *dmap;
-	tpu_addr_t tpu_addr;
 
 	if (!valid_dma_direction(dir)) {
 		etdev_dbg(group->etdev, "%s: invalid direction %d\n", __func__, dir);
@@ -367,87 +273,75 @@ int edgetpu_map_dmabuf(struct edgetpu_device_group *group,
 		return PTR_ERR(dmabuf);
 	}
 
-	mutex_lock(&group->lock);
-	if (!edgetpu_device_group_is_finalized(group)) {
-		ret = edgetpu_group_errno(group);
-		etdev_dbg(group->etdev,
-			  "%s: edgetpu_device_group_is_finalized returns %d\n",
-			  __func__, ret);
-		goto err_unlock_group;
-	}
-
 	dmap = alloc_dmabuf_map(group, flags);
 	if (!dmap) {
 		ret = -ENOMEM;
-		goto err_unlock_group;
+		goto err_put_dmabuf;
 	}
 
 	get_dma_buf(dmabuf);
 	dmap->dmabuf = dmabuf;
 	dmap->map.map_size = dmap->size = size = dmabuf->size;
-	ret = etdev_attach_dmabuf_to_entry(group->etdev, dmabuf,
-					   dmap->map_entry, size, dir);
+	ret = etdev_attach_dmabuf_to_mapping(group->etdev, dmabuf, dmap, size, dir);
 	if (ret) {
 		etdev_dbg(group->etdev,
 			  "%s: etdev_attach_dmabuf_to_entry returns %d\n",
 			  __func__, ret);
 		goto err_release_map;
 	}
-	ret = etdev_map_dmabuf(group->etdev, dmap, &tpu_addr);
+	mutex_lock(&group->lock);
+	if (!edgetpu_device_group_is_finalized(group)) {
+		ret = edgetpu_group_errno(group);
+		etdev_dbg(group->etdev,
+			  "%s: edgetpu_device_group_is_finalized returns %d\n",
+			  __func__, ret);
+		mutex_unlock(&group->lock);
+		goto err_release_map;
+	}
+
+	ret = etdev_map_dmabuf(group->etdev, dmap);
+	mutex_unlock(&group->lock);
 	if (ret) {
 		etdev_dbg(group->etdev,
 			  "%s: etdev_map_dmabuf returns %d\n",
 			  __func__, ret);
 		goto err_release_map;
 	}
-	dmap->map.device_address = tpu_addr;
+	/* Save address before add to mapping tree, after which another thread can free it. */
+	arg->device_address = dmap->map.device_address;
 	ret = edgetpu_mapping_add(&group->dmabuf_mappings, &dmap->map);
 	if (ret) {
 		etdev_dbg(group->etdev, "%s: edgetpu_mapping_add returns %d\n",
 			  __func__, ret);
 		goto err_release_map;
 	}
-	arg->device_address = tpu_addr;
-	mutex_unlock(&group->lock);
 	dma_buf_put(dmabuf);
 	return 0;
 
 err_release_map:
-	/* also releases map_entry if set */
 	dmabuf_map_callback_release(&dmap->map);
-err_unlock_group:
-	mutex_unlock(&group->lock);
+err_put_dmabuf:
 	dma_buf_put(dmabuf);
-
 	return ret;
 }
 
-int edgetpu_unmap_dmabuf(struct edgetpu_device_group *group,
-			 tpu_addr_t tpu_addr)
+int edgetpu_unmap_dmabuf(struct edgetpu_device_group *group, tpu_addr_t tpu_addr)
 {
 	struct edgetpu_mapping_root *mappings = &group->dmabuf_mappings;
 	struct edgetpu_mapping *map;
-	int ret = -EINVAL;
 
-	mutex_lock(&group->lock);
-	/* allows unmapping on errored groups */
-	if (!edgetpu_device_group_is_finalized(group) && !edgetpu_device_group_is_errored(group)) {
-		ret = -EINVAL;
-		goto out_unlock;
-	}
 	edgetpu_mapping_lock(mappings);
 	map = edgetpu_mapping_find_locked(mappings, tpu_addr);
 	if (!map) {
 		edgetpu_mapping_unlock(mappings);
-		goto out_unlock;
+		etdev_err(group->etdev, "unmap group=%u tpu_addr=%pad not found",
+			  group->workload_id, &tpu_addr);
+		return -EINVAL;
 	}
 	edgetpu_mapping_unlink(mappings, map);
 	edgetpu_mapping_unlock(mappings);
 	map->release(map);
-	ret = 0;
-out_unlock:
-	mutex_unlock(&group->lock);
-	return ret;
+	return 0;
 }
 
 int edgetpu_sync_fence_manager_create(struct edgetpu_dev *etdev)

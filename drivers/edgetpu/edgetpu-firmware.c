@@ -258,6 +258,15 @@ edgetpu_firmware_get_build_time(struct edgetpu_firmware *et_fw)
 	return et_fw->p->fw_info.fw_build_time;
 }
 
+enum gcip_fw_flavor edgetpu_firmware_get_flavor(struct edgetpu_dev *etdev)
+{
+	struct edgetpu_firmware *et_fw = etdev->firmware;
+
+	if (!et_fw)
+		return GCIP_FW_FLAVOR_UNKNOWN;
+	return et_fw->p->fw_info.fw_flavor;
+}
+
 /*
  * Try edgetpu_firmware_lock() if it's not locked yet.
  *
@@ -726,15 +735,12 @@ void edgetpu_firmware_mappings_show(struct edgetpu_dev *etdev,
 {
 	struct edgetpu_firmware *et_fw = etdev->firmware;
 	struct edgetpu_firmware_buffer *fw_buf;
-	unsigned long iova;
 
 	if (!et_fw)
 		return;
 	fw_buf = &et_fw->p->fw_desc.buf;
 	if (!fw_buf->vaddr)
 		return;
-	iova = edgetpu_chip_firmware_iova(etdev);
-	seq_printf(s, "  %#lx %lu fw - %pad\n", iova,
-		   DIV_ROUND_UP(fw_buf->alloc_size, PAGE_SIZE),
-		   &fw_buf->dma_addr);
+	seq_printf(s, "  %pad %lu fw\n", &fw_buf->dma_addr,
+		   DIV_ROUND_UP(fw_buf->alloc_size, PAGE_SIZE));
 }

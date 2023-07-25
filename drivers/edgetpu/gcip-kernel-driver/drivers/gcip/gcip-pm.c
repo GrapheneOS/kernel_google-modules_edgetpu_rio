@@ -52,6 +52,14 @@ static void gcip_pm_async_power_down_work(struct work_struct *work)
 	mutex_unlock(&pm->lock);
 }
 
+/* Worker for async gcip_pm_put(). */
+static void gcip_pm_async_put_work(struct work_struct *work)
+{
+	struct gcip_pm *pm = container_of(work, struct gcip_pm, put_async_work);
+
+	gcip_pm_put(pm);
+}
+
 struct gcip_pm *gcip_pm_create(const struct gcip_pm_args *args)
 {
 	struct gcip_pm *pm;
@@ -73,6 +81,7 @@ struct gcip_pm *gcip_pm_create(const struct gcip_pm_args *args)
 
 	mutex_init(&pm->lock);
 	INIT_DELAYED_WORK(&pm->power_down_work, gcip_pm_async_power_down_work);
+	INIT_WORK(&pm->put_async_work, gcip_pm_async_put_work);
 
 	if (pm->after_create) {
 		ret = pm->after_create(pm->data);
@@ -184,6 +193,16 @@ void gcip_pm_put(struct gcip_pm *pm)
 
 unlock:
 	mutex_unlock(&pm->lock);
+}
+
+void gcip_pm_put_async(struct gcip_pm *pm)
+{
+	schedule_work(&pm->put_async_work);
+}
+
+void gcip_pm_flush_put_work(struct gcip_pm *pm)
+{
+	flush_work(&pm->put_async_work);
 }
 
 int gcip_pm_get_count(struct gcip_pm *pm)

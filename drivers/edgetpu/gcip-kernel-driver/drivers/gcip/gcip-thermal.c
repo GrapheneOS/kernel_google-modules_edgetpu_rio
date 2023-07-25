@@ -13,6 +13,7 @@
 #include <linux/thermal.h>
 #include <linux/version.h>
 
+#include <gcip/gcip-config.h>
 #include <gcip/gcip-pm.h>
 #include <gcip/gcip-thermal.h>
 
@@ -175,7 +176,7 @@ static const struct thermal_cooling_device_ops gcip_thermal_ops = {
 };
 
 /* This API was removed, but Android still uses it to update thermal request. */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0) && IS_ENABLED(CONFIG_ANDROID)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0) && GCIP_IS_GKI
 void thermal_cdev_update(struct thermal_cooling_device *cdev);
 #endif
 
@@ -185,7 +186,7 @@ static void gcip_thermal_update(struct gcip_thermal *thermal)
 
 	cdev->updated = false;
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0) || IS_ENABLED(CONFIG_ANDROID)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0) || GCIP_IS_GKI
 	thermal_cdev_update(cdev);
 #elif IS_ENABLED(CONFIG_THERMAL)
 	dev_err_once(thermal->dev, "Thermal update not implemented");
@@ -522,7 +523,6 @@ int gcip_thermal_restore_on_powering(struct gcip_thermal *thermal)
 	if (IS_ERR_OR_NULL(thermal))
 		return 0;
 
-	gcip_pm_lockdep_assert_held(thermal->pm);
 	mutex_lock(&thermal->lock);
 
 	if (!thermal->enabled)

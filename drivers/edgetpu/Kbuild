@@ -7,10 +7,8 @@ GIT_BIN=/usr/bin/git
 GIT=$(GIT_BIN) -C $(GIT_PATH)
 ccflags-y	+= $(EXTRA_CFLAGS) -DCONFIG_EDGETPU_TELEMETRY_TRACE=1 -DCONFIG_GCIP=1 \
 		   -I$(CURRENT_DIR)/include \
-		   -I$(CURRENT_DIR)/gcip-kernel-driver/include
-
-subdir-ccflags-y += \
-		-I$(KERNEL_SRC)/../private/google-modules/power/mitigation
+		   -I$(CURRENT_DIR)/gcip-kernel-driver/include \
+		   -I$(KERNEL_SRC)/../private/google-modules/power/mitigation
 
 ifeq ($(shell $(GIT) rev-parse --is-inside-work-tree),true)
 	GIT_REPO_STATE=$(shell ($(GIT) status --porcelain | grep -q .) && echo -dirty)
@@ -19,6 +17,8 @@ endif
 
 obj-$(CONFIG_RIO)	+= rio.o
 
+# TODO(b/292499332): remove this line once GKI for ZumaPro is upgraded
+ccflags-y	+= -DGCIP_FORCE_NO_VMA_FLAGS_API
 GCIP_DIR=gcip-kernel-driver/drivers/gcip
 
 edgetpu-objs	:= edgetpu-async.o \

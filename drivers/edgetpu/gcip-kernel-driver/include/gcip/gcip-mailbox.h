@@ -344,6 +344,11 @@ struct gcip_mailbox_ops {
 	 * Context: normal and in_interrupt().
 	 */
 	void (*release_awaiter_data)(void *data);
+	/*
+	 * Checks if the block is off.
+	 * Context: in_interrupt()
+	 */
+	bool (*is_block_off)(struct gcip_mailbox *mailbox);
 };
 
 struct gcip_mailbox {
