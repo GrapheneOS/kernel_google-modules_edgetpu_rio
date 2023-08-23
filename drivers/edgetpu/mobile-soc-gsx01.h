@@ -31,6 +31,8 @@ struct edgetpu_soc_data {
 	int scenario_count;
 	struct mutex scenario_lock;
 	struct bcl_device *bcl_dev;
+	/* PMU status base address for block status */
+	void __iomem *pmu_status;
 };
 
 /*

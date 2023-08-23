@@ -202,19 +202,20 @@ static int edgetpu_ioctl_unset_perdie_eventfd(struct edgetpu_client *client,
 static int edgetpu_ioctl_finalize_group(struct edgetpu_client *client)
 {
 	struct edgetpu_device_group *group;
-	int ret = -EINVAL;
+	int ret;
+
+	/* Finalization has to be performed with device on. */
+	ret = gcip_pm_get(client->etdev->pm);
+	if (ret) {
+		etdev_err(client->etdev, "finalize group: power on failed: %d", ret);
+		return ret;
+	}
 
 	LOCK(client);
 	group = client->group;
 	if (!group)
 		goto out_unlock;
-	/* Finalization has to be performed with device on. */
-	ret = gcip_pm_get(client->etdev->pm);
-	if (ret) {
-		etdev_err(client->etdev, "%s: pm_get failed (%d)",
-			  __func__, ret);
-		goto out_unlock;
-	}
+
 	/*
 	 * Hold the wakelock since we need to decide whether VII should be
 	 * initialized during finalization.
@@ -222,9 +223,10 @@ static int edgetpu_ioctl_finalize_group(struct edgetpu_client *client)
 	edgetpu_wakelock_lock(client->wakelock);
 	ret = edgetpu_device_group_finalize(group);
 	edgetpu_wakelock_unlock(client->wakelock);
-	gcip_pm_put(client->etdev->pm);
+
 out_unlock:
 	UNLOCK(client);
+	gcip_pm_put(client->etdev->pm);
 	return ret;
 }
 
@@ -499,6 +501,20 @@ static int edgetpu_ioctl_acquire_wakelock(struct edgetpu_client *client)
 
 	trace_edgetpu_acquire_wakelock_start(current->pid);
 
+	if (gcip_thermal_is_device_suspended(thermal)) {
+		/* TPU is thermal suspended, so fail acquiring wakelock */
+		etdev_warn_ratelimited(client->etdev,
+		       "wakelock acquire rejected due to device thermal limit exceeded");
+		ret = -EAGAIN;
+		goto error_trace_end;
+	}
+
+	ret = gcip_pm_get(client->etdev->pm);
+	if (ret) {
+		etdev_warn(client->etdev, "pm_get failed (%d)", ret);
+		goto error_trace_end;
+	}
+
 	LOCK(client);
 	/*
 	 * Update client PID; the client may have been passed from the
@@ -508,22 +524,6 @@ static int edgetpu_ioctl_acquire_wakelock(struct edgetpu_client *client)
 	 */
 	client->pid = current->pid;
 	client->tgid = current->tgid;
-	if (gcip_thermal_is_device_suspended(thermal))
-		/* TPU is thermal suspended, so fail acquiring wakelock */
-		ret = -EAGAIN;
-
-	if (ret) {
-		etdev_warn_ratelimited(client->etdev,
-		       "wakelock acquire rejected due to device thermal limit exceeded");
-		goto error_client_unlock;
-	}
-
-	ret = gcip_pm_get(client->etdev->pm);
-	if (ret) {
-		etdev_warn(client->etdev, "pm_get failed (%d)", ret);
-		goto error_client_unlock;
-	}
-
 	edgetpu_wakelock_lock(client->wakelock);
 	count = edgetpu_wakelock_acquire(client->wakelock);
 	if (count < 0) {
@@ -536,25 +536,24 @@ static int edgetpu_ioctl_acquire_wakelock(struct edgetpu_client *client)
 		if (ret) {
 			etdev_warn(client->etdev, "failed to attach mailbox: %d", ret);
 			edgetpu_wakelock_release(client->wakelock);
-			goto error_wakelock_unlock;
+			/* fall through to error handling below */
 		}
 	}
 
 error_wakelock_unlock:
 	edgetpu_wakelock_unlock(client->wakelock);
+	UNLOCK(client);
 
 	/* Balance the power up count due to pm_get above.*/
 	if (ret || count)
 		gcip_pm_put(client->etdev->pm);
-
-error_client_unlock:
-	UNLOCK(client);
 
 	if (ret)
 		etdev_err(client->etdev, "client pid %d failed to acquire wakelock", client->pid);
 	else
 		etdev_dbg(client->etdev, "%s: wakelock req count = %u", __func__, count + 1);
 
+error_trace_end:
 	trace_edgetpu_acquire_wakelock_end(client->pid, ret ? count : count + 1, ret);
 
 	return ret;
@@ -1077,7 +1076,11 @@ int __init edgetpu_fs_init(void)
 {
 	int ret;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 4, 0)
 	edgetpu_class = class_create(THIS_MODULE, "edgetpu");
+#else
+	edgetpu_class = class_create("edgetpu");
+#endif
 	if (IS_ERR(edgetpu_class)) {
 		pr_err(DRIVER_NAME " error creating edgetpu class: %ld\n",
 		       PTR_ERR(edgetpu_class));

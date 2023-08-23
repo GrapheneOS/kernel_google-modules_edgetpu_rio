@@ -18,6 +18,7 @@
 #include <linux/mm.h>
 #include <linux/refcount.h>
 #include <linux/scatterlist.h>
+#include <linux/sched/mm.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
@@ -41,6 +42,7 @@
 /* Records the mapping and other fields needed for a host buffer mapping */
 struct edgetpu_host_map {
 	struct edgetpu_mapping map;
+	struct mm_struct *owning_mm;
 };
 
 /*
@@ -587,6 +589,7 @@ static void edgetpu_unmap_node(struct edgetpu_mapping *map)
 	struct edgetpu_host_map *hmap =
 		container_of(map, struct edgetpu_host_map, map);
 	struct sg_page_iter sg_iter;
+	unsigned long num_pages = 0;
 
 	etdev_dbg(group->etdev, "%s: %u: iova=%pad", __func__, group->workload_id,
 		  &map->device_address);
@@ -602,8 +605,10 @@ static void edgetpu_unmap_node(struct edgetpu_mapping *map)
 			set_page_dirty(page);
 
 		unpin_user_page(page);
+		num_pages++;
 	}
-
+	atomic64_sub(num_pages, &hmap->owning_mm->pinned_vm);
+	mmdrop(hmap->owning_mm);
 	sg_free_table(&map->sgt);
 	edgetpu_device_group_put(map->priv);
 	kfree(hmap);
@@ -653,7 +658,9 @@ static struct page **edgetpu_pin_user_pages(struct edgetpu_device_group *group,
 	int i;
 	int ret;
 	struct vm_area_struct *vma;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
 	struct vm_area_struct **vmas;
+#endif
 	unsigned int foll_flags = FOLL_LONGTERM | FOLL_WRITE;
 
 	if (size == 0)
@@ -683,7 +690,11 @@ static struct page **edgetpu_pin_user_pages(struct edgetpu_device_group *group,
 	 * default to read/write if find_extend_vma returns NULL
 	 */
 	mmap_read_lock(current->mm);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 14, 1)
 	vma = find_extend_vma(current->mm, host_addr & PAGE_MASK);
+#else
+	vma = vma_lookup(current->mm, host_addr & PAGE_MASK);
+#endif
 	if (vma && !(vma->vm_flags & VM_WRITE)) {
 		foll_flags &= ~FOLL_WRITE;
 		*preadonly = true;
@@ -697,6 +708,7 @@ static struct page **edgetpu_pin_user_pages(struct edgetpu_device_group *group,
 				  pages);
 	if (ret == num_pages) {
 		*pnum_pages = num_pages;
+		atomic64_add(num_pages, &current->mm->pinned_vm);
 		return pages;
 	}
 	if (ret == -EFAULT && !*preadonly) {
@@ -726,6 +738,7 @@ static struct page **edgetpu_pin_user_pages(struct edgetpu_device_group *group,
 	for (i = 0; i < ret; i++)
 		unpin_user_page(pages[i]);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
 	/* Allocate our own vmas array non-contiguous. */
 	vmas = kvmalloc((num_pages * sizeof(*vmas)), GFP_KERNEL | __GFP_NOWARN);
 	if (!vmas) {
@@ -734,11 +747,17 @@ static struct page **edgetpu_pin_user_pages(struct edgetpu_device_group *group,
 		kvfree(pages);
 		return ERR_PTR(-ENOMEM);
 	}
+#endif
 	mmap_read_lock(current->mm);
-	ret = pin_user_pages(host_addr & PAGE_MASK, num_pages, foll_flags,
-			     pages, vmas);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
+	ret = pin_user_pages(host_addr & PAGE_MASK, num_pages, foll_flags, pages, vmas);
+#else
+	ret = pin_user_pages(host_addr & PAGE_MASK, num_pages, foll_flags, pages);
+#endif
 	mmap_read_unlock(current->mm);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
 	kvfree(vmas);
+#endif
 	if (ret < 0) {
 		etdev_dbg(etdev, "pin_user_pages failed %u:%pK-%u: %d",
 			  group->workload_id, (void *)host_addr, num_pages,
@@ -761,7 +780,7 @@ static struct page **edgetpu_pin_user_pages(struct edgetpu_device_group *group,
 		ret = -EFAULT;
 		goto error;
 	}
-
+	atomic64_add(num_pages, &current->mm->pinned_vm);
 	*pnum_pages = num_pages;
 	return pages;
 
@@ -938,12 +957,15 @@ int edgetpu_device_group_map(struct edgetpu_device_group *group,
 		/* revert edgetpu_pin_user_pages() */
 		for (i = 0; i < num_pages; i++)
 			unpin_user_page(pages[i]);
+		atomic64_sub(num_pages, &current->mm->pinned_vm);
 		kvfree(pages);
 		return PTR_ERR(hmap);
 	}
 
 	kvfree(pages);
 	map = &hmap->map;
+	mmgrab(current->mm);
+	hmap->owning_mm = current->mm;
 	mutex_lock(&group->lock);
 	context_id = edgetpu_group_context_id_locked(group);
 	if (!edgetpu_device_group_is_finalized(group)) {

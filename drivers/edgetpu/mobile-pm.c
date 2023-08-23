@@ -28,9 +28,14 @@
 #include "edgetpu-pm.c"
 #include "edgetpu-soc.h"
 
-#define BLOCK_DOWN_RETRY_TIMES 50
+#define BLOCK_DOWN_RETRY_TIMES 1000
 #define BLOCK_DOWN_MIN_DELAY_US 1000
 #define BLOCK_DOWN_MAX_DELAY_US 1500
+
+/* For edgetpu_poll_block_off */
+#define POLL_BLOCK_OFF_DELAY_US_MIN 200
+#define POLL_BLOCK_OFF_DELAY_US_MAX 200
+#define POLL_BLOCK_OFF_MAX_DELAY_COUNT 20
 
 enum edgetpu_pwr_state edgetpu_active_states[EDGETPU_NUM_STATES] = {
 	TPU_ACTIVE_MIN, TPU_ACTIVE_ULTRA_LOW, TPU_ACTIVE_VERY_LOW, TPU_ACTIVE_SUB_LOW,
@@ -39,16 +44,37 @@ enum edgetpu_pwr_state edgetpu_active_states[EDGETPU_NUM_STATES] = {
 
 uint32_t *edgetpu_states_display = edgetpu_active_states;
 
+static bool edgetpu_always_on(void)
+{
+#if defined(EDGETPU_FEATURE_ALWAYS_ON) || IS_ENABLED(CONFIG_EDGETPU_TEST)
+	return true;
+#endif
+	return false;
+}
+
+static bool edgetpu_poll_block_off(struct edgetpu_dev *etdev)
+{
+	int timeout_cnt = 0;
+
+	do {
+		usleep_range(POLL_BLOCK_OFF_DELAY_US_MIN, POLL_BLOCK_OFF_DELAY_US_MAX);
+		if (edgetpu_soc_pm_is_block_off(etdev))
+			return true;
+		timeout_cnt++;
+	} while (timeout_cnt < POLL_BLOCK_OFF_MAX_DELAY_COUNT);
+
+	return false;
+}
+
 static int mobile_pwr_state_set_locked(struct edgetpu_mobile_platform_dev *etmdev, u64 val)
 {
 	int ret;
-	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
 	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
 	struct device *dev = etdev->dev;
 
 	dev_dbg(dev, "Power state to %llu\n", val);
 
-	if (val > TPU_OFF && (!platform_pwr->is_block_down || platform_pwr->is_block_down(etdev))) {
+	if (val > TPU_OFF && (edgetpu_always_on() || !edgetpu_poll_block_off(etdev))) {
 		ret = pm_runtime_get_sync(dev);
 		if (ret) {
 			pm_runtime_put_noidle(dev);
@@ -64,8 +90,7 @@ static int mobile_pwr_state_set_locked(struct edgetpu_mobile_platform_dev *etmde
 		return ret;
 	}
 
-	if (val == TPU_OFF &&
-	    (!platform_pwr->is_block_down || !platform_pwr->is_block_down(etdev))) {
+	if (val == TPU_OFF && (edgetpu_always_on() || !edgetpu_poll_block_off(etdev))) {
 		ret = pm_runtime_put_sync(dev);
 		if (ret) {
 			dev_err(dev, "%s: pm_runtime_put_sync returned %d\n", __func__, ret);
@@ -196,6 +221,7 @@ static int mobile_power_up(void *data)
 	struct edgetpu_dev *etdev = (struct edgetpu_dev *)data;
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	struct edgetpu_mobile_platform_pwr *platform_pwr = &etmdev->platform_pwr;
+	int times = 0;
 	int ret;
 
 	if (gcip_thermal_is_device_suspended(etdev->thermal)) {
@@ -204,15 +230,13 @@ static int mobile_power_up(void *data)
 		return -EAGAIN;
 	}
 
-	if (platform_pwr->is_block_down) {
-		int times = 0;
-
+	if (!edgetpu_always_on()) {
 		do {
-			if (platform_pwr->is_block_down(etdev))
+			if (edgetpu_poll_block_off(etdev))
 				break;
 			usleep_range(BLOCK_DOWN_MIN_DELAY_US, BLOCK_DOWN_MAX_DELAY_US);
 		} while (++times < BLOCK_DOWN_RETRY_TIMES);
-		if (times >= BLOCK_DOWN_RETRY_TIMES && !platform_pwr->is_block_down(etdev))
+		if (times >= BLOCK_DOWN_RETRY_TIMES && !edgetpu_poll_block_off(etdev))
 			return -EAGAIN;
 	}
 
@@ -309,7 +333,7 @@ static int mobile_power_down(void *data)
 		return 0;
 	}
 
-	if (platform_pwr->is_block_down && platform_pwr->is_block_down(etdev)) {
+	if (!edgetpu_always_on() && edgetpu_poll_block_off(etdev)) {
 		etdev_dbg(etdev, "Device already off, skipping shutdown\n");
 		return 0;
 	}

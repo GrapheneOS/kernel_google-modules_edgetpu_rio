@@ -66,10 +66,10 @@
 #define GCIP_MAP_FLAGS_DMA_ATTR_BIT_SIZE 10
 #define GCIP_MAP_FLAGS_DMA_ATTR_TO_FLAGS(attr) ((u64)(attr) << GCIP_MAP_FLAGS_DMA_ATTR_OFFSET)
 
-#define GCIP_MAP_FLAGS_RESTRICT_IOVA_OFFSET                                                       \
+#define GCIP_MAP_FLAGS_RESTRICT_IOVA_OFFSET                                                        \
 	(GCIP_MAP_FLAGS_DMA_ATTR_OFFSET + GCIP_MAP_FLAGS_DMA_ATTR_BIT_SIZE)
 #define GCIP_MAP_FLAGS_RESTRICT_IOVA_BIT_SIZE 1
-#define GCIP_MAP_FLAGS_RESTRICT_IOVA_TO_FLAGS(restrict)                                           \
+#define GCIP_MAP_FLAGS_RESTRICT_IOVA_TO_FLAGS(restrict)                                            \
 	((u64)(restrict) << GCIP_MAP_FLAGS_RESTRICT_IOVA_OFFSET)
 
 struct gcip_iommu_domain_ops;

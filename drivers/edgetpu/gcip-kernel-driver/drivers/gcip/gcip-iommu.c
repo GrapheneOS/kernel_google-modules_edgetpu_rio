@@ -176,7 +176,7 @@ static void mem_pool_enable_best_fit_algo(struct gcip_iommu_domain *domain)
 }
 
 static dma_addr_t mem_pool_alloc_iova_space(struct gcip_iommu_domain *domain, size_t size,
-					     bool restrict_iova)
+					    bool restrict_iova)
 {
 	/* mem pool IOVA allocs are currently always restricted. */
 	if (!restrict_iova)

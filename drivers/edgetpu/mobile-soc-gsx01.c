@@ -129,6 +129,22 @@ static int gsx01_parse_cmu(struct edgetpu_mobile_platform_dev *etmdev)
 	return 0;
 }
 
+static void edgetpu_gsx01_parse_pmu(struct edgetpu_dev *etdev)
+{
+	struct device *dev = etdev->dev;
+	struct edgetpu_soc_data *soc_data = etdev->soc_data;
+	u32 reg;
+
+	if (of_find_property(dev->of_node, "pmu-status-base", NULL) &&
+	    !of_property_read_u32_index(dev->of_node, "pmu-status-base", 0, &reg)) {
+		soc_data->pmu_status = devm_ioremap(dev, reg, 0x4);
+		if (!soc_data->pmu_status)
+			etdev_err(etdev, "Using ACPM for blk status query\n");
+	} else {
+		etdev_warn(etdev, "Failed to find PMU register base\n");
+	}
+}
+
 int edgetpu_soc_init(struct edgetpu_dev *etdev)
 {
 	struct platform_device *pdev = to_platform_device(etdev->dev);
@@ -148,6 +164,7 @@ int edgetpu_soc_init(struct edgetpu_dev *etdev)
 	if (ret)
 		dev_warn(etdev->dev, "CMU setup failed (%d). Can't query TPU core frequency.", ret);
 
+	edgetpu_gsx01_parse_pmu(etdev);
 	return 0;
 }
 
@@ -235,7 +252,6 @@ static void gsx01_deactivate_bts_scenario(struct edgetpu_dev *etdev)
 		return;
 	mutex_lock(&soc_data->scenario_lock);
 	if (!soc_data->scenario_count) {
-		etdev_warn_ratelimited(etdev, "Unbalanced BTS deactivate\n");
 		mutex_unlock(&soc_data->scenario_lock);
 		return;
 	}
@@ -540,6 +556,11 @@ void edgetpu_soc_pm_power_down(struct edgetpu_dev *etdev)
 	gsx01_cleanup_bts_scenario(etdev);
 }
 
+bool edgetpu_soc_pm_is_block_off(struct edgetpu_dev *etdev)
+{
+	return etdev->soc_data->pmu_status ? !readl(etdev->soc_data->pmu_status) : false;
+}
+
 int edgetpu_soc_pm_init(struct edgetpu_dev *etdev)
 {
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
@@ -631,4 +652,13 @@ void edgetpu_soc_deactivate_context(struct edgetpu_dev *etdev, int pasid)
 		return;
 
 	set_ssmt_vid(etdev, vid, 0);
+}
+
+void edgetpu_soc_set_tpu_cpu_security(struct edgetpu_dev *etdev)
+{
+	const int ctx_id = 0, sid0 = 0x30, sid1 = 0x34;
+
+	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_SECURITY, (ctx_id << 16) | sid0);
+	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_SECURITY + 8,
+			     (ctx_id << 16) | sid1);
 }

@@ -193,7 +193,7 @@ struct edgetpu_dev {
 	 */
 	struct edgetpu_dev_iface *etiface;
 	char dev_name[EDGETPU_DEVICE_NAME_MAX];
-	struct edgetpu_mapped_resource regs; /* ioremapped CSRs */
+	struct edgetpu_mapped_resource regs; /* ioremapped TPU TOP CSRs */
 	/* SoC-specific data */
 	struct edgetpu_soc_data *soc_data;
 	struct dentry *d_entry;    /* debugfs dir for this device */
@@ -238,9 +238,6 @@ struct edgetpu_dev {
 	/* debug dump handlers */
 	edgetpu_debug_dump_handlers *debug_dump_handlers;
 	struct work_struct debug_dump_work;
-
-	/* PMU status base address for block status, maybe NULL */
-	void __iomem *pmu_status;
 };
 
 struct edgetpu_dev_iface {

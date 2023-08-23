@@ -441,14 +441,10 @@ out:
 	return ret;
 }
 
-/* TODO: Get the SIDs and CSRs form chip config. */
 static void program_iremap_csr(struct edgetpu_dev *etdev)
 {
-	const int ctx_id = 0, sid0 = 0x30, sid1 = 0x34;
 
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_SECURITY, (ctx_id << 16) | sid0);
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_SECURITY + 8,
-			     (ctx_id << 16) | sid1);
+	edgetpu_soc_set_tpu_cpu_security(etdev);
 	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_NEW_BASE,
 			     EDGETPU_INSTRUCTION_REMAP_BASE);
 	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_NEW_BASE + 8,

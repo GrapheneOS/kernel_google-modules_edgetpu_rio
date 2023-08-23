@@ -41,9 +41,6 @@ struct edgetpu_mobile_platform_pwr {
 	int (*lpm_up)(struct edgetpu_dev *etdev);
 	void (*lpm_down)(struct edgetpu_dev *etdev);
 
-	/* Block shutdown status callback, may be NULL */
-	bool (*is_block_down)(struct edgetpu_dev *etdev);
-
 	/* After firmware is started on power up */
 	void (*post_fw_start)(struct edgetpu_dev *etdev);
 };

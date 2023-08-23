@@ -16,15 +16,6 @@
 #include "edgetpu-iremap-pool.h"
 #include "edgetpu-mmu.h"
 
-struct edgetpu_mempool {
-	struct gen_pool *gen_pool;
-	void *base_vaddr;
-	dma_addr_t base_dma_addr;
-	tpu_addr_t base_tpu_addr;
-	phys_addr_t base_phys_addr;
-	size_t granule;
-};
-
 int edgetpu_iremap_pool_create(struct edgetpu_dev *etdev, void *base_vaddr,
 			       dma_addr_t base_dma_addr,
 			       tpu_addr_t base_tpu_addr,

@@ -152,23 +152,6 @@ static int rio_lpm_up(struct edgetpu_dev *etdev)
 	return 0;
 }
 
-static bool rio_is_block_down(struct edgetpu_dev *etdev)
-{
-	int timeout_cnt = 0;
-	int curr_state;
-
-	do {
-		/* Delay 20us per retry till blk shutdown finished */
-		usleep_range(SHUTDOWN_DELAY_US_MIN, SHUTDOWN_DELAY_US_MAX);
-		curr_state = readl(etdev->pmu_status);
-		if (!curr_state)
-			return true;
-		timeout_cnt++;
-	} while (timeout_cnt < SHUTDOWN_MAX_DELAY_COUNT);
-
-	return false;
-}
-
 static void rio_post_fw_start(struct edgetpu_dev *etdev)
 {
 	if (etdev->soc_data->bcl_dev)
@@ -182,8 +165,6 @@ int edgetpu_chip_pm_create(struct edgetpu_dev *etdev)
 
 	platform_pwr->lpm_up = rio_lpm_up;
 	platform_pwr->lpm_down = rio_lpm_down;
-	if (etdev->pmu_status)
-		platform_pwr->is_block_down = rio_is_block_down;
 	platform_pwr->post_fw_start = rio_post_fw_start;
 
 	etdev->soc_data->bcl_dev = google_retrieve_bcl_handle();

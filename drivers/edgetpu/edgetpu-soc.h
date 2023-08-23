@@ -34,6 +34,9 @@ int edgetpu_soc_pm_set_rate(unsigned long rate);
 /* Power down */
 void edgetpu_soc_pm_power_down(struct edgetpu_dev *etdev);
 
+/* Is the TPU block powered off? */
+bool edgetpu_soc_pm_is_block_off(struct edgetpu_dev *etdev);
+
 /* Init SoC PM system */
 int edgetpu_soc_pm_init(struct edgetpu_dev *etdev);
 
@@ -59,5 +62,8 @@ int edgetpu_soc_activate_context(struct edgetpu_dev *etdev, int pasid);
 
 /* Deactivates the context of @pasid. */
 void edgetpu_soc_deactivate_context(struct edgetpu_dev *etdev, int pasid);
+
+/* Set security CSRs for TPU CPU / instruction remap region. */
+void edgetpu_soc_set_tpu_cpu_security(struct edgetpu_dev *etdev);
 
 #endif /* __EDGETPU_SOC_H__ */

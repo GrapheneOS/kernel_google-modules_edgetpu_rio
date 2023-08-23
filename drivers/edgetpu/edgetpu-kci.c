@@ -190,7 +190,7 @@ static inline bool edgetpu_kci_is_block_off(struct gcip_kci *kci)
 {
 	struct edgetpu_mailbox *mailbox = gcip_kci_get_data(kci);
 
-	return mailbox->etdev->pmu_status ? !readl(mailbox->etdev->pmu_status) : false;
+	return edgetpu_soc_pm_is_block_off(mailbox->etdev);
 }
 
 static const struct gcip_kci_ops kci_ops = {

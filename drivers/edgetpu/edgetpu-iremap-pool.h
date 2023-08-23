@@ -10,6 +10,15 @@
 
 #include "edgetpu-internal.h"
 
+struct edgetpu_mempool {
+	struct gen_pool *gen_pool;
+	void *base_vaddr;
+	dma_addr_t base_dma_addr;
+	tpu_addr_t base_tpu_addr;
+	phys_addr_t base_phys_addr;
+	size_t granule;
+};
+
 /*
  * Create a memory pool with the provided addresses.
  * The etdev->iremap_pool token will be set and used internally in the calls

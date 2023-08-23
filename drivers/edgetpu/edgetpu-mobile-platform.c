@@ -210,21 +210,6 @@ void edgetpu_chip_client_remove(struct edgetpu_client *client)
 	mutex_unlock(&etmdev->tz_mailbox_lock);
 }
 
-static void edgetpu_platform_parse_pmu(struct edgetpu_dev *etdev)
-{
-	struct device *dev = etdev->dev;
-	u32 reg;
-
-	if (of_find_property(dev->of_node, "pmu-status-base", NULL) &&
-	    !of_property_read_u32_index(dev->of_node, "pmu-status-base", 0, &reg)) {
-		etdev->pmu_status = devm_ioremap(dev, reg, 0x4);
-		if (!etdev->pmu_status)
-			etdev_err(etdev, "Using ACPM for blk status query\n");
-	} else {
-		etdev_warn(etdev, "Failed to find PMU register base\n");
-	}
-}
-
 static int edgetpu_platform_setup_irq(struct edgetpu_mobile_platform_dev *etmdev)
 {
 	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
@@ -302,13 +287,19 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 	regs.phys = r->start;
 	regs.size = resource_size(r);
 	regs.mem = devm_ioremap_resource(dev, r);
-	if (IS_ERR_OR_NULL(regs.mem)) {
-		dev_err(dev, "failed to map registers");
-		return -ENODEV;
+	if (IS_ERR(regs.mem)) {
+		ret = PTR_ERR(regs.mem);
+		dev_err(dev, "failed to map TPU TOP registers: %d", ret);
+		return ret;
 	}
 
 	mutex_init(&etmdev->platform_pwr.policy_lock);
 	etmdev->platform_pwr.curr_policy = TPU_POLICY_MAX;
+
+	/* Use 32-bit DMA mask for any default DMA API paths. */
+	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+	if (ret)
+		dev_warn(dev, "dma_set_mask_and_coherent returned %d\n", ret);
 
 	ret = edgetpu_platform_setup_fw_region(etmdev);
 	if (ret) {
@@ -336,12 +327,6 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 
 	INIT_LIST_HEAD(&etmdev->fw_ctx_list);
 	mutex_init(&etmdev->fw_ctx_list_lock);
-
-	/*
-	 * Parses PMU before edgetpu_device_add so edgetpu_chip_pm_create can know whether to set
-	 * the is_block_down op.
-	 */
-	edgetpu_platform_parse_pmu(etdev);
 
 	ret = edgetpu_device_add(etdev, &regs, iface_params, ARRAY_SIZE(iface_params));
 	if (ret) {
