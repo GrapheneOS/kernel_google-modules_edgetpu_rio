@@ -159,45 +159,6 @@ edgetpu_device_group_kci_finalized(struct edgetpu_device_group *group)
 	return edgetpu_group_activate(group);
 }
 
-/*
- * Does attach domain, init VII, and set @group->context_id without checking
- * @group->mailbox_detachable and whether the mailbox is attached.
- *
- * Caller holds @group->lock.
- */
-static int do_attach_mailbox_locked(struct edgetpu_device_group *group)
-{
-	int ret;
-
-	ret = edgetpu_mmu_attach_domain(group->etdev, group->etdomain);
-	if (ret)
-		return ret;
-	ret = edgetpu_mailbox_init_vii(&group->vii, group);
-	if (ret) {
-		edgetpu_mmu_detach_domain(group->etdev, group->etdomain);
-		return ret;
-	}
-	group->context_id = group->vii.mailbox->mailbox_id;
-	return 0;
-}
-
-/*
- * Does detach domain, remove VII, and invalidate @group->context_id without
- * checking @group->mailbox_detachable and whether the mailbox is detached.
- *
- * Caller holds @group->lock.
- */
-static void do_detach_mailbox_locked(struct edgetpu_device_group *group)
-{
-	edgetpu_mailbox_remove_vii(&group->vii);
-	edgetpu_mmu_detach_domain(group->etdev, group->etdomain);
-	if (group->etdomain->token != EDGETPU_DOMAIN_TOKEN_END)
-		group->context_id =
-			EDGETPU_CONTEXT_DOMAIN_TOKEN | group->etdomain->token;
-	else
-		group->context_id = EDGETPU_CONTEXT_INVALID;
-}
-
 static inline bool is_finalized_or_errored(struct edgetpu_device_group *group)
 {
 	return edgetpu_device_group_is_finalized(group) ||
@@ -502,7 +463,6 @@ error:
 int edgetpu_device_group_finalize(struct edgetpu_device_group *group)
 {
 	int ret = 0;
-	bool mailbox_attached = false;
 
 	mutex_lock(&group->lock);
 	/* do nothing if the group is finalized */
@@ -515,21 +475,18 @@ int edgetpu_device_group_finalize(struct edgetpu_device_group *group)
 		goto err_unlock;
 	}
 
-	/*
-	 * Initialize VII mailbox if
-	 * 1. mailbox is non-detachable: VII is assigned and has the same life
-	 *    cycle as a finalized @group, or
-	 * 2. has non-zero wakelock reference counter: VII should be ready to
-	 *    use after group is finalized.
-	 */
-	if (!group->mailbox_detachable ||
-	    edgetpu_wakelock_count_locked(group->client->wakelock)) {
-		mailbox_attached = true;
-		ret = do_attach_mailbox_locked(group);
+	if (!group->mailbox_detachable) {
+		ret = edgetpu_mmu_attach_domain(group->etdev, group->etdomain);
 		if (ret) {
-			etdev_err(group->etdev,
-				  "finalize attach mailbox failed: %d", ret);
+			etdev_err(group->etdev, "finalize attach domain failed: %d", ret);
 			goto err_unlock;
+		}
+	}
+	if (edgetpu_wakelock_count_locked(group->client->wakelock)) {
+		ret = edgetpu_group_attach_mailbox_locked(group);
+		if (ret) {
+			etdev_err(group->etdev, "finalize attach mailbox failed: %d", ret);
+			goto err_detach_mmu_domain;
 		}
 	}
 
@@ -546,8 +503,15 @@ int edgetpu_device_group_finalize(struct edgetpu_device_group *group)
 	return 0;
 
 err_remove_detach_mailbox:
-	if (mailbox_attached)
-		do_detach_mailbox_locked(group);
+	if (edgetpu_wakelock_count_locked(group->client->wakelock))
+		edgetpu_group_detach_mailbox_locked(group);
+
+err_detach_mmu_domain:
+	if (!group->mailbox_detachable) {
+		edgetpu_mmu_detach_domain(group->etdev, group->etdomain);
+		group->context_id = EDGETPU_CONTEXT_INVALID;
+	}
+
 err_unlock:
 	mutex_unlock(&group->lock);
 	return ret;
@@ -1278,11 +1242,18 @@ uint edgetpu_group_get_fatal_errors(struct edgetpu_device_group *group)
 
 void edgetpu_group_detach_mailbox_locked(struct edgetpu_device_group *group)
 {
-	if (!group->mailbox_detachable)
-		return;
 	if (edgetpu_group_mailbox_detached_locked(group))
 		return;
-	do_detach_mailbox_locked(group);
+
+	edgetpu_mailbox_remove_vii(&group->vii);
+
+	if (group->mailbox_detachable)
+		edgetpu_mmu_detach_domain(group->etdev, group->etdomain);
+
+	if (group->etdomain->token != EDGETPU_DOMAIN_TOKEN_END)
+		group->context_id = EDGETPU_CONTEXT_DOMAIN_TOKEN | group->etdomain->token;
+	else
+		group->context_id = EDGETPU_CONTEXT_INVALID;
 }
 
 void edgetpu_group_close_and_detach_mailbox(struct edgetpu_device_group *group)
@@ -1303,11 +1274,26 @@ void edgetpu_group_close_and_detach_mailbox(struct edgetpu_device_group *group)
 
 int edgetpu_group_attach_mailbox_locked(struct edgetpu_device_group *group)
 {
-	if (!group->mailbox_detachable)
-		return 0;
+	int ret;
+
 	if (!edgetpu_group_mailbox_detached_locked(group))
 		return 0;
-	return do_attach_mailbox_locked(group);
+
+	if (group->mailbox_detachable) {
+		ret = edgetpu_mmu_attach_domain(group->etdev, group->etdomain);
+		if (ret)
+			return ret;
+	}
+
+	ret = edgetpu_mailbox_init_vii(&group->vii, group);
+	if (ret) {
+		if (group->mailbox_detachable)
+			edgetpu_mmu_detach_domain(group->etdev, group->etdomain);
+		return ret;
+	}
+	group->context_id = group->vii.mailbox->mailbox_id;
+
+	return 0;
 }
 
 int edgetpu_group_attach_and_open_mailbox(struct edgetpu_device_group *group)

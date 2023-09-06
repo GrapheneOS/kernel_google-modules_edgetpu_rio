@@ -9,6 +9,7 @@ obj-$(CONFIG_GCIP)	+= gcip.o
 gcip-objs		:= gcip-alloc-helper.o \
 			   gcip-dma-fence.o \
 			   gcip-domain-pool.o \
+			   gcip-fault-injection.o \
 			   gcip-firmware.o \
 			   gcip-image-config.o \
 			   gcip-iommu.o \

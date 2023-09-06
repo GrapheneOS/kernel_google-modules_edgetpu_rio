@@ -8,6 +8,8 @@
 
 #include <linux/atomic.h>
 #include <linux/bits.h>
+#include <linux/delay.h>
+#include <linux/ktime.h>
 #include <linux/mutex.h>
 #include <linux/platform_data/sscoredump.h>
 #include <linux/platform_device.h>
@@ -21,10 +23,20 @@
 #include "edgetpu-mailbox.h"
 #include "edgetpu-mapping.h"
 #include "edgetpu-mobile-platform.h"
+#include "edgetpu-telemetry.h"
 #include "edgetpu-wakelock.h"
 #include "mobile-debug-dump.h"
 
 #include "edgetpu-debug-dump.c"
+
+/*
+ * The minimum wait time in millisecond to be enforced between two successive calls to the SSCD
+ * module to prevent the overwrite of the previous generated core dump files. SSCD module generates
+ * the files whose name are at second precision i.e.
+ * crashinfo_<SUBSYSTEM_NAME>_<%Y-%m-%d_%H-%M-%S>.txt and
+ * coredump_<SUBSYSTEM_NAME>_<%Y-%m-%d_%H-%M-%S>.bin.
+ */
+#define SSCD_REPORT_WAIT_TIME (1000ULL)
 
 #define SET_FIELD(info, obj, __field) ((info)->__field = (obj)->__field)
 
@@ -112,10 +124,18 @@ static int sscd_ctx_report_and_release(struct sscd_segments_context *ctx, const 
 {
 	struct sscd_platform_data *pdata = ctx->sscd_info->pdata;
 	struct platform_device *sscd_dev = ctx->sscd_info->dev;
+	static ktime_t prev_sscd_report_time;
+	uint64_t diff_ms;
 	int ret;
+
+	diff_ms = ktime_to_ms(ktime_sub(ktime_get(), prev_sscd_report_time));
+	if (diff_ms < SSCD_REPORT_WAIT_TIME)
+		msleep(SSCD_REPORT_WAIT_TIME - diff_ms);
 
 	ret = pdata->sscd_report(sscd_dev, ctx->segs, ctx->n_segs, SSCD_FLAGS_ELFARM64HDR,
 				 crash_info);
+
+	prev_sscd_report_time = ktime_get();
 	sscd_ctx_release(ctx);
 	return ret;
 }
@@ -401,6 +421,7 @@ out_put_clients:
 	return ret;
 }
 
+/* Generates coredump sent by the firmware. */
 static int mobile_sscd_generate_coredump(void *p_etdev, void *p_dump_setup)
 {
 	struct edgetpu_dev *etdev;
@@ -469,6 +490,54 @@ err:
 	return ret;
 }
 
+/* Generates general dump, including telemetry logs and device info. */
+static int mobile_sscd_generate_dump(void *p_etdev, void *p_dump_setup)
+{
+	struct edgetpu_dev *etdev;
+	struct edgetpu_mobile_platform_dev *pdev;
+	struct sscd_segments_context sscd_ctx;
+	static const char crash_info[] = "[edgetpu dump]";
+	int i, ret;
+
+	if (!p_etdev)
+		return -EINVAL;
+
+	etdev = (struct edgetpu_dev *)p_etdev;
+	pdev = to_mobile_dev(etdev);
+	ret = sscd_ctx_init(&sscd_ctx, &pdev->sscd_info);
+	if (ret)
+		goto err;
+
+	/* Populate sscd segments */
+	for (i = 0; i < etdev->num_cores; i++) {
+		struct edgetpu_coherent_mem *log_mem = &etdev->telemetry[i].log_mem;
+		struct sscd_segment seg = {
+			.addr = log_mem->vaddr,
+			.size = log_mem->size,
+		};
+
+		ret = sscd_ctx_push_segment(&sscd_ctx, &seg, false);
+		if (ret)
+			goto err_release;
+	}
+
+	ret = mobile_collect_device_info(etdev, &sscd_ctx);
+	if (ret)
+		goto err_release;
+
+	ret = sscd_ctx_report_and_release(&sscd_ctx, crash_info);
+	if (ret)
+		goto err;
+
+	return 0;
+
+err_release:
+	sscd_ctx_release(&sscd_ctx);
+err:
+	etdev_err(etdev, "failed to generate dump: %d", ret);
+	return ret;
+}
+
 int edgetpu_debug_dump_init(struct edgetpu_dev *etdev)
 {
 	size_t size;
@@ -518,6 +587,9 @@ int edgetpu_debug_dump_init(struct edgetpu_dev *etdev)
 	etdev->debug_dump_handlers[DUMP_REASON_REQ_BY_USER] = mobile_sscd_generate_coredump;
 	etdev->debug_dump_handlers[DUMP_REASON_RECOVERABLE_FAULT] = mobile_sscd_generate_coredump;
 	etdev->debug_dump_handlers[DUMP_REASON_FW_CHECKPOINT] = mobile_sscd_generate_coredump;
+	etdev->debug_dump_handlers[DUMP_REASON_UNRECOVERABLE_FAULT] = mobile_sscd_generate_dump;
+	etdev->debug_dump_handlers[DUMP_REASON_NON_FATAL_CRASH] = mobile_sscd_generate_dump;
+	etdev->debug_dump_handlers[DUMP_REASON_SW_WATCHDOG_TIMEOUT] = mobile_sscd_generate_dump;
 
 	pdev->sscd_info.pdata = &sscd_pdata;
 	pdev->sscd_info.dev = &sscd_dev;

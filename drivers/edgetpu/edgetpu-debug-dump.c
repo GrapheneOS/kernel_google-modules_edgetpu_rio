@@ -88,18 +88,10 @@ static void edgetpu_reset_debug_dump(struct edgetpu_dev *etdev)
 	memset(etdev->debug_dump_mem.vaddr, 0, etdev->debug_dump_mem.size);
 }
 
-static void edgetpu_debug_dump_work(struct work_struct *work)
+void edgetpu_debug_dump(struct edgetpu_dev *etdev, struct edgetpu_debug_dump_setup *dump_setup,
+			u64 dump_reason)
 {
-	struct edgetpu_dev *etdev;
-	struct edgetpu_debug_dump_setup *dump_setup;
-	struct edgetpu_debug_dump *debug_dump;
 	int ret;
-	u64 dump_reason;
-
-	etdev = container_of(work, struct edgetpu_dev, debug_dump_work);
-	dump_setup =
-		(struct edgetpu_debug_dump_setup *)etdev->debug_dump_mem.vaddr;
-	debug_dump = (struct edgetpu_debug_dump *)(dump_setup + 1);
 
 	if (!etdev->debug_dump_handlers) {
 		etdev_err(etdev, "Failed to generate coredump as handler is NULL");
@@ -107,9 +99,7 @@ static void edgetpu_debug_dump_work(struct work_struct *work)
 		return;
 	}
 
-	dump_reason = debug_dump->dump_reason;
-	if (dump_reason >= DUMP_REASON_NUM ||
-	    !etdev->debug_dump_handlers[dump_reason]) {
+	if (dump_reason >= DUMP_REASON_NUM || !etdev->debug_dump_handlers[dump_reason]) {
 		etdev_err(etdev,
 			  "Failed to generate coredump as handler is NULL for dump request reason: %#llx",
 			  dump_reason);
@@ -120,6 +110,16 @@ static void edgetpu_debug_dump_work(struct work_struct *work)
 	ret = etdev->debug_dump_handlers[dump_reason]((void *)etdev, (void *)dump_setup);
 	if (ret)
 		etdev_err(etdev, "Failed to generate coredump: %d\n", ret);
+}
+
+static void edgetpu_debug_dump_work(struct work_struct *work)
+{
+	struct edgetpu_dev *etdev = container_of(work, struct edgetpu_dev, debug_dump_work);
+	struct edgetpu_debug_dump_setup *dump_setup =
+		(struct edgetpu_debug_dump_setup *)etdev->debug_dump_mem.vaddr;
+	struct edgetpu_debug_dump *debug_dump = (struct edgetpu_debug_dump *)(dump_setup + 1);
+
+	edgetpu_debug_dump(etdev, dump_setup, debug_dump->dump_reason);
 	edgetpu_reset_debug_dump(etdev);
 }
 

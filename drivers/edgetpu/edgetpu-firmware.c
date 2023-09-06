@@ -15,6 +15,7 @@
 #include <linux/string.h>
 #include <linux/types.h>
 
+#include <gcip/gcip-fault-injection.h>
 #include <gcip/gcip-pm.h>
 #include <gcip/gcip-thermal.h>
 
@@ -378,6 +379,9 @@ static int edgetpu_firmware_run_locked(struct edgetpu_firmware *et_fw,
 	 */
 	edgetpu_firmware_unload_locked(et_fw, &et_fw->p->fw_desc);
 	et_fw->p->fw_desc = new_fw_desc;
+
+	gcip_fault_inject_send(et_fw->fault_inject);
+
 	ret = edgetpu_firmware_handshake(et_fw);
 	if (!ret)
 		edgetpu_sw_wdt_start(et_fw->etdev);
@@ -643,6 +647,31 @@ void edgetpu_firmware_watchdog_restart(struct edgetpu_dev *etdev)
 	edgetpu_firmware_unlock(etdev);
 }
 
+static int edgetpu_firmware_fault_inject_init(struct edgetpu_firmware *et_fw)
+{
+	struct edgetpu_dev *etdev = et_fw->etdev;
+	const struct gcip_fault_inject_args args = { .dev = etdev->dev,
+						     .parent_dentry = etdev->d_entry,
+						     .pm = etdev->pm,
+						     .send_kci = edgetpu_kci_fault_injection,
+						     .kci_data = etdev->etkci };
+	struct gcip_fault_inject *injection;
+
+	injection = gcip_fault_inject_create(&args);
+
+	if (IS_ERR(injection))
+		return PTR_ERR(injection);
+
+	et_fw->fault_inject = injection;
+
+	return 0;
+}
+
+static void edgetpu_firmware_fault_inject_exit(struct edgetpu_firmware *et_fw)
+{
+	gcip_fault_inject_destroy(et_fw->fault_inject);
+}
+
 int edgetpu_firmware_create(struct edgetpu_dev *etdev,
 			    const struct edgetpu_firmware_chip_data *chip_fw)
 {
@@ -680,6 +709,10 @@ int edgetpu_firmware_create(struct edgetpu_dev *etdev,
 		}
 	}
 
+	ret = edgetpu_firmware_fault_inject_init(et_fw);
+	if (ret)
+		etdev_warn(etdev, "Failed to init fault injection: %d\n", ret);
+
 	etdev->firmware = et_fw;
 	ret = edgetpu_sw_wdt_create(etdev, EDGETPU_ACTIVE_DEV_BEAT_MS,
 				    EDGETPU_DORMANT_DEV_BEAT_MS);
@@ -704,6 +737,8 @@ void edgetpu_firmware_destroy(struct edgetpu_dev *etdev)
 	if (!et_fw)
 		return;
 	edgetpu_sw_wdt_destroy(etdev);
+
+	edgetpu_firmware_fault_inject_exit(et_fw);
 
 	if (et_fw->p) {
 		chip_fw = et_fw->p->chip_fw;

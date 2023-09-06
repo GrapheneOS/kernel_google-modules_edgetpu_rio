@@ -216,8 +216,8 @@ struct edgetpu_mailbox_manager *
 edgetpu_mailbox_create_mgr(struct edgetpu_dev *etdev,
 			   const struct edgetpu_mailbox_manager_desc *desc);
 
-/* interrupt handler */
-irqreturn_t edgetpu_mailbox_handle_irq(struct edgetpu_mailbox_manager *mgr);
+/* Interrupt handler for mailbox IRQs. */
+irqreturn_t edgetpu_mailbox_irq_handler(int irq, void *arg);
 
 /*
  * Removes the mailbox previously requested from a mailbox manager.
@@ -225,8 +225,13 @@ irqreturn_t edgetpu_mailbox_handle_irq(struct edgetpu_mailbox_manager *mgr);
  * This function doesn't change the state of mailbox enable/disable.
  */
 int edgetpu_mailbox_remove(struct edgetpu_mailbox_manager *mgr, struct edgetpu_mailbox *mailbox);
-/* Removes and disables all the mailboxes previously requested. */
-void edgetpu_mailbox_remove_all(struct edgetpu_mailbox_manager *mgr);
+/*
+ * Removes and disables all the mailboxes previously requested.
+ *
+ * @hwaccessok = false means hardware is in unknown state, do not access mailbox CSRs;
+ *               true means hardware is powered on and mailbox CSRs are okay to access
+ */
+void edgetpu_mailbox_remove_all(struct edgetpu_mailbox_manager *mgr, bool hwaccessok);
 
 /* configure mailbox */
 

@@ -22,7 +22,6 @@
 #include <linux/firmware.h>
 #include <linux/fs.h>
 #include <linux/io.h>
-#include <linux/irqreturn.h>
 #include <linux/mm_types.h>
 #include <linux/mutex.h>
 #include <linux/refcount.h>
@@ -374,10 +373,6 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 		       const struct edgetpu_iface_params *iface_params,
 		       uint num_ifaces);
 void edgetpu_device_remove(struct edgetpu_dev *etdev);
-/* Registers IRQ. */
-int edgetpu_register_irq(struct edgetpu_dev *etdev, int irq);
-/* Reverts edgetpu_register_irq */
-void edgetpu_unregister_irq(struct edgetpu_dev *etdev, int irq);
 
 /* Core -> Device FS API */
 
@@ -395,9 +390,6 @@ struct dentry *edgetpu_fs_debugfs_dir(void);
 /* Chip-specific init/exit */
 void edgetpu_chip_init(struct edgetpu_dev *etdev);
 void edgetpu_chip_exit(struct edgetpu_dev *etdev);
-
-/* IRQ handler */
-irqreturn_t edgetpu_chip_irq_handler(int irq, void *arg);
 
 /* Device -> Core API */
 
@@ -419,9 +411,6 @@ struct edgetpu_client *edgetpu_client_get(struct edgetpu_client *client);
 
 /* Decrease reference count and free @client if count reaches zero */
 void edgetpu_client_put(struct edgetpu_client *client);
-
-/* Mark die that fails probe to allow bypassing */
-void edgetpu_mark_probe_fail(struct edgetpu_dev *etdev);
 
 /*
  * Get error code corresponding to @etdev state. Caller holds

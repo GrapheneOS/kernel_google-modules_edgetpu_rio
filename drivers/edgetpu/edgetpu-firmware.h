@@ -19,10 +19,12 @@ enum edgetpu_firmware_flags {
 };
 
 struct edgetpu_firmware_private;
+struct gcip_fault_injection;
 
 struct edgetpu_firmware {
 	struct edgetpu_dev *etdev;
 	struct edgetpu_firmware_private *p;
+	struct gcip_fault_inject *fault_inject;
 };
 
 struct edgetpu_firmware_buffer {

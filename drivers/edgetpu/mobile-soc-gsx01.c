@@ -9,6 +9,7 @@
 #include <linux/device.h>
 #include <linux/errno.h>
 #include <linux/gsa/gsa_tpu.h>
+#include <linux/interrupt.h>
 #include <linux/notifier.h>
 #include <linux/platform_device.h>
 #include <linux/thermal.h>
@@ -385,7 +386,12 @@ static int edgetpu_core_rate_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 
-	*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_CLK_CORE_DEBUG);
+	if (gcip_pm_get_if_powered(etdev->pm, true)) {
+		*val = 0;
+	} else {
+		*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_CLK_CORE_DEBUG);
+		gcip_pm_put(etdev->pm);
+	}
 
 	return 0;
 }
@@ -404,7 +410,12 @@ static int edgetpu_ctl_rate_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 
-	*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_CLK_CTL_DEBUG);
+	if (gcip_pm_get_if_powered(etdev->pm, true)) {
+		*val = 0;
+	} else {
+		*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_CLK_CTL_DEBUG);
+		gcip_pm_put(etdev->pm);
+	}
 
 	return 0;
 }
@@ -423,7 +434,12 @@ static int edgetpu_axi_rate_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 
-	*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_CLK_AXI_DEBUG);
+	if (gcip_pm_get_if_powered(etdev->pm, true)) {
+		*val = 0;
+	} else {
+		*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_CLK_AXI_DEBUG);
+		gcip_pm_put(etdev->pm);
+	}
 
 	return 0;
 }
@@ -442,7 +458,12 @@ static int edgetpu_apb_rate_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 
-	*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_CLK_APB_DEBUG);
+	if (gcip_pm_get_if_powered(etdev->pm, true)) {
+		*val = 0;
+	} else {
+		*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_CLK_APB_DEBUG);
+		gcip_pm_put(etdev->pm);
+	}
 
 	return 0;
 }
@@ -451,7 +472,12 @@ static int edgetpu_uart_rate_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 
-	*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_CLK_UART_DEBUG);
+	if (gcip_pm_get_if_powered(etdev->pm, true)) {
+		*val = 0;
+	} else {
+		*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_CLK_UART_DEBUG);
+		gcip_pm_put(etdev->pm);
+	}
 
 	return 0;
 }
@@ -476,7 +502,12 @@ static int edgetpu_vdd_int_m_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 
-	*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_VDD_INT_M_DEBUG);
+	if (gcip_pm_get_if_powered(etdev->pm, true)) {
+		*val = 0;
+	} else {
+		*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_VDD_INT_M_DEBUG);
+		gcip_pm_put(etdev->pm);
+	}
 
 	return 0;
 }
@@ -503,7 +534,12 @@ static int edgetpu_vdd_tpu_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 
-	*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_VDD_TPU_DEBUG);
+	if (gcip_pm_get_if_powered(etdev->pm, true)) {
+		*val = 0;
+	} else {
+		*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_VDD_TPU_DEBUG);
+		gcip_pm_put(etdev->pm);
+	}
 
 	return 0;
 }
@@ -530,7 +566,12 @@ static int edgetpu_vdd_tpu_m_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
 
-	*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_VDD_TPU_M_DEBUG);
+	if (gcip_pm_get_if_powered(etdev->pm, true)) {
+		*val = 0;
+	} else {
+		*val = exynos_acpm_get_rate(TPU_ACPM_DOMAIN, TPU_DEBUG_REQ | TPU_VDD_TPU_M_DEBUG);
+		gcip_pm_put(etdev->pm);
+	}
 
 	return 0;
 }
@@ -661,4 +702,37 @@ void edgetpu_soc_set_tpu_cpu_security(struct edgetpu_dev *etdev)
 	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_SECURITY, (ctx_id << 16) | sid0);
 	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_SECURITY + 8,
 			     (ctx_id << 16) | sid1);
+}
+
+int edgetpu_soc_setup_irqs(struct edgetpu_dev *etdev)
+{
+	struct platform_device *pdev = to_platform_device(etdev->dev);
+	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
+	int n = platform_irq_count(pdev);
+	int ret;
+	int i;
+
+	if (n < 0) {
+		dev_err(etdev->dev, "Error retrieving IRQ count: %d\n", n);
+		return n;
+	}
+
+	etmdev->mailbox_irq = devm_kmalloc_array(etdev->dev, n, sizeof(*etmdev->mailbox_irq),
+						 GFP_KERNEL);
+	if (!etmdev->mailbox_irq)
+		return -ENOMEM;
+
+	for (i = 0; i < n; i++) {
+		etmdev->mailbox_irq[i] = platform_get_irq(pdev, i);
+		ret = devm_request_irq(etdev->dev, etmdev->mailbox_irq[i],
+				       edgetpu_mailbox_irq_handler, IRQF_ONESHOT, etdev->dev_name,
+				       etdev);
+		if (ret) {
+			dev_err(etdev->dev, "%s: failed to request mailbox irq %d: %d\n",
+				etdev->dev_name, etmdev->mailbox_irq[i], ret);
+			return ret;
+		}
+	}
+	etmdev->n_mailbox_irq = n;
+	return 0;
 }

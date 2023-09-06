@@ -95,10 +95,10 @@ struct edgetpu_mobile_platform_dev {
 	/* TZ mailbox client */
 	struct edgetpu_client *secure_client;
 
-	/* Length of @irq */
-	int n_irq;
-	/* Array of IRQ numbers */
-	int *irq;
+	/* Length of @mailbox_irq */
+	int n_mailbox_irq;
+	/* Array of mailbox IRQ numbers */
+	int *mailbox_irq;
 
 	/* callbacks for chip-dependent implementations */
 

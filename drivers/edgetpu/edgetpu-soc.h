@@ -66,4 +66,7 @@ void edgetpu_soc_deactivate_context(struct edgetpu_dev *etdev, int pasid);
 /* Set security CSRs for TPU CPU / instruction remap region. */
 void edgetpu_soc_set_tpu_cpu_security(struct edgetpu_dev *etdev);
 
+/* Parse and setup IRQs at probe time. */
+int edgetpu_soc_setup_irqs(struct edgetpu_dev *etdev);
+
 #endif /* __EDGETPU_SOC_H__ */

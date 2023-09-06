@@ -12,14 +12,9 @@
 
 /* Macros to check the availability of features and APIs */
 
-/* TODO(b/292499332) Temporary compiler flag to disable vm_flags_set for out-of-date GKIs */
-#ifdef GCIP_FORCE_NO_VMA_FLAGS_API
-#define GCIP_HAS_VMA_FLAGS_API 0
-#else
 #define GCIP_HAS_VMA_FLAGS_API                                                                     \
 	((LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 25) && GCIP_IS_GKI) ||                        \
 	 LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0))
-#endif /* GCIP_FORCE_NO_VMA_FLAGS_API */
 
 #define GCIP_HAS_IOMMU_PASID                                                                       \
 	((LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0) && GCIP_IS_GKI) ||                         \

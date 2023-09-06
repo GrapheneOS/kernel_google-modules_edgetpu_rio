@@ -13,7 +13,6 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
-#include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/mutex.h>
@@ -485,7 +484,7 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 	ret = edgetpu_mmu_attach(etdev);
 	if (ret) {
 		dev_err(etdev->dev, "failed to attach IOMMU: %d", ret);
-		goto remove_mboxes;
+		goto remove_pm;
 	}
 
 	edgetpu_usage_stats_init(etdev);
@@ -527,22 +526,31 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 remove_usage_stats:
 	edgetpu_usage_stats_exit(etdev);
 	edgetpu_mmu_detach(etdev);
+remove_pm:
+	edgetpu_pm_destroy(etdev);
 remove_mboxes:
-	edgetpu_mailbox_remove_all(etdev->mailbox_manager);
+	edgetpu_mailbox_remove_all(etdev->mailbox_manager, false);
 remove_dev:
-	edgetpu_mark_probe_fail(etdev);
 	edgetpu_fs_remove(etdev);
 	return ret;
 }
 
 void edgetpu_device_remove(struct edgetpu_dev *etdev)
 {
+	int ret;
+
+	ret = gcip_pm_get(etdev->pm);
 	edgetpu_chip_exit(etdev);
 	edgetpu_firmware_tracing_destroy(etdev->fw_tracing);
 	edgetpu_debug_dump_exit(etdev);
-	edgetpu_mailbox_remove_all(etdev->mailbox_manager);
+	/* If not known powered up don't try to set mailbox CSRs to disabled state. */
+	edgetpu_mailbox_remove_all(etdev->mailbox_manager, !ret);
 	edgetpu_usage_stats_exit(etdev);
 	edgetpu_mmu_detach(etdev);
+	if (!ret)
+		gcip_pm_put(etdev->pm);
+	gcip_pm_shutdown(etdev->pm, true);
+	edgetpu_pm_destroy(etdev);
 	edgetpu_fs_remove(etdev);
 }
 
@@ -599,12 +607,26 @@ void edgetpu_client_put(struct edgetpu_client *client)
 
 void edgetpu_client_remove(struct edgetpu_client *client)
 {
-	struct edgetpu_dev *etdev;
+	struct edgetpu_dev *etdev = client->etdev;
 	struct edgetpu_list_device_client *lc;
+	uint wakelock_count;
 
-	if (IS_ERR_OR_NULL(client))
-		return;
-	etdev = client->etdev;
+	mutex_lock(&client->group_lock);
+	/*
+	 * Safe to read wakelock->req_count here since req_count is only modified during
+	 * [acquire/release]_wakelock ioctl calls which cannot race with releasing client/fd.
+	 */
+	wakelock_count = client->wakelock->req_count;
+	/*
+	 * @wakelock_count = 0 means the device might be powered off. Mailbox(EXT/VII) is removed
+	 * when the group is released, so we need to ensure the device should not accessed to
+	 * prevent kernel panic on programming mailbox CSRs.
+	 */
+	if (!wakelock_count && client->group)
+		client->group->dev_inaccessible = true;
+
+	mutex_unlock(&client->group_lock);
+
 	mutex_lock(&etdev->clients_lock);
 	/* remove the client from the device list */
 	for_each_list_device_client(etdev, lc) {
@@ -639,23 +661,10 @@ void edgetpu_client_remove(struct edgetpu_client *client)
 		edgetpu_telemetry_unset_event(etdev, GCIP_TELEMETRY_TRACE);
 
 	edgetpu_client_put(client);
-}
 
-int edgetpu_register_irq(struct edgetpu_dev *etdev, int irq)
-{
-	int ret;
-
-	ret = devm_request_irq(etdev->dev, irq, edgetpu_chip_irq_handler,
-			       IRQF_ONESHOT, etdev->dev_name, etdev);
-	if (ret)
-		dev_err(etdev->dev, "%s: failed to request irq %d: %d\n",
-			etdev->dev_name, irq, ret);
-	return ret;
-}
-
-void edgetpu_unregister_irq(struct edgetpu_dev *etdev, int irq)
-{
-	devm_free_irq(etdev->dev, irq, etdev);
+	/* Releases each acquired wake lock for this client. */
+	while (wakelock_count--)
+		gcip_pm_put(etdev->pm);
 }
 
 int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size,
@@ -741,12 +750,14 @@ void edgetpu_handle_firmware_crash(struct edgetpu_dev *etdev,
 	if (crash_type == EDGETPU_FW_CRASH_UNRECOV_FAULT) {
 		etdev_err(etdev, "firmware unrecoverable crash");
 		etdev->firmware_crash_count++;
+		edgetpu_debug_dump(etdev, NULL, DUMP_REASON_UNRECOVERABLE_FAULT);
 		edgetpu_fatal_error_notify(etdev, EDGETPU_ERROR_FW_CRASH);
 		/* Restart firmware */
 		edgetpu_watchdog_bite(etdev);
 	} else {
 		etdev_err(etdev, "firmware non-fatal crash event: %u",
 			  crash_type);
+		edgetpu_debug_dump(etdev, NULL, DUMP_REASON_NON_FATAL_CRASH);
 	}
 }
 

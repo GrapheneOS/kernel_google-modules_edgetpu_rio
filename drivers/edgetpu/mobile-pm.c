@@ -453,8 +453,3 @@ int edgetpu_mobile_pm_create(struct edgetpu_dev *etdev)
 {
 	return edgetpu_pm_create(etdev, &mobile_pm_handlers);
 }
-
-void edgetpu_mobile_pm_destroy(struct edgetpu_dev *etdev)
-{
-	edgetpu_pm_destroy(etdev);
-}

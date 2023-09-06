@@ -14,12 +14,8 @@
  * Initialize a power management interface for an edgetpu device on mobile
  * chipsets.
  * Needs to be called after the devices's platform_pwr struct has been initialized.
+ * Destroy using edgetpu_pm_destroy().
  */
 int edgetpu_mobile_pm_create(struct edgetpu_dev *etdev);
-
-/*
- * Destroy power management interface for an edgetpu device on mobile chipsets.
- */
-void edgetpu_mobile_pm_destroy(struct edgetpu_dev *etdev);
 
 #endif /* __MOBILE_PM_H__ */

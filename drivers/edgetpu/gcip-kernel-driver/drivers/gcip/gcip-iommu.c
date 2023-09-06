@@ -364,6 +364,7 @@ struct gcip_iommu_domain *gcip_iommu_domain_pool_alloc_domain(struct gcip_iommu_
 
 	gdomain->dev = pool->dev;
 	gdomain->domain_pool = pool;
+	gdomain->pasid = INVALID_IOASID;
 	gdomain->domain = gcip_domain_pool_alloc(&pool->domain_pool);
 	if (IS_ERR_OR_NULL(gdomain->domain)) {
 		ret = -ENOMEM;
@@ -419,12 +420,12 @@ void gcip_iommu_domain_pool_set_pasid_range(struct gcip_iommu_domain_pool *pool,
 	pool->max_pasid = max;
 }
 
-int gcip_iommu_domain_pool_attach_domain(struct gcip_iommu_domain_pool *pool,
-					 struct gcip_iommu_domain *domain)
+static int _gcip_iommu_domain_pool_attach_domain(struct gcip_iommu_domain_pool *pool,
+						 struct gcip_iommu_domain *domain)
 {
-#if HAS_IOMMU_PASID
-	int ret, pasid;
+	int ret = -EOPNOTSUPP, pasid = INVALID_IOASID;
 
+#if HAS_IOMMU_PASID
 	pasid = ida_alloc_range(&pool->pasid_pool, pool->min_pasid, pool->max_pasid, GFP_KERNEL);
 	if (pasid < 0)
 		return pasid;
@@ -434,12 +435,8 @@ int gcip_iommu_domain_pool_attach_domain(struct gcip_iommu_domain_pool *pool,
 		ida_free(&pool->pasid_pool, pasid);
 		return ret;
 	}
-	domain->pasid = pasid;
 
-	return pasid;
 #elif HAS_AUX_DOMAINS
-	int ret, pasid;
-
 	if (!pool->aux_enabled)
 		return -ENODEV;
 
@@ -453,27 +450,36 @@ int gcip_iommu_domain_pool_attach_domain(struct gcip_iommu_domain_pool *pool,
 		iommu_aux_detach_device(domain->domain, pool->dev);
 		return -EINVAL;
 	}
-	domain->pasid = pasid;
 
-	return pasid;
-#else
-	return -EOPNOTSUPP;
 #endif
+	domain->pasid = pasid;
+	return ret;
+}
+
+int gcip_iommu_domain_pool_attach_domain(struct gcip_iommu_domain_pool *pool,
+					 struct gcip_iommu_domain *domain)
+{
+
+	if (domain->pasid != INVALID_IOASID)
+		/* Already attached. */
+		return domain->pasid;
+
+	return _gcip_iommu_domain_pool_attach_domain(pool, domain);
 }
 
 void gcip_iommu_domain_pool_detach_domain(struct gcip_iommu_domain_pool *pool,
 					  struct gcip_iommu_domain *domain)
 {
+	if (domain->pasid == INVALID_IOASID)
+		return;
 #if HAS_IOMMU_PASID
 	iommu_detach_device_pasid(domain->domain, pool->dev, domain->pasid);
 	ida_free(&pool->pasid_pool, domain->pasid);
 #elif HAS_AUX_DOMAINS
 	if (pool->aux_enabled)
 		iommu_aux_detach_device(domain->domain, pool->dev);
-#else
-	/* No-op if attaching multiple domains is not supported */
-	return;
 #endif
+	domain->pasid = INVALID_IOASID;
 }
 
 unsigned int gcip_iommu_domain_map_sg(struct gcip_iommu_domain *domain, struct scatterlist *sgl,
@@ -590,6 +596,7 @@ struct gcip_iommu_domain *gcip_iommu_get_domain_for_dev(struct device *dev)
 	gdomain->dev = dev;
 	gdomain->legacy_mode = true;
 	gdomain->default_domain = true;
+	gdomain->pasid = 0;
 
 	return gdomain;
 }

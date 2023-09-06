@@ -7,6 +7,7 @@
 
 #include <linux/device.h>
 #include <linux/gsa/gsa_tpu.h>
+#include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
@@ -17,6 +18,7 @@
 #include <gcip/gcip-iommu.h>
 
 #include "edgetpu-config.h"
+#include "edgetpu-debug-dump.h"
 #include "edgetpu-dmabuf.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-iremap-pool.h"
@@ -210,40 +212,45 @@ void edgetpu_chip_client_remove(struct edgetpu_client *client)
 	mutex_unlock(&etmdev->tz_mailbox_lock);
 }
 
-static int edgetpu_platform_setup_irq(struct edgetpu_mobile_platform_dev *etmdev)
+/* Handle mailbox response doorbell IRQ for mobile platform devices. */
+static irqreturn_t edgetpu_platform_handle_mailbox_doorbell(struct edgetpu_dev *etdev, int irq)
 {
-	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
-	struct platform_device *pdev = to_platform_device(etdev->dev);
-	int n = platform_irq_count(pdev);
-	int ret;
-	int i;
+	struct edgetpu_mailbox *mailbox;
+	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
+	struct edgetpu_mailbox_manager *mgr = etdev->mailbox_manager;
+	uint i;
 
-	etmdev->irq = devm_kmalloc_array(etdev->dev, n, sizeof(*etmdev->irq), GFP_KERNEL);
-	if (!etmdev->irq)
-		return -ENOMEM;
-
-	for (i = 0; i < n; i++) {
-		etmdev->irq[i] = platform_get_irq(pdev, i);
-		ret = edgetpu_register_irq(etdev, etmdev->irq[i]);
-		if (ret)
-			goto rollback;
-	}
-	etmdev->n_irq = n;
-	return 0;
-
-rollback:
-	while (i--)
-		edgetpu_unregister_irq(etdev, etmdev->irq[i]);
-	return ret;
+	if (!mgr)
+		return IRQ_NONE;
+	for (i = 0; i < etmdev->n_mailbox_irq; i++)
+		if (etmdev->mailbox_irq[i] == irq)
+			break;
+	if (i == etmdev->n_mailbox_irq)
+		return IRQ_NONE;
+	read_lock(&mgr->mailboxes_lock);
+	mailbox = mgr->mailboxes[i];
+	if (!mailbox)
+		goto out;
+	if (!EDGETPU_MAILBOX_RESP_QUEUE_READ(mailbox, doorbell_status))
+		goto out;
+	EDGETPU_MAILBOX_RESP_QUEUE_WRITE(mailbox, doorbell_clear, 1);
+	etdev_dbg(mgr->etdev, "mbox %u resp doorbell irq tail=%u\n", i,
+		  EDGETPU_MAILBOX_RESP_QUEUE_READ(mailbox, tail));
+	if (mailbox->handle_irq)
+		mailbox->handle_irq(mailbox);
+out:
+	read_unlock(&mgr->mailboxes_lock);
+	return IRQ_HANDLED;
 }
 
-static void edgetpu_platform_remove_irq(struct edgetpu_mobile_platform_dev *etmdev)
+/* Handle a mailbox response doorbell interrupt. */
+irqreturn_t edgetpu_mailbox_irq_handler(int irq, void *arg)
 {
-	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
-	int i;
+	struct edgetpu_dev *etdev = arg;
 
-	for (i = 0; i < etmdev->n_irq; i++)
-		edgetpu_unregister_irq(etdev, etmdev->irq[i]);
+	edgetpu_telemetry_irq_handler(etdev);
+	edgetpu_debug_dump_resp_handler(etdev);
+	return edgetpu_platform_handle_mailbox_doorbell(etdev, irq);
 }
 
 static inline const char *get_driver_commit(void)
@@ -334,7 +341,7 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		goto out_destroy_iremap;
 	}
 
-	ret = edgetpu_platform_setup_irq(etmdev);
+	ret = edgetpu_soc_setup_irqs(etdev);
 	if (ret) {
 		dev_err(dev, "IRQ setup failed: %d", ret);
 		goto out_remove_device;
@@ -343,7 +350,7 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 	etmdev->log_mem = devm_kcalloc(dev, etdev->num_cores, sizeof(*etmdev->log_mem), GFP_KERNEL);
 	if (!etmdev->log_mem) {
 		ret = -ENOMEM;
-		goto out_remove_irq;
+		goto out_remove_device;
 	}
 
 #if IS_ENABLED(CONFIG_EDGETPU_TELEMETRY_TRACE)
@@ -351,14 +358,14 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		devm_kcalloc(dev, etdev->num_cores, sizeof(*etmdev->log_mem), GFP_KERNEL);
 	if (!etmdev->trace_mem) {
 		ret = -ENOMEM;
-		goto out_remove_irq;
+		goto out_remove_device;
 	}
 #endif
 
 	edgetpu_mobile_set_telemetry_mem(etmdev);
 	ret = edgetpu_telemetry_init(etdev, etmdev->log_mem, etmdev->trace_mem);
 	if (ret)
-		goto out_remove_irq;
+		goto out_remove_device;
 
 	ret = edgetpu_mobile_firmware_create(etdev);
 	if (ret) {
@@ -398,8 +405,6 @@ out_destroy_thermal:
 	edgetpu_mobile_firmware_destroy(etdev);
 out_tel_exit:
 	edgetpu_telemetry_exit(etdev);
-out_remove_irq:
-	edgetpu_platform_remove_irq(etmdev);
 out_remove_device:
 	edgetpu_device_remove(etdev);
 out_destroy_iremap:
@@ -419,15 +424,10 @@ static int edgetpu_mobile_platform_remove(struct platform_device *pdev)
 
 	edgetpu_thermal_destroy(etdev);
 	edgetpu_mobile_firmware_destroy(etdev);
-	edgetpu_platform_remove_irq(etmdev);
-	gcip_pm_get(etdev->pm);
 	edgetpu_telemetry_exit(etdev);
 	edgetpu_device_remove(etdev);
 	edgetpu_iremap_pool_destroy(etdev);
 	edgetpu_platform_cleanup_fw_region(etmdev);
-	gcip_pm_put(etdev->pm);
-	gcip_pm_shutdown(etdev->pm, true);
-	edgetpu_mobile_pm_destroy(etdev);
 
 	edgetpu_debug_pointer = NULL;
 

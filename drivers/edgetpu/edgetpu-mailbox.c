@@ -210,28 +210,12 @@ void edgetpu_mailbox_set_priority(struct edgetpu_mailbox *mailbox, u32 priority)
 struct edgetpu_mailbox *
 edgetpu_mailbox_vii_add(struct edgetpu_mailbox_manager *mgr, uint id)
 {
-	struct edgetpu_mailbox *mailbox = NULL;
+	struct edgetpu_mailbox *mailbox;
 	unsigned long flags;
 
 	write_lock_irqsave(&mgr->mailboxes_lock, flags);
-	if (id == 0) {
-		uint i;
-
-		for (i = mgr->vii_index_from; i < mgr->vii_index_to; i++) {
-			if (!mgr->mailboxes[i]) {
-				id = i;
-				break;
-			}
-		}
-	} else {
+	if (id < mgr->vii_index_from || id >= mgr->vii_index_to || mgr->mailboxes[id]) {
 		/* no mailbox available - returns busy */
-		if (id < mgr->vii_index_from || id >= mgr->vii_index_to ||
-		    mgr->mailboxes[id])
-			id = 0;
-	}
-
-	/* no empty slot found */
-	if (id == 0) {
 		mailbox = ERR_PTR(-EBUSY);
 	} else {
 		mailbox = edgetpu_mailbox_create_locked(mgr, id);
@@ -337,10 +321,12 @@ int edgetpu_mailbox_init_vii(struct edgetpu_vii *vii,
 	const struct edgetpu_mailbox_attr *attr = &group->mbox_attr;
 	int ret;
 
-	if (!group->etdomain || group->etdomain->pasid == IOMMU_PASID_INVALID)
-		mailbox = edgetpu_mailbox_vii_add(mgr, 0);
-	else
-		mailbox = edgetpu_mailbox_vii_add(mgr, group->etdomain->pasid);
+	if (!group->etdomain || group->etdomain->pasid == IOMMU_PASID_INVALID) {
+		etdev_err(group->etdev, "Invalid IOMMU domain or PASID.\n");
+		return -EINVAL;
+	}
+
+	mailbox = edgetpu_mailbox_vii_add(mgr, group->etdomain->pasid);
 	if (IS_ERR(mailbox))
 		return PTR_ERR(mailbox);
 
@@ -497,7 +483,7 @@ edgetpu_mailbox_create_mgr(struct edgetpu_dev *etdev,
 }
 
 /* All requested mailboxes will be disabled and freed. */
-void edgetpu_mailbox_remove_all(struct edgetpu_mailbox_manager *mgr)
+void edgetpu_mailbox_remove_all(struct edgetpu_mailbox_manager *mgr, bool hwaccessok)
 {
 	uint i;
 	struct edgetpu_mailbox *kci_mailbox = NULL;
@@ -510,7 +496,9 @@ void edgetpu_mailbox_remove_all(struct edgetpu_mailbox_manager *mgr)
 		struct edgetpu_mailbox *mailbox = mgr->mailboxes[i];
 
 		if (mailbox) {
-			edgetpu_mailbox_disable(mailbox);
+			/* Leave mailbox CSRs alone if not known powered up. */
+			if (hwaccessok)
+				edgetpu_mailbox_disable(mailbox);
 			/* KCI needs special handling */
 			if (i == KERNEL_MAILBOX_INDEX)
 				kci_mailbox = mailbox;
@@ -526,38 +514,6 @@ void edgetpu_mailbox_remove_all(struct edgetpu_mailbox_manager *mgr)
 		edgetpu_kci_release(mgr->etdev, kci_mailbox->internal.etkci);
 		kfree(kci_mailbox);
 	}
-}
-
-/*
- * The interrupt handler for KCI and VII mailboxes.
- *
- * This handler loops through such mailboxes with an interrupt pending and
- *  invokes their IRQ handlers.
- */
-irqreturn_t edgetpu_mailbox_handle_irq(struct edgetpu_mailbox_manager *mgr)
-{
-	struct edgetpu_mailbox *mailbox;
-	uint i;
-
-	if (!mgr)
-		return IRQ_NONE;
-
-	read_lock(&mgr->mailboxes_lock);
-	for (i = 0; i < mgr->vii_index_to; i++) {
-		mailbox = mgr->mailboxes[i];
-		if (!mailbox)
-			continue;
-		if (!EDGETPU_MAILBOX_RESP_QUEUE_READ(mailbox, doorbell_status))
-			continue;
-		EDGETPU_MAILBOX_RESP_QUEUE_WRITE(mailbox, doorbell_clear, 1);
-		etdev_dbg(mgr->etdev, "mbox %u resp doorbell irq tail=%u\n",
-			  i, EDGETPU_MAILBOX_RESP_QUEUE_READ(mailbox, tail));
-		if (mailbox->handle_irq)
-			mailbox->handle_irq(mailbox);
-	}
-	read_unlock(&mgr->mailboxes_lock);
-
-	return IRQ_HANDLED;
 }
 
 void edgetpu_mailbox_init_doorbells(struct edgetpu_mailbox *mailbox)

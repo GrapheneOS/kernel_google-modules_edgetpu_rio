@@ -249,7 +249,7 @@ void gcip_iommu_domain_pool_set_pasid_range(struct gcip_iommu_domain_pool *pool,
 					    ioasid_t max);
 
 /*
- * Attaches a GCIP IOMMU domain
+ * Attaches a GCIP IOMMU domain and sets the obtained PASID
  *
  * Before calling this function, you must set the valid PASID range by calling
  * `gcip_iommu_domain_pool_set_pasid_range()`.
@@ -257,8 +257,10 @@ void gcip_iommu_domain_pool_set_pasid_range(struct gcip_iommu_domain_pool *pool,
  * @pool: IOMMU domain pool @domain was allocated from
  * @domain: The GCIP IOMMU domain to attach
  *
+ * On success, @domain->pasid will be set to obtained PASID
+ *
  * Returns:
- * * >= 0    - The PASID the domain was successfully attached with
+ * * 0 - Domain successfully attached with a PASID
  * * -ENOSYS - This device does not support attaching multiple domains
  * * other   - Failed to attach the domain or obtain a PASID for it
  */

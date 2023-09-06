@@ -36,8 +36,11 @@ enum edgetpu_dump_reason {
 	/* FW side dump reasons */
 	DUMP_REASON_FW_CHECKPOINT = 2,
 	DUMP_REASON_RECOVERABLE_FAULT = 3,
+	DUMP_REASON_UNRECOVERABLE_FAULT = 4,
+	DUMP_REASON_NON_FATAL_CRASH = 5,
+	DUMP_REASON_SW_WATCHDOG_TIMEOUT = 6,
 
-	DUMP_REASON_NUM = 4
+	DUMP_REASON_NUM = 7
 };
 
 struct edgetpu_crash_reason {
@@ -86,6 +89,10 @@ int edgetpu_debug_dump_init(struct edgetpu_dev *etdev);
  * Free debug dump memory.
  */
 void edgetpu_debug_dump_exit(struct edgetpu_dev *etdev);
+
+/* Dump the content according to @dump_setup and @dump_reason. */
+void edgetpu_debug_dump(struct edgetpu_dev *etdev, struct edgetpu_debug_dump_setup *dump_setup,
+			u64 dump_reason);
 
 /*
  * Send KCI request to get fw debug dump segments.

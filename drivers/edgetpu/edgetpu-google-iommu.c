@@ -189,9 +189,9 @@ static int check_default_domain(struct edgetpu_dev *etdev,
 	etdev_warn(etdev, "device group has no default iommu domain\n");
 
 	gdomain = gcip_iommu_domain_pool_alloc_domain(&etiommu->domain_pool);
-	if (!gdomain) {
+	if (IS_ERR(gdomain)) {
 		etdev_warn(etdev, "iommu domain alloc failed");
-		return -EINVAL;
+		return PTR_ERR(gdomain);
 	}
 
 	ret = iommu_attach_device(gdomain->domain, etdev->dev);
@@ -464,7 +464,7 @@ struct edgetpu_iommu_domain *edgetpu_mmu_alloc_domain(struct edgetpu_dev *etdev)
 	int token;
 
 	gdomain = gcip_iommu_domain_pool_alloc_domain(&etiommu->domain_pool);
-	if (!gdomain) {
+	if (IS_ERR(gdomain)) {
 		etdev_warn(etdev, "iommu domain allocation failed");
 		return NULL;
 	}
@@ -513,7 +513,7 @@ int edgetpu_mmu_attach_domain(struct edgetpu_dev *etdev,
 {
 	struct edgetpu_iommu *etiommu = etdev->mmu_cookie;
 	struct gcip_iommu_domain *gdomain;
-	int pasid;
+	int ret;
 
 	if (etdomain->pasid != (ioasid_t)IOMMU_PASID_INVALID) {
 		etdev_err(etdev, "Attempt to attach already-attached domain with PASID=%u",
@@ -522,14 +522,14 @@ int edgetpu_mmu_attach_domain(struct edgetpu_dev *etdev,
 	}
 
 	gdomain = etdomain->gdomain;
-	pasid = gcip_iommu_domain_pool_attach_domain(&etiommu->domain_pool, gdomain);
-	if (pasid < 0) {
-		etdev_warn(etdev, "Attach IOMMU domain failed: %d", pasid);
-		return pasid;
+	ret = gcip_iommu_domain_pool_attach_domain(&etiommu->domain_pool, gdomain);
+	if (ret < 0) {
+		etdev_warn(etdev, "Attach IOMMU domain failed: %d", ret);
+		return ret;
 	}
 
-	etiommu->gdomains[pasid] = gdomain;
-	etdomain->pasid = pasid;
+	etiommu->gdomains[gdomain->pasid] = gdomain;
+	etdomain->pasid = gdomain->pasid;
 	return 0;
 }
 

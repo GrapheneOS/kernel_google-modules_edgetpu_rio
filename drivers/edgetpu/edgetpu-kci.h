@@ -16,6 +16,7 @@
 #include <linux/types.h>
 #include <linux/wait.h>
 
+#include <gcip/gcip-fault-injection.h>
 #include <gcip/gcip-kci.h>
 
 #include "edgetpu-firmware.h"
@@ -229,5 +230,13 @@ static inline void edgetpu_kci_update_usage_async(struct edgetpu_kci *etkci)
 {
 	gcip_kci_update_usage_async(etkci->kci);
 }
+
+/**
+ * edgetpu_kci_fault_injection() - Sends the fault injection KCI command to the firmware.
+ * @injection: The container of fault injection data.
+ *
+ * Return: 0 if the command is sent successfully.
+ */
+int edgetpu_kci_fault_injection(struct gcip_fault_inject *injection);
 
 #endif /* __EDGETPU_KCI_H__ */
