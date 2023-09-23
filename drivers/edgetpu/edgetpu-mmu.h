@@ -29,11 +29,9 @@
 
 #define EDGETPU_MMU_COHERENT		(1 << 2)
 
-/*
- * The max possible value of token is (EDGETPU_DOMAIN_TOKEN_END - 1), which
- * shouldn't equal or exceed the bit mask EDGETPU_CONTEXT_DOMAIN_TOKEN.
- */
-#define EDGETPU_DOMAIN_TOKEN_END EDGETPU_CONTEXT_DOMAIN_TOKEN
+/* max number of allocated domains is: 1 for default + EDGETPU_NUM_VCIDS */
+#define EDGETPU_DOMAIN_TOKEN_END	(1 + EDGETPU_NUM_VCIDS)
+#define EDGETPU_DOMAIN_TOKEN_INVALID	(EDGETPU_DOMAIN_TOKEN_END + 1)
 struct edgetpu_iommu_domain {
 	/*
 	 * IOMMU PASID, set by edgetpu_mmu_attach_domain().
@@ -42,11 +40,6 @@ struct edgetpu_iommu_domain {
 	 */
 	uint pasid;
 	struct gcip_iommu_domain *gdomain;
-	/*
-	 * A token set by edgetpu_mmu_alloc_domain(). See the description of
-	 * edgetpu_mmu_add_translation() about @context_id for more details.
-	 */
-	int token;
 };
 
 /*
@@ -112,15 +105,15 @@ int edgetpu_mmu_attach(struct edgetpu_dev *dev);
 void edgetpu_mmu_detach(struct edgetpu_dev *dev);
 
 int edgetpu_mmu_map(struct edgetpu_dev *dev, struct edgetpu_mapping *map,
-		    enum edgetpu_context_id context_id, u32 mmu_flags);
+		    struct edgetpu_iommu_domain *etdomain, u32 mmu_flags);
 void edgetpu_mmu_unmap(struct edgetpu_dev *dev, struct edgetpu_mapping *map,
-		       enum edgetpu_context_id context_id);
+		       struct edgetpu_iommu_domain *etdomain);
 
 int edgetpu_mmu_map_sgt(struct edgetpu_dev *etdev, struct sg_table *sgt,
-			enum edgetpu_context_id context_id, enum dma_data_direction dir,
+			struct edgetpu_iommu_domain *etdomain, enum dma_data_direction dir,
 			unsigned long dma_attrs, u32 mmu_flags);
 void edgetpu_mmu_unmap_sgt(struct edgetpu_dev *etdev, struct sg_table *sgt,
-			   enum edgetpu_context_id context_id, enum dma_data_direction dir,
+			   struct edgetpu_iommu_domain *etdomain, enum dma_data_direction dir,
 			   unsigned long dma_attrs, u32 mmu_flags);
 
 /**
@@ -131,14 +124,12 @@ void edgetpu_mmu_unmap_sgt(struct edgetpu_dev *etdev, struct sg_table *sgt,
  *
  * Returns 0 on success, -errno on error.
  */
-int edgetpu_mmu_map_iova_sgt(struct edgetpu_dev *etdev, tpu_addr_t iova,
-			     struct sg_table *sgt, enum dma_data_direction dir,
-			     u32 mmu_flags, enum edgetpu_context_id context_id);
-void edgetpu_mmu_unmap_iova_sgt_attrs(struct edgetpu_dev *etdev,
-				      tpu_addr_t iova, struct sg_table *sgt,
-				      enum dma_data_direction dir,
-				      enum edgetpu_context_id context_id,
-				      unsigned long attrs);
+int edgetpu_mmu_map_iova_sgt(struct edgetpu_dev *etdev, tpu_addr_t iova, struct sg_table *sgt,
+			     enum dma_data_direction dir, u32 mmu_flags,
+			     struct edgetpu_iommu_domain *etdomain);
+void edgetpu_mmu_unmap_iova_sgt_attrs(struct edgetpu_dev *etdev, tpu_addr_t iova,
+				      struct sg_table *sgt, enum dma_data_direction dir,
+				      struct edgetpu_iommu_domain *etdomain, unsigned long attrs);
 #define edgetpu_mmu_unmap_iova_sgt(e, i, s, d, c)                              \
 	edgetpu_mmu_unmap_iova_sgt_attrs(e, i, s, d, c, 0)
 
@@ -148,26 +139,22 @@ void edgetpu_mmu_unmap_iova_sgt_attrs(struct edgetpu_dev *etdev,
  * @paddr: Physical/next-stage target address to which iova is to be mapped.
  * @size: size of the mapping in bytes.
  * @prot: IOMMU API protections to use for the mapping.
- * @context_id: generic context ID for the mapping.
+ * @etdomain: the IOMMU domain to add the translation to.
  *
  * Description: Add a mapping from iova -> paddr to the MMU for the chip.
  * paddr can be considered a physical address from the TPU's viewpoint, but
  * may actually be another IOVA for another IOMMU downstream of the chip MMU.
  *
- * For chipsets with IOMMU AUX domain support, @context_id can be used to
- * specify a detached IOMMU domain by value
- * (EDGETPU_CONTEXT_DOMAIN_TOKEN | @token), where @token is the one returned by
- * edgetpu_mmu_alloc_domain(). This description holds for all APIs in this file
- * with @context_id as a parameter.
+ * Note: for chipsets with edgetpu_mmu_alloc() support, @iova passed to this
+ * function must be either allocated from edgetpu_mmu_alloc() or reserved by
+ * edgetpu_mmu_reserve().
  */
-int edgetpu_mmu_add_translation(struct edgetpu_dev *etdev, unsigned long iova,
-				phys_addr_t paddr, size_t size, int prot,
-				enum edgetpu_context_id context_id);
+int edgetpu_mmu_add_translation(struct edgetpu_dev *etdev, unsigned long iova, phys_addr_t paddr,
+				size_t size, int prot, struct edgetpu_iommu_domain *etdomain);
 
 /* Remove a translation added by edgetpu_mmu_add_translation. */
-void edgetpu_mmu_remove_translation(struct edgetpu_dev *etdev,
-				    unsigned long iova, size_t size,
-				    enum edgetpu_context_id context_id);
+void edgetpu_mmu_remove_translation(struct edgetpu_dev *etdev, unsigned long iova, size_t size,
+				    struct edgetpu_iommu_domain *etdomain);
 
 /*
  * Allocates a IOMMU domain.
@@ -204,16 +191,29 @@ void edgetpu_mmu_detach_domain(struct edgetpu_dev *etdev,
 			       struct edgetpu_iommu_domain *etdomain);
 
 /* TODO(b/281459896) Make domain comparisons internal to edgetpu-mmu.h */
+bool edgetpu_mmu_is_domain_default_domain(struct edgetpu_dev *etdev,
+					  struct edgetpu_iommu_domain *etdomain);
+
 /*
- * Returns whether mappings for a given context exist in the default domain.
+ * Returns the domain attached for a given PASID.
  *
- * If a context represented by @ctx_id has been assigned the default IOMMU domain, either uniquely,
- * or because AUX domains are not supported, this function returns true.
+ * If AUX domains are not supported, this function always returns the default domain.
  *
- * This can be used to determine if a buffer which is already mapped for the default domain (such as
- * coherent buffers or dma-bufs) needs to be remapped for specifically for the context.
+ * Returns NULL if @pasid is invalid or AUX domains are supported but @pasid is not attached.
  */
-bool edgetpu_mmu_is_context_using_default_domain(struct edgetpu_dev *etdev,
-						 enum edgetpu_context_id ctx_id);
+struct edgetpu_iommu_domain *edgetpu_mmu_domain_for_pasid(struct edgetpu_dev *etdev, uint pasid);
+
+/*
+ * Returns the default IOMMU domain used for kernel mappings.
+ */
+static inline struct edgetpu_iommu_domain *edgetpu_mmu_default_domain(struct edgetpu_dev *etdev)
+{
+	return edgetpu_mmu_domain_for_pasid(etdev, 0);
+}
+
+static inline bool edgetpu_mmu_domain_detached(const struct edgetpu_iommu_domain *etdomain)
+{
+	return !etdomain || etdomain->pasid == IOMMU_PASID_INVALID;
+}
 
 #endif /* __EDGETPU_MMU_H__ */

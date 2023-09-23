@@ -79,6 +79,40 @@ struct edgetpu_kci_open_device_detail {
 	u32 flags;
 };
 
+/* Argument struct for `GCIP_KCI_CODE_ALLOCATE_VMBOX`. Must match firmware definition. */
+struct edgetpu_kci_allocate_vmbox_detail {
+	/*
+	 * ID encoding security realm, VM ID, and client page-table ID.
+	 * - Security realm is always "non-secure" for kernel-driver (bits TBD)
+	 * - VM ID is always 0 for now (bits TBD)
+	 * - Page-table ID is equal to the domain's PASID obtained from the iommu driver (bits tbd)
+	 */
+	u32 client_id;
+	/* Not used by TPU */
+	u8 reserved_num_cores;
+	/* The VCID assigned to the device group */
+	u8 slice_index;
+	/*
+	 * Specifies if this is the first time we are calling allocate vmbox KCI for this VCID
+	 * after it has been allocated to a device group. This allows firmware to clean up/reset
+	 * the memory allocator for that partition.
+	 */
+	bool first_open;
+	/*
+	 * Specifies whether the client that will use this virtual mailbox is a first-party
+	 * application or not. Firmware's use of this information is transparent to the Kernel.
+	 */
+	bool first_party;
+	u8 reserved[56];
+};
+
+/* Argument struct for `GCIP_KCI_CODE_RELEASE_VMBOX`. Must match firmware definition. */
+struct edgetpu_kci_release_vmbox_detail {
+	/* ID of the VMbox to be released. The same as was passed to allocate_vmbox. */
+	u32 client_id;
+	u8 reserved[60];
+};
+
 /*
  * Initializes a KCI object.
  *
@@ -166,8 +200,7 @@ int edgetpu_kci_get_debug_dump(struct edgetpu_kci *etkci, tpu_addr_t tpu_addr, s
 /*
  * Inform the firmware to prepare to serve VII mailboxes included in @mailbox_map.
  *
- * You usually shouldn't call this directly - consider using
- * edgetpu_mailbox_activate() or edgetpu_mailbox_activate_bulk() instead.
+ * You usually shouldn't call this directly - consider using edgetpu-mailbox.h interfaces instead.
  */
 int edgetpu_kci_open_device(struct edgetpu_kci *etkci, u32 mailbox_map, u32 client_priv, s16 vcid,
 			    bool first_open);
@@ -175,8 +208,7 @@ int edgetpu_kci_open_device(struct edgetpu_kci *etkci, u32 mailbox_map, u32 clie
 /*
  * Inform the firmware that the VII mailboxes included in @mailbox_map are closed.
  *
- * You usually shouldn't call this directly - consider using
- * edgetpu_mailbox_deactivate() or edgetpu_mailbox_deactivate_bulk() instead.
+ * You usually shouldn't call this directly - consider using edgetpu-mailbox.h interfaces instead.
  */
 int edgetpu_kci_close_device(struct edgetpu_kci *etkci, u32 mailbox_map);
 
@@ -197,6 +229,21 @@ int edgetpu_kci_notify_throttling(struct edgetpu_dev *etdev, u32 level);
  * Used to prevent conflicts when sending a thermal policy request
  */
 int edgetpu_kci_block_bus_speed_control(struct edgetpu_dev *etdev, bool block);
+
+/*
+ * Request firmware open a virtual VII mailbox for a client, routed through in-kernel VII
+ *
+ * You usually shouldn't call this directly - consider using edgetpu-mailbox.h interfaces instead.
+ */
+int edgetpu_kci_allocate_vmbox(struct edgetpu_kci *etkci, u32 client_id, u8 slice_index,
+			       bool first_open, bool first_party);
+
+/*
+ * Request firmware close a virtual VII mailbox for a client, routed through in-kernel VII
+ *
+ * You usually shouldn't call this directly - consider using edgetpu-mailbox.h interfaces instead.
+ */
+int edgetpu_kci_release_vmbox(struct edgetpu_kci *etkci, u32 client_id);
 
 /* Set the firmware tracing level. */
 int edgetpu_kci_firmware_tracing_level(void *data, unsigned long level,

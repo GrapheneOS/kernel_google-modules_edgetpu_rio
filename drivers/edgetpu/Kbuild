@@ -25,6 +25,7 @@ edgetpu-objs	:= edgetpu-async.o \
 		   edgetpu-dmabuf.o \
 		   edgetpu-firmware-util.o \
 		   edgetpu-firmware.o \
+		   edgetpu-ikv.o \
 		   edgetpu-iremap-pool.o \
 		   edgetpu-kci.o \
 		   edgetpu-mailbox.o \

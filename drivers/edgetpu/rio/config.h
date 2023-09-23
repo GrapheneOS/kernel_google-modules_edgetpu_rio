@@ -16,8 +16,8 @@
 
 #define EDGETPU_MAX_STREAM_ID 64
 
-/* 1 context per VII/group plus 1 for KCI */
-#define EDGETPU_NCONTEXTS 16
+/* Max number of PASIDs that the IOMMU supports simultaneously */
+#define EDGETPU_NUM_PASIDS 16
 /* Max number of virtual context IDs that can be allocated for one device. */
 #define EDGETPU_NUM_VCIDS 16
 /* Reserved VCID that uses the extra partition. */

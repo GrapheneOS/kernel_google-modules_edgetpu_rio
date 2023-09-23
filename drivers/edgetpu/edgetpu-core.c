@@ -27,6 +27,7 @@
 #include "edgetpu-config.h"
 #include "edgetpu-debug-dump.h"
 #include "edgetpu-device-group.h"
+#include "edgetpu-ikv.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-kci.h"
 #include "edgetpu-mailbox.h"
@@ -382,6 +383,7 @@ static struct edgetpu_mailbox_manager_desc mailbox_manager_desc = {
 	.get_context_csr_base = edgetpu_mailbox_get_context_csr_base,
 	.get_cmd_queue_csr_base = edgetpu_mailbox_get_cmd_queue_csr_base,
 	.get_resp_queue_csr_base = edgetpu_mailbox_get_resp_queue_csr_base,
+	.use_ikv = (EDGETPU_USE_IKV != 0),
 };
 
 int edgetpu_get_state_errno_locked(struct edgetpu_dev *etdev)
@@ -495,6 +497,12 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 		goto remove_usage_stats;
 	}
 
+	etdev->etikv = devm_kzalloc(etdev->dev, sizeof(*etdev->etikv), GFP_KERNEL);
+	if (!etdev->etikv) {
+		ret = -ENOMEM;
+		goto remove_usage_stats;
+	}
+
 	etdev->telemetry =
 		devm_kcalloc(etdev->dev, etdev->num_cores, sizeof(*etdev->telemetry), GFP_KERNEL);
 	if (!etdev->telemetry) {
@@ -505,6 +513,12 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 	ret = edgetpu_kci_init(etdev->mailbox_manager, etdev->etkci);
 	if (ret) {
 		etdev_err(etdev, "edgetpu_kci_init returns %d\n", ret);
+		goto remove_usage_stats;
+	}
+
+	ret = edgetpu_ikv_init(etdev->mailbox_manager, etdev->etikv);
+	if (ret) {
+		etdev_err(etdev, "edgetpu_ikv_init returns %d\n", ret);
 		goto remove_usage_stats;
 	}
 
@@ -669,7 +683,7 @@ void edgetpu_client_remove(struct edgetpu_client *client)
 
 int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size,
 			   struct edgetpu_coherent_mem *mem,
-			   enum edgetpu_context_id context_id)
+			   struct edgetpu_iommu_domain *etdomain)
 {
 	const u32 flags = EDGETPU_MMU_CC_ACCESS | EDGETPU_MMU_HOST | EDGETPU_MMU_COHERENT;
 	int ret;
@@ -681,8 +695,8 @@ int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size,
 
 	edgetpu_x86_coherent_mem_init(mem);
 
-	/* If this context's mappings reside in the default domain, we're done */
-	if (edgetpu_mmu_is_context_using_default_domain(etdev, context_id)) {
+	/* dma_alloc_coherent creates mappings in the default domain */
+	if (edgetpu_mmu_is_domain_default_domain(etdev, etdomain)) {
 		mem->tpu_addr = mem->dma_addr;
 		mem->size = size;
 		return 0;
@@ -706,9 +720,9 @@ int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size,
 	mem->client_sgt->orig_nents = 1;
 	sg_set_page(mem->client_sgt->sgl, virt_to_page(mem->vaddr), PAGE_ALIGN(size), 0);
 
-	ret = edgetpu_mmu_map_sgt(etdev, mem->client_sgt, context_id, DMA_BIDIRECTIONAL, 0, flags);
+	ret = edgetpu_mmu_map_sgt(etdev, mem->client_sgt, etdomain, DMA_BIDIRECTIONAL, 0, flags);
 	if (!ret) {
-		etdev_err(etdev, "Failed to map coherent buffer to context %#X\n", context_id);
+		etdev_err(etdev, "Failed to map coherent buffer to requested domain\n");
 		ret = -EIO;
 		goto err_free_sgl;
 	}
@@ -730,10 +744,10 @@ err_free_coherent:
 
 void edgetpu_free_coherent(struct edgetpu_dev *etdev,
 			   struct edgetpu_coherent_mem *mem,
-			   enum edgetpu_context_id context_id)
+			   struct edgetpu_iommu_domain *etdomain)
 {
-	if (!edgetpu_mmu_is_context_using_default_domain(etdev, context_id)) {
-		edgetpu_mmu_unmap_sgt(etdev, mem->client_sgt, context_id, DMA_BIDIRECTIONAL,
+	if (!edgetpu_mmu_is_domain_default_domain(etdev, etdomain)) {
+		edgetpu_mmu_unmap_sgt(etdev, mem->client_sgt, etdomain, DMA_BIDIRECTIONAL,
 				      /*dma_attrs=*/0, /*mmu_flags=*/0);
 		kfree(mem->client_sgt->sgl);
 		kfree(mem->client_sgt);

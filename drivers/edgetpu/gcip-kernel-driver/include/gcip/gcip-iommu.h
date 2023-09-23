@@ -20,9 +20,11 @@
 #define __GCIP_IOMMU_H__
 
 #include <linux/device.h>
+#include <linux/dma-direction.h>
 #include <linux/iommu.h>
 #include <linux/iova.h>
 #include <linux/scatterlist.h>
+#include <linux/seq_file.h>
 #include <linux/version.h>
 
 #include <gcip/gcip-domain-pool.h>
@@ -72,7 +74,64 @@
 #define GCIP_MAP_FLAGS_RESTRICT_IOVA_TO_FLAGS(restrict)                                            \
 	((u64)(restrict) << GCIP_MAP_FLAGS_RESTRICT_IOVA_OFFSET)
 
+/*
+ * Bitfields of @gcip_map_flags:
+ *   [1:0]   - DMA_DIRECTION:
+ *               00 = DMA_BIDIRECTIONAL (host/device can write buffer)
+ *               01 = DMA_TO_DEVICE     (host can write buffer)
+ *               10 = DMA_FROM_DEVICE   (device can write buffer)
+ *               (See [REDACTED]
+ *   [2:2]   - Coherent Mapping:
+ *               0 = Create non-coherent mappings of the buffer.
+ *               1 = Create coherent mappings of the buffer.
+ *   [12:3]  - DMA_ATTR:
+ *               (See [REDACTED]
+ *   [13:13] - RESTRICT_IOVA:
+ *               Restrict the IOVA assignment to 32 bit address window.
+ *   [63:14] - RESERVED
+ *               Set RESERVED bits to 0 to ensure backwards compatibility.
+ *
+ * One can use gcip_iommu_encode_gcip_map_flags or `GCIP_MAP_FLAGS_DMA_*_TO_FLAGS` macros to
+ * generate a flag.
+ */
+
 struct gcip_iommu_domain_ops;
+
+/**
+ * enum gcip_iommu_mapping_type - Indicates the type of the gcip_iommu_mapping.
+ * GCIP_IOMMU_MAPPING_BUFFER: The mapping of a normal buffer that mapped to the domain directly.
+ * GCIP_IOMMU_MAPPING_DMA_BUF: The mapping of a DMA buffer that mapped to domain with 2 steps.
+ */
+enum gcip_iommu_mapping_type {
+	GCIP_IOMMU_MAPPING_BUFFER,
+	GCIP_IOMMU_MAPPING_DMA_BUF,
+};
+
+/**
+ * struct gcip_iommu_mapping - Contains the information of sgt mapping to the domain.
+ * @type: Type of the mapping.
+ * @domain: IOMMU domain where the @sgt is mapped.
+ * @device_address: Assigned device address.
+ * @size: Size of mapped buffer.
+ * @sgt: This pointer will be set to a new allocated Scatter-gather table which contains the mapping
+ *       information to the given domain received from the custom IOVA allocator.
+ *       If the given domain is the default domain, the pointer will be set to the sgt received from
+ *       default allocator.
+ * @dir: The data direction that user tried to map.
+ *       This value may be different from the one encoded in gcip_map_flags.
+ * @gcip_map_flags: The flags used to create the mapping, which can be encoded with
+ *                  gcip_iommu_encode_gcip_map_flags() or `GCIP_MAP_FLAGS_DMA_*_TO_FLAGS` macros.
+ */
+struct gcip_iommu_mapping {
+	enum gcip_iommu_mapping_type type;
+	struct gcip_iommu_domain *domain;
+	dma_addr_t device_address;
+	size_t size;
+	uint num_pages;
+	struct sg_table *sgt;
+	enum dma_data_direction dir;
+	u64 gcip_map_flags;
+};
 
 /*
  * Type of IOVA space pool that IOMMU domain will utilize.
@@ -80,8 +139,6 @@ struct gcip_iommu_domain_ops;
  * different. For example, iova_domain uses red-black tree for the memory management, but gen_pool
  * uses bitmap. Therefore, their performance might be different and the kernel drivers can choose
  * which one to use according to its real use cases and the performance.
- *
- * Note: in legacy mode, only iova_domain is available as the Linux implementation utilizes that.
  */
 enum gcip_iommu_domain_type {
 	/* Uses iova_domain. */
@@ -103,6 +160,8 @@ struct gcip_iommu_domain_pool {
 	/* Will hold (base_daddr + size - 1) to prevent calculating it every IOVAD mappings. */
 	dma_addr_t last_daddr;
 	size_t size;
+	dma_addr_t reserved_base_daddr;
+	size_t reserved_size;
 	size_t granule;
 	bool best_fit;
 	enum gcip_iommu_domain_type domain_type;
@@ -125,7 +184,6 @@ struct gcip_iommu_domain {
 	struct device *dev;
 	struct gcip_iommu_domain_pool *domain_pool;
 	struct iommu_domain *domain;
-	bool legacy_mode;
 	bool default_domain;
 	union {
 		struct iova_domain iovad;
@@ -166,10 +224,7 @@ struct gcip_iommu_domain_ops {
  * If the base DMA address and IOVA space size are set successfully (i.e., larger than 0), IOMMU
  * domains allocated by this domain pool will have their own IOVA space pool and will map buffers
  * to their own IOMMU domain directly.
- *
- * Otherwise, it will fall into the legacy mode which will utilize the native DMA-IOMMU APIs.
- * In this mode, it will map the buffer to the default IOMMU domain first and then remap it to the
- * target domain.
+ * If either DMA address or IOVA space size are not set correctly, returns -EINVAL.
  *
  * @pool: IOMMU domain pool to be initialized.
  * @dev: Device where to parse "gcip-dma-window" property.
@@ -199,25 +254,6 @@ void gcip_iommu_domain_pool_destroy(struct gcip_iommu_domain_pool *pool);
  * @pool: IOMMU domain pool to be enabled.
  */
 void gcip_iommu_domain_pool_enable_best_fit_algo(struct gcip_iommu_domain_pool *pool);
-
-/*
- * Enables the legacy mode of allocating and mapping IOVA logic which utilizes native DMA-IOMMU
- * APIs of the Linux kernel.
- * It affects domains which are allocated after calling this function only.
- *
- * @pool: IOMMU domain pool to be enabled.
- */
-void gcip_iommu_domain_pool_enable_legacy_mode(struct gcip_iommu_domain_pool *pool);
-
-/*
- * Returns whether @pool is using legacy mode or not.
- *
- * @pool: IOMMU domain pool to be checked.
- */
-static inline bool gcip_iommu_domain_pool_is_legacy_mode(struct gcip_iommu_domain_pool *pool)
-{
-	return !(pool && pool->size);
-}
 
 /*
  * Allocates a GCIP IOMMU domain.
@@ -277,41 +313,13 @@ void gcip_iommu_domain_pool_detach_domain(struct gcip_iommu_domain_pool *pool,
 					  struct gcip_iommu_domain *domain);
 
 /*
- * Returns whether @domain is using legacy mode or not.
- *
- * @domain: GCIP IOMMU domain to be checked.
- */
-static inline bool gcip_iommu_domain_is_legacy_mode(struct gcip_iommu_domain *domain)
-{
-	return domain->legacy_mode;
-}
-
-/*
  * Allocates an IOVA for the scatterlist and maps it to @domain.
  *
  * @domain: GCIP IOMMU domain which manages IOVA addresses.
  * @sgl: Scatterlist to be mapped.
  * @nents: The number of entries in @sgl.
- * @gcip_map_flags: Flags indicating mapping attributes.
- *
- * Bitfields:
- *   [1:0]   - DMA_DIRECTION:
- *               00 = DMA_BIDIRECTIONAL (host/device can write buffer)
- *               01 = DMA_TO_DEVICE     (host can write buffer)
- *               10 = DMA_FROM_DEVICE   (device can write buffer)
- *               (See [REDACTED]
- *   [2:2]   - Coherent Mapping:
- *               0 = Create non-coherent mappings of the buffer.
- *               1 = Create coherent mappings of the buffer.
- *   [12:3]  - DMA_ATTR:
- *               Not used in the non-legacy mode.
- *               (See [REDACTED]
- *   [13:13] - RESTRICT_IOVA:
- *               Restrict the IOVA assignment to 32 bit address window.
- *   [63:14] - RESERVED
- *               Set RESERVED bits to 0 to ensure backwards compatibility.
- *
- * One can use `GCIP_MAP_FLAGS_DMA_*_TO_FLAGS` macros to generate a flag.
+ * @gcip_map_flags: Flags indicating mapping attributes, which can be encoded with
+ *                  gcip_iommu_encode_gcip_map_flags() or `GCIP_MAP_FLAGS_DMA_*_TO_FLAGS` macros.
  *
  * Returns the number of entries which are mapped to @domain. Returns 0 if it fails.
  */
@@ -323,18 +331,126 @@ unsigned int gcip_iommu_domain_map_sg(struct gcip_iommu_domain *domain, struct s
  *
  * @domain: GCIP IOMMU domain which manages IOVA addresses.
  * @sgl: Scatterlist to be unmapped.
- * @gcip_map_flags: The same as the `gcip_iommu_domain_map_sg` function.
- *                  It will be ignored in the non-legacy mode.
  */
 void gcip_iommu_domain_unmap_sg(struct gcip_iommu_domain *domain, struct scatterlist *sgl,
-				int nents, u64 gcip_map_flags);
+				int nents);
 
 /*
  * Returns a default GCIP IOMMU domain.
- * This domain works with the legacy mode only.
  *
  * @dev: Device where to fetch the default IOMMU domain.
  */
 struct gcip_iommu_domain *gcip_iommu_get_domain_for_dev(struct device *dev);
+
+/*  Encodes the gcip_map_flags from dma_data_direct, coherent, dma_attrs, and restrict_iova info. */
+u64 gcip_iommu_encode_gcip_map_flags(enum dma_data_direction dir, bool coherent,
+				     unsigned long dma_attrs, bool restrict_iova);
+
+/**
+ * gcip_iommu_dmabuf_map_show() - Write the dma-buf mapping information to the seq_file.
+ * @mapping: The container of the mapping info.
+ * @s: The seq_file that the mapping info should be written to.
+ *
+ * Following information will be written to the seq_file:
+ * 1. Device addresses of the related domains.
+ * 2. Number of pages.
+ * 3. DMA data direction.
+ * 4. The name of the dmabuf.
+ */
+void gcip_iommu_dmabuf_map_show(struct gcip_iommu_mapping *mapping, struct seq_file *s);
+
+/**
+ * gcip_iommu_get_offset_npages() - Calculates the offset and the number of pages from given
+ *                                  host_addr and size.
+ * @dev: The device pointer for printing debug message.
+ * @host_address: The host address passed by user.
+ * @size: The size passed by user.
+ * @off_ptr: The pointer used to output the offset of the first page that the buffer starts at.
+ * @n_pg_ptr: The pointer used to output the number of pages.
+ *
+ * Return: Error code or 0 on success.
+ */
+int gcip_iommu_get_offset_npages(struct device *dev, u64 host_address, size_t size, ulong *off_ptr,
+				 uint *n_pg_ptr);
+
+/**
+ * gcip_iommu_get_gup_flags() - Checks the access mode of the given address with VMA.
+ * @host_addr: The target host_addr for checking the access.
+ * @dev: The device struct used to print messages.
+ *
+ * Checks and returns the read/write permission of address @host_addr.
+ * If the target address can not be found in current->mm, assuming it is RW.
+ *
+ * Return: The encoded gup_flags of target host_addr.
+ */
+unsigned int gcip_iommu_get_gup_flags(u64 host_addr, struct device *dev);
+
+/**
+ * gcip_iommu_alloc_and_pin_user_pages() - Pins the user pages and returns an array of struct page
+ *                                         pointers for the pinned pages.
+ * @dev: The device pointer used to print messages.
+ * @host_address: The requested host address.
+ * @num_pages: The requested number of pages.
+ * @gup_flags: The pointer gup_flags for pinning user pages.
+ *             The flag FOLL_WRITE in gup_flags may be reomved if the user pages cannot be pinned
+ *             with write access.
+ * @pin_user_pages_lock: The lock to protect pin_user_page
+ *
+ * This function tries to pin the user pages with `pin_user_page_fast` first and will try
+ * `pin_user_page` on failure.
+ * If both of above functions failed, it will retry with read-only mode.
+ *
+ * Return: Pinned user pages or error pointer on failure.
+ */
+struct page **gcip_iommu_alloc_and_pin_user_pages(struct device *dev, u64 host_address,
+						  uint num_pages, unsigned int *gup_flags,
+						  struct mutex *pin_user_pages_lock);
+
+/**
+ * gcip_iommu_domain_map_dma_buf() - Maps the DMA buffer to the target IOMMU domain.
+ * @domain: The desired IOMMU domain where the DMA buffer should be mapped.
+ * @fd: The file descripter which will be used to retrieved dma_buf.
+ * @gcip_map_flags: The flags used to create the mapping, which can be encoded with
+ *                  gcip_iommu_encode_gcip_map_flags() or `GCIP_MAP_FLAGS_DMA_*_TO_FLAGS` macros.
+ *
+ * The DMA buffer will be mapped to the default domain first to get a scatter-gather table.
+ * The received sgt will be copied to a new sgt and the new one will be mapped to the target domain.
+ * The IOVAs of those domains may be different and the mappings will be released at once by calling
+ * `gcip_iommu_mapping_unmap`.
+ *
+ * Return: The mapping of the desired DMA buffer with type GCIP_IOMMU_MAPPING_DMA_BUF
+ *         or an error pointer on failure.
+ */
+struct gcip_iommu_mapping *gcip_iommu_domain_map_dma_buf(struct gcip_iommu_domain *domain, int fd,
+							 u64 gcip_map_flags);
+/**
+ * gcip_iommu_domain_map_sgt() - Maps the scatter-gather table to the target IOMMU domain
+ * @domain: The desired IOMMU domain where the sgt should be mapped.
+ * @sgt: The sg_table to mapped to the target IOMMU domain.
+ * @gcip_map_flags: The flags used to create the mapping, which can be encoded with
+ *                  gcip_iommu_encode_gcip_map_flags() or `GCIP_MAP_FLAGS_DMA_*_TO_FLAGS` macros.
+ *
+ * This function will map the scatter-gather table to the target IOMMU domain.
+ * sgt->nents will be updated to the number of mapped chunks.
+ * The caller must not release sgt until gcip_iommu_mapping_unmap is called.
+ *
+ * Return: The mapping of the desired DMA buffer with type GCIP_IOMMU_MAPPING_BUFFER
+ *         or an error pointer on failure.
+ */
+struct gcip_iommu_mapping *gcip_iommu_domain_map_sgt(struct gcip_iommu_domain *domain,
+						     struct sg_table *sgt, u64 gcip_map_flags);
+
+/**
+ * gcip_iommu_mapping_unmap() - Unmaps the mapping depends on its type.
+ * @mapping: The pointer of the mapping instance to be unmapped.
+ *
+ * Reverting either gcip_iommu_domain_map_dma_buf() or gcip_iommu_domain_map_sgt().
+ *
+ * The @mapping->gcip_map_flags will be used for unmapping the buffer, it can be modified if
+ * necessary such as adding DMA_ATTR_SKIP_CPU_SYNC flag.
+ * In most scenarios the we should use the same flag which we used while mapping especially for
+ * direction, coherent, and iova_restrict.
+ */
+void gcip_iommu_mapping_unmap(struct gcip_iommu_mapping *mapping);
 
 #endif /* __GCIP_IOMMU_H__ */

@@ -66,14 +66,14 @@ static int edgetpu_kci_alloc_queue(struct edgetpu_dev *etdev, struct edgetpu_mai
 	u32 size = queue_size * gcip_kci_queue_element_size(type);
 	int ret;
 
-	ret = edgetpu_iremap_alloc(etdev, size, mem, EDGETPU_CONTEXT_KCI);
+	ret = edgetpu_iremap_alloc(etdev, size, mem, edgetpu_mmu_default_domain(etdev));
 	if (ret)
 		return ret;
 
 	ret = edgetpu_mailbox_set_queue(mailbox, type, mem->tpu_addr, queue_size);
 	if (ret) {
 		etdev_err(etdev, "failed to set mailbox queue: %d", ret);
-		edgetpu_iremap_free(etdev, mem, EDGETPU_CONTEXT_KCI);
+		edgetpu_iremap_free(etdev, mem, edgetpu_mmu_default_domain(etdev));
 		return ret;
 	}
 
@@ -82,7 +82,7 @@ static int edgetpu_kci_alloc_queue(struct edgetpu_dev *etdev, struct edgetpu_mai
 
 static void edgetpu_kci_free_queue(struct edgetpu_dev *etdev, struct edgetpu_coherent_mem *mem)
 {
-	edgetpu_iremap_free(etdev, mem, EDGETPU_CONTEXT_KCI);
+	edgetpu_iremap_free(etdev, mem, edgetpu_mmu_default_domain(etdev));
 }
 
 /* IRQ handler of KCI mailbox. */
@@ -345,7 +345,7 @@ static int edgetpu_kci_send_cmd_with_data(struct edgetpu_kci *etkci,
 	struct edgetpu_coherent_mem mem;
 	int ret;
 
-	ret = edgetpu_iremap_alloc(etdev, size, &mem, EDGETPU_CONTEXT_KCI);
+	ret = edgetpu_iremap_alloc(etdev, size, &mem, edgetpu_mmu_default_domain(etdev));
 	if (ret)
 		return ret;
 	memcpy(mem.vaddr, data, size);
@@ -356,7 +356,7 @@ static int edgetpu_kci_send_cmd_with_data(struct edgetpu_kci *etkci,
 	cmd->dma.address = mem.tpu_addr;
 	cmd->dma.size = size;
 	ret = gcip_kci_send_cmd(etkci->kci, cmd);
-	edgetpu_iremap_free(etdev, &mem, EDGETPU_CONTEXT_KCI);
+	edgetpu_iremap_free(etdev, &mem, edgetpu_mmu_default_domain(etdev));
 	etdev_dbg(etdev, "%s: unmap kva=%pK iova=%pad dma=%pad", __func__, mem.vaddr, &mem.tpu_addr,
 		  &mem.dma_addr);
 
@@ -406,7 +406,7 @@ enum gcip_fw_flavor edgetpu_kci_fw_info(struct edgetpu_kci *etkci, struct gcip_f
 	int ret;
 
 	ret = edgetpu_iremap_alloc(etdev, sizeof(*fw_info), &mem,
-				   EDGETPU_CONTEXT_KCI);
+				   edgetpu_mmu_default_domain(etdev));
 
 	/* If allocation failed still try handshake without full fw_info */
 	if (ret) {
@@ -421,7 +421,7 @@ enum gcip_fw_flavor edgetpu_kci_fw_info(struct edgetpu_kci *etkci, struct gcip_f
 	ret = gcip_kci_send_cmd_return_resp(etkci->kci, &cmd, &resp);
 	if (cmd.dma.address) {
 		memcpy(fw_info, mem.vaddr, sizeof(*fw_info));
-		edgetpu_iremap_free(etdev, &mem, EDGETPU_CONTEXT_KCI);
+		edgetpu_iremap_free(etdev, &mem, edgetpu_mmu_default_domain(etdev));
 	}
 
 	if (ret == GCIP_KCI_ERROR_OK) {
@@ -509,7 +509,7 @@ int edgetpu_kci_update_usage_locked(struct edgetpu_dev *etdev)
 	int ret;
 
 	ret = edgetpu_iremap_alloc(etdev, EDGETPU_USAGE_BUFFER_SIZE, &mem,
-				   EDGETPU_CONTEXT_KCI);
+				   edgetpu_mmu_default_domain(etdev));
 
 	if (ret) {
 		etdev_warn_once(etdev, "failed to allocate usage buffer");
@@ -538,7 +538,7 @@ retry_v1:
 		etdev_warn_once(etdev, "error %d", ret);
 	}
 
-	edgetpu_iremap_free(etdev, &mem, EDGETPU_CONTEXT_KCI);
+	edgetpu_iremap_free(etdev, &mem, edgetpu_mmu_default_domain(etdev));
 
 	return ret;
 }
@@ -549,8 +549,9 @@ void edgetpu_kci_mappings_show(struct edgetpu_dev *etdev, struct seq_file *s)
 	struct edgetpu_kci *etkci = etdev->etkci;
 	struct edgetpu_coherent_mem *cmd_queue_mem = &etkci->cmd_queue_mem;
 	struct edgetpu_coherent_mem *resp_queue_mem = &etkci->resp_queue_mem;
+	struct edgetpu_iommu_domain *default_etdomain = edgetpu_mmu_default_domain(etdev);
 
-	seq_printf(s, "kci context mbox %u:\n", EDGETPU_CONTEXT_KCI);
+	seq_printf(s, "kci pasid %u:\n", default_etdomain->pasid);
 	seq_printf(s, "  %pad %lu cmdq\n", &cmd_queue_mem->tpu_addr,
 		   DIV_ROUND_UP(QUEUE_SIZE * gcip_kci_queue_element_size(GCIP_MAILBOX_CMD_QUEUE),
 				PAGE_SIZE));
@@ -648,6 +649,44 @@ int edgetpu_kci_block_bus_speed_control(struct edgetpu_dev *etdev, bool block)
 	};
 
 	return gcip_kci_send_cmd(etdev->etkci->kci, &cmd);
+}
+
+int edgetpu_kci_allocate_vmbox(struct edgetpu_kci *etkci, u32 client_id, u8 slice_index,
+			       bool first_open, bool first_party)
+{
+	struct edgetpu_kci_allocate_vmbox_detail detail = {
+		.client_id = client_id,
+		.slice_index = slice_index,
+		.first_open = first_open,
+		.first_party = first_party,
+	};
+	struct gcip_kci_command_element cmd = {
+		.code = GCIP_KCI_CODE_ALLOCATE_VMBOX,
+	};
+	int ret;
+
+	ret = check_etdev_state(etkci, "allocate vmbox");
+	if (ret)
+		return ret;
+
+	return edgetpu_kci_send_cmd_with_data(etkci, &cmd, &detail, sizeof(detail));
+}
+
+int edgetpu_kci_release_vmbox(struct edgetpu_kci *etkci, u32 client_id)
+{
+	struct edgetpu_kci_release_vmbox_detail detail = {
+		.client_id = client_id,
+	};
+	struct gcip_kci_command_element cmd = {
+		.code = GCIP_KCI_CODE_RELEASE_VMBOX,
+	};
+	int ret;
+
+	ret = check_etdev_state(etkci, "release vmbox");
+	if (ret)
+		return ret;
+
+	return edgetpu_kci_send_cmd_with_data(etkci, &cmd, &detail, sizeof(detail));
 }
 
 int edgetpu_kci_firmware_tracing_level(void *data, unsigned long level, unsigned long *active_level)

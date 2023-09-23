@@ -61,7 +61,7 @@ struct edgetpu_group_info {
 	uint16_t vcid;
 	uint8_t status;
 	uint8_t queues_attached; /* whether has VII queues attached */
-	uint32_t context_id;
+	uint32_t pasid;
 	uint64_t size_host_mappings; /* total size of host mappings, in bytes */
 	uint64_t size_dmabuf_mappings; /* total size of dmabuf mappings, in bytes */
 	uint32_t reserved[9];

@@ -327,7 +327,7 @@ static int mobile_sscd_collect_groups_info(struct edgetpu_device_group **groups,
 		SET_FIELD(info, group, workload_id);
 		SET_FIELD(info, group, vcid);
 		SET_FIELD(info, group, status);
-		SET_FIELD(info, group, context_id);
+		SET_FIELD(info, group->etdomain, pasid);
 		info->size_host_mappings = edgetpu_mappings_total_size(&group->host_mappings);
 		info->size_dmabuf_mappings = edgetpu_mappings_total_size(&group->dmabuf_mappings);
 		mutex_lock(&group->lock);
@@ -567,7 +567,8 @@ int edgetpu_debug_dump_init(struct edgetpu_dev *etdev)
 	/*
 	 * Allocate a buffer for various dump segments
 	 */
-	ret = edgetpu_alloc_coherent(etdev, size, &etdev->debug_dump_mem, EDGETPU_CONTEXT_KCI);
+	ret = edgetpu_alloc_coherent(etdev, size, &etdev->debug_dump_mem,
+				     edgetpu_mmu_default_domain(etdev));
 	if (ret) {
 		etdev_err(etdev, "Debug dump seg alloc failed");
 		etdev->debug_dump_mem.vaddr = NULL;
@@ -609,7 +610,7 @@ void edgetpu_debug_dump_exit(struct edgetpu_dev *etdev)
 	/*
 	 * Free the memory assigned for debug dump
 	 */
-	edgetpu_free_coherent(etdev, &etdev->debug_dump_mem, EDGETPU_CONTEXT_KCI);
+	edgetpu_free_coherent(etdev, &etdev->debug_dump_mem, edgetpu_mmu_default_domain(etdev));
 	kfree(etdev->debug_dump_handlers);
 	platform_device_unregister(&sscd_dev);
 }

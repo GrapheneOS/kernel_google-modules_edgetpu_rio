@@ -56,18 +56,6 @@
 #define etdev_warn_once(etdev, fmt, ...)                                       \
 	dev_warn_once(get_dev_for_logging(etdev), fmt, ##__VA_ARGS__)
 
-/*
- * Common-layer context IDs for non-secure TPU access, translated to chip-
- * specific values in the mmu driver.
- */
-enum edgetpu_context_id {
-	EDGETPU_CONTEXT_INVALID = -1,
-	EDGETPU_CONTEXT_KCI = 0,	/* TPU firmware/kernel ID 0 */
-	EDGETPU_CONTEXT_VII_BASE = 1,	/* groups IDs starts from 1 to (EDGETPU_CONTEXTS - 1) */
-	/* A bit mask to mark the context is an IOMMU domain token */
-	EDGETPU_CONTEXT_DOMAIN_TOKEN = 1 << 30,
-};
-
 typedef u64 tpu_addr_t;
 
 struct edgetpu_coherent_mem {
@@ -142,9 +130,11 @@ struct edgetpu_list_device_client {
 #define for_each_list_device_client(etdev, c)                                  \
 	list_for_each_entry(c, &etdev->clients, list)
 
+struct edgetpu_iommu_domain;
 struct edgetpu_mapping;
 struct edgetpu_mailbox_manager;
 struct edgetpu_kci;
+struct edgetpu_ikv;
 struct edgetpu_telemetry_ctx;
 struct edgetpu_mempool;
 struct gcip_kci_response_element;
@@ -213,6 +203,7 @@ struct edgetpu_dev {
 	void *mmu_cookie;	   /* mmu driver private data */
 	struct edgetpu_mailbox_manager *mailbox_manager;
 	struct edgetpu_kci *etkci;
+	struct edgetpu_ikv *etikv;
 	struct edgetpu_firmware *firmware; /* firmware management */
 	struct gcip_fw_tracing *fw_tracing; /* firmware tracing */
 	struct edgetpu_telemetry_ctx *telemetry;
@@ -340,15 +331,13 @@ edgetpu_x86_coherent_mem_set_wb(struct edgetpu_coherent_mem *mem)
  * Attempt to allocate memory from the dma coherent memory using dma_alloc.
  * Use this to allocate memory outside the instruction remap pool.
  */
-int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size,
-			   struct edgetpu_coherent_mem *mem,
-			   enum edgetpu_context_id context_id);
+int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size, struct edgetpu_coherent_mem *mem,
+			   struct edgetpu_iommu_domain *etdomain);
 /*
  * Free memory allocated by the function above from the dma coherent memory.
  */
-void edgetpu_free_coherent(struct edgetpu_dev *etdev,
-			   struct edgetpu_coherent_mem *mem,
-			   enum edgetpu_context_id context_id);
+void edgetpu_free_coherent(struct edgetpu_dev *etdev, struct edgetpu_coherent_mem *mem,
+			   struct edgetpu_iommu_domain *etdomain);
 
 /* Checks if @file belongs to edgetpu driver */
 bool is_edgetpu_file(struct file *file);

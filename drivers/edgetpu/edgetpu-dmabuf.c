@@ -69,10 +69,9 @@ static const struct dma_fence_ops edgetpu_dma_fence_ops;
 static int etdev_map_dmabuf(struct edgetpu_dev *etdev, struct edgetpu_dmabuf_map *dmap)
 {
 	struct edgetpu_device_group *group = dmap->map.priv;
-	const enum edgetpu_context_id ctx_id =
-		edgetpu_group_context_id_locked(group);
+	struct edgetpu_iommu_domain *etdomain = edgetpu_group_domain_locked(group);
 
-	return edgetpu_mmu_map(etdev, &dmap->map, ctx_id, dmap->mmu_flags);
+	return edgetpu_mmu_map(etdev, &dmap->map, etdomain, dmap->mmu_flags);
 }
 
 /*
@@ -83,10 +82,9 @@ static int etdev_map_dmabuf(struct edgetpu_dev *etdev, struct edgetpu_dmabuf_map
 static void etdev_unmap_dmabuf(struct edgetpu_dev *etdev, struct edgetpu_dmabuf_map *dmap)
 {
 	struct edgetpu_device_group *group = dmap->map.priv;
-	const enum edgetpu_context_id ctx_id =
-		edgetpu_group_context_id_locked(group);
+	struct edgetpu_iommu_domain *etdomain = edgetpu_group_domain_locked(group);
 
-	edgetpu_mmu_unmap(etdev, &dmap->map, ctx_id);
+	edgetpu_mmu_unmap(etdev, &dmap->map, etdomain);
 }
 
 /*

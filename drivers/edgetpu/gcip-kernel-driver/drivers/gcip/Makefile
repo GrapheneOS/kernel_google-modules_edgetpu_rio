@@ -17,6 +17,7 @@ gcip-objs		:= gcip-alloc-helper.o \
 			   gcip-mailbox.o \
 			   gcip-mem-pool.o \
 			   gcip-pm.o \
+			   gcip-slc.o \
 			   gcip-telemetry.o \
 			   gcip-thermal.o \
 			   gcip-usage-stats.o

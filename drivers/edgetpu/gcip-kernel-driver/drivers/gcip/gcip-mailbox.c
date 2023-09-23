@@ -646,10 +646,14 @@ struct gcip_mailbox_resp_awaiter *gcip_mailbox_put_cmd(struct gcip_mailbox *mail
 {
 	struct gcip_mailbox_resp_awaiter *awaiter;
 	int ret;
+	u32 timeout = mailbox->timeout;
 
 	awaiter = kzalloc(sizeof(*awaiter), GFP_KERNEL);
 	if (!awaiter)
 		return ERR_PTR(-ENOMEM);
+
+	if (mailbox->ops->get_cmd_timeout)
+		timeout = mailbox->ops->get_cmd_timeout(mailbox, cmd, resp, data);
 
 	awaiter->async_resp.resp = resp;
 	awaiter->mailbox = mailbox;
@@ -659,7 +663,7 @@ struct gcip_mailbox_resp_awaiter *gcip_mailbox_put_cmd(struct gcip_mailbox *mail
 	refcount_set(&awaiter->refs, 2);
 
 	INIT_DELAYED_WORK(&awaiter->timeout_work, gcip_mailbox_async_cmd_timeout_work);
-	schedule_delayed_work(&awaiter->timeout_work, msecs_to_jiffies(mailbox->timeout));
+	schedule_delayed_work(&awaiter->timeout_work, msecs_to_jiffies(timeout));
 
 	ret = gcip_mailbox_enqueue_cmd(mailbox, cmd, &awaiter->async_resp, awaiter);
 	if (ret)

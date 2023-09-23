@@ -174,12 +174,13 @@ struct edgetpu_mailbox_attr {
 	 * EDGETPU_CREATE_GROUP.
 	 */
 
-	__u32 cmd_queue_size; /* size of command queue in KB */
-	__u32 resp_queue_size; /* size of response queue in KB */
-	__u32 sizeof_cmd; /* size of command element in bytes */
-	__u32 sizeof_resp; /* size of response element in bytes */
+	__u32 cmd_queue_size; /* size of command queue in KB, ignored with in-kernel VII */
+	__u32 resp_queue_size; /* size of response queue in KB, ignored with in-kernel VII */
+	__u32 sizeof_cmd; /* size of command element in bytes, ignored with in-kernel VII */
+	__u32 sizeof_resp; /* size of response element in bytes, ignored with in-kernel VII */
 	__u32 priority          : 4; /* mailbox service priority */
-	__u32 cmdq_tail_doorbell: 1; /* auto doorbell on cmd queue tail move */
+	/* Whether to auto-ring doorbell on cmd queue tail move, ignored with in-kernel VII */
+	__u32 cmdq_tail_doorbell : 1;
 	/* Type of memory partitions to be used for this group, exact meaning is chip-dependent. */
 	__u32 partition_type    : 1;
 	__u32 client_priv : 1; /* client privilege level */
@@ -597,5 +598,97 @@ struct edgetpu_set_device_properties_ioctl {
 /* Registers device properties which will be passed down to firmware on boot. */
 #define EDGETPU_SET_DEVICE_PROPERTIES                                                              \
 	_IOW(EDGETPU_IOCTL_BASE, 34, struct edgetpu_set_device_properties_ioctl)
+
+/*
+ * The max number of outstanding VII commands a client is allowed to have.
+ *
+ * Credits are consumed when a command is enqueued and refunded when the response arrives at the
+ * Kernel level or times out. If a client attempts to send a command when out of credits,
+ * EDGETPU_VII_COMMAND will fail.
+ */
+#define EDGETPU_NUM_VII_CREDITS 8
+
+/* Structure describing buffer for use by a VII command. */
+struct edgetpu_vii_dma_descriptor {
+	/* TPU virtual address, as returned by EDGETPU_MAP_BUFFER or EDGETPU_MAP_DMABUF */
+	__u64 address;
+	/* Size in bytes. */
+	__u32 size;
+	/*
+	 * Flags can be used to indicate message type, etc.
+	 * Usage and values agreed upon by firmware/runtime and are opaque to the Kernel driver.
+	 */
+	__u32 flags;
+};
+
+/* VII command structure to be enqueued in the mailbox command queue and consumed by firmware. */
+struct edgetpu_vii_command {
+	/*
+	 * Sequence number.
+	 * When this command's response is returned by EDGETPU_VII_RESPONSE, the response's `seq`
+	 * field will match whatever value is passed here.
+	 */
+	__u64 seq;
+	/*
+	 * The type of command.
+	 * Usage and values agreed upon by firmware/runtime and are opaque to the Kernel driver.
+	 */
+	__u16 code;
+	/*
+	 * Priority level from 0 to 99, with 0 being the highest.
+	 * Pending commands with higher priorities will be executed before lower priority ones.
+	 */
+	__u8 priority;
+	__u8 reserved_0[5];
+	/* See struct definition above. */
+	struct edgetpu_vii_dma_descriptor dma_descriptor;
+	__u8 reserved_1[8];
+	/*
+	 * Identifies the client sending the command to firmware.
+	 * Any value here will be overridden by the Kernel driver.
+	 */
+	__u32 client_id;
+	/*
+	 * The QoS class of the request.
+	 * Usage and values agreed upon by firmware/runtime and are opaque to the Kernel driver.
+	 */
+	__u8 qos_class;
+	/*
+	 * A bitset indicating which cluster id(s) the command can be handled on.
+	 * Usage and values agreed upon by firmware/runtime and are opaque to the Kernel driver.
+	 */
+	__u8 cluster_ids_bitset;
+	__u8 reserved_2[2];
+} __attribute__((packed));
+
+struct edgetpu_vii_command_ioctl {
+	struct edgetpu_vii_command command;
+	/* TODO(b/274528886): Fences not yet supported. */
+	__u64 in_fence_array;
+	__u32 in_fence_count;
+	__u64 out_fence_array;
+	__u32 out_fence_count;
+};
+#define EDGETPU_VII_COMMAND \
+	_IOWR(EDGETPU_IOCTL_BASE, 35, struct edgetpu_vii_command_ioctl)
+
+/* VII response structure as sent by firmware and consumed from the mailbox response queue. */
+struct edgetpu_vii_response {
+	/* Sequence number. Should match the corresponding command. */
+	__u64 seq;
+	/* The error code of the response, if any. */
+	__u16 code;
+	/* The cluster index which handled the command. -1 if the command was not handled. */
+	__s8 cluster_index;
+	__u8 reserved[5];
+	/* Command code dependent return value. */
+	__u64 retval;
+} __attribute__((packed));
+
+struct edgetpu_vii_response_ioctl {
+	struct edgetpu_vii_response response;
+};
+#define EDGETPU_VII_RESPONSE \
+	_IOWR(EDGETPU_IOCTL_BASE, 36, struct edgetpu_vii_response_ioctl)
 
 #endif /* __EDGETPU_H__ */

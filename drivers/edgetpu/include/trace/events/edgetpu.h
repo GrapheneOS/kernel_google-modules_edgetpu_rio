@@ -19,6 +19,7 @@
 #include <linux/tracepoint.h>
 
 #include "../../../edgetpu.h"
+#include "../../../edgetpu-internal.h"
 
 #define EDGETPU_TRACE_SYSTEM __stringify(TRACE_SYSTEM)
 
@@ -202,6 +203,95 @@ TRACE_EVENT(edgetpu_release_wakelock_end,
 	),
 
 	TP_printk("pid = %d, req_count = %d", __entry->pid, __entry->count)
+);
+
+TRACE_EVENT(edgetpu_vii_command_start,
+
+	TP_PROTO(struct edgetpu_client *client),
+
+	TP_ARGS(client),
+
+	TP_STRUCT__entry(
+		__field(pid_t, pid)
+		__field(pid_t, tgid)
+	),
+
+	TP_fast_assign(
+		__entry->pid = client->pid;
+		__entry->tgid = client->tgid;
+	),
+
+	TP_printk("client pid = %u, tgid = %u", __entry->pid, __entry->tgid)
+);
+
+TRACE_EVENT(edgetpu_vii_command_end,
+
+	TP_PROTO(struct edgetpu_client *client, struct edgetpu_vii_command_ioctl *ibuf, int ret),
+
+	TP_ARGS(client, ibuf, ret),
+
+	TP_STRUCT__entry(
+		__field(pid_t, pid)
+		__field(pid_t, tgid)
+		__field(__u64, seq)
+		__field(int, ret)
+	),
+
+	TP_fast_assign(
+		__entry->pid = client->pid;
+		__entry->tgid = client->tgid;
+		__entry->seq = ibuf->command.seq;
+		__entry->ret = ret;
+	),
+
+	TP_printk("client pid = %u, tgid = %u, seq = %llu (ret = %d)",
+		  __entry->pid, __entry->tgid, __entry->seq, __entry->ret)
+
+);
+
+TRACE_EVENT(edgetpu_vii_response_start,
+
+	TP_PROTO(struct edgetpu_client *client),
+
+	TP_ARGS(client),
+
+	TP_STRUCT__entry(
+		__field(pid_t, pid)
+		__field(pid_t, tgid)
+	),
+
+	TP_fast_assign(
+		__entry->pid = client->pid;
+		__entry->tgid = client->tgid;
+	),
+
+	TP_printk("client pid = %u, tgid = %u", __entry->pid, __entry->tgid)
+);
+
+TRACE_EVENT(edgetpu_vii_response_end,
+
+	TP_PROTO(struct edgetpu_client *client, struct edgetpu_vii_response_ioctl *ibuf, int ret),
+
+	TP_ARGS(client, ibuf, ret),
+
+	TP_STRUCT__entry(
+		__field(pid_t, pid)
+		__field(pid_t, tgid)
+		__field(__u64, seq)
+		__field(__u64, retval)
+		__field(int, ret)
+	),
+
+	TP_fast_assign(
+		__entry->pid = client->pid;
+		__entry->tgid = client->tgid;
+		__entry->seq = ibuf->response.seq;
+		__entry->retval = ibuf->response.retval;
+		__entry->ret = ret;
+	),
+
+	TP_printk("client pid = %u, tgid = %u, seq = %llu, retval = 0x%llx (ret = %d)",
+		  __entry->pid, __entry->tgid, __entry->seq, __entry->retval, __entry->ret)
 );
 
 #endif /* _TRACE_EDGETPU_H */

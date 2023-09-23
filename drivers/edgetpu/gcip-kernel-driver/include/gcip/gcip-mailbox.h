@@ -349,6 +349,15 @@ struct gcip_mailbox_ops {
 	 * Context: in_interrupt()
 	 */
 	bool (*is_block_off)(struct gcip_mailbox *mailbox);
+	/*
+	 * Retrieves the per command timeout value in milliseconds set by the user for the given
+	 * mailbox command @cmd. According to the implementation detail of IP side, the timeout can
+	 * be fetched from @cmd, @resp or @data passed to the `gcip_mailbox_put_cmd` function.
+	 * Therefore, this callback passes all of them not only @cmd. This can be called without
+	 * holding any locks.
+	 * Context: normal.
+	 */
+	u32 (*get_cmd_timeout)(struct gcip_mailbox *mailbox, void *cmd, void *resp, void *data);
 };
 
 struct gcip_mailbox {

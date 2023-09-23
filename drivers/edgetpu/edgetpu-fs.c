@@ -604,6 +604,53 @@ edgetpu_ioctl_set_device_properties(struct edgetpu_dev *etdev,
 	return 0;
 }
 
+static int edgetpu_ioctl_vii_command(struct edgetpu_client *client,
+				     struct edgetpu_vii_command_ioctl __user *argp)
+{
+	struct edgetpu_vii_command_ioctl command;
+	int ret;
+
+	if (copy_from_user(&command, argp, sizeof(command)))
+		return -EFAULT;
+
+	trace_edgetpu_vii_command_start(client);
+
+	if (!lock_check_group_member(client))
+		return -EINVAL;
+
+	ret = edgetpu_device_group_send_vii_command(client->group, &command.command);
+
+	UNLOCK(client);
+
+	trace_edgetpu_vii_command_end(client, &command, ret);
+	return ret;
+}
+
+static int edgetpu_ioctl_vii_response(struct edgetpu_client *client,
+				      struct edgetpu_vii_response_ioctl __user *argp)
+{
+	struct edgetpu_vii_response_ioctl ibuf;
+	int ret = 0;
+
+	trace_edgetpu_vii_response_start(client);
+
+	if (!lock_check_group_member(client))
+		return -EINVAL;
+
+	ret = edgetpu_device_group_get_vii_response(client->group, &ibuf.response);
+	if (ret)
+		goto out;
+
+	if (copy_to_user(argp, &ibuf, sizeof(ibuf)))
+		ret = -EFAULT;
+
+out:
+	UNLOCK(client);
+
+	trace_edgetpu_vii_response_end(client, &ibuf, ret);
+	return ret;
+}
+
 long edgetpu_ioctl(struct file *file, uint cmd, ulong arg)
 {
 	struct edgetpu_client *client = file->private_data;
@@ -697,6 +744,12 @@ long edgetpu_ioctl(struct file *file, uint cmd, ulong arg)
 		break;
 	case EDGETPU_SET_DEVICE_PROPERTIES:
 		ret = edgetpu_ioctl_set_device_properties(client->etdev, argp);
+		break;
+	case EDGETPU_VII_COMMAND:
+		ret = edgetpu_ioctl_vii_command(client, argp);
+		break;
+	case EDGETPU_VII_RESPONSE:
+		ret = edgetpu_ioctl_vii_response(client, argp);
 		break;
 	default:
 		return -ENOTTY; /* unknown command */
@@ -845,8 +898,7 @@ static ssize_t show_group(struct edgetpu_dev *etdev,
 			  struct edgetpu_device_group *group, char *buf,
 			  ssize_t buflen)
 {
-	enum edgetpu_context_id context =
-		edgetpu_group_context_id_locked(group);
+	struct edgetpu_iommu_domain *etdomain = edgetpu_group_domain_locked(group);
 	ssize_t len;
 	ssize_t ret = 0;
 
@@ -874,14 +926,10 @@ static ssize_t show_group(struct edgetpu_dev *etdev,
 		return ret;
 	}
 
-	if (context == EDGETPU_CONTEXT_INVALID)
-		len = scnprintf(buf, buflen - ret, "context (none) ");
-	else if (context & EDGETPU_CONTEXT_DOMAIN_TOKEN)
-		len = scnprintf(buf, buflen - ret, "context detached %#x ",
-				context & ~(EDGETPU_CONTEXT_DOMAIN_TOKEN));
+	if (edgetpu_mmu_domain_detached(etdomain))
+		len = scnprintf(buf, buflen - ret, "context detached ");
 	else
-		len = scnprintf(buf, buflen - ret, "context mbox %d ",
-				context);
+		len = scnprintf(buf, buflen - ret, "context mbox %d ", etdomain->pasid);
 	buf += len;
 	ret += len;
 	len = scnprintf(buf, buflen - ret, "vcid %u %s%s\n",

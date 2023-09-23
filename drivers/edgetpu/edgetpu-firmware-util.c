@@ -17,14 +17,16 @@ char *edgetpu_fwutil_name_from_attr_buf(const char *buf)
 	char *name;
 
 	len = strlen(buf);
-	/* buf from sysfs attribute contains the last line feed character */
-	if (len == 0 || buf[len - 1] != '\n')
+	if (len == 0)
 		return ERR_PTR(-EINVAL);
 
-	name = kstrdup(buf, GFP_KERNEL);
+	/* name should not contain the last line feed character */
+	if (buf[len - 1] == '\n')
+		len -= 1;
+
+	name = kmemdup_nul(buf, len, GFP_KERNEL);
 	if (!name)
 		return ERR_PTR(-ENOMEM);
-	/* name should not contain the last line feed character */
-	name[len - 1] = '\0';
+
 	return name;
 }

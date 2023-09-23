@@ -19,8 +19,11 @@
 
 #define CIRC_QUEUE_WRAP_BIT (1 << 10)
 
-/* the index of mailbox for kernel control interface */
+/* Mailbox index for kernel control interface */
 #define KERNEL_MAILBOX_INDEX 0
+
+/* Mailbox index for in-kernel virtual inference interface, if enabled */
+#define IKV_MAILBOX_INDEX 1
 
 /* Size of CSRs start from cmd_queue_csr_base can be mmap-ed to userspace. */
 #define USERSPACE_CSR_SIZE 0x1000ul
@@ -28,6 +31,8 @@
 /* Mailbox ID to indicate external mailboxes */
 #define EDGETPU_MAILBOX_ID_USE_ASSOC -1
 
+struct edgetpu_kci;
+struct edgetpu_ikv;
 struct edgetpu_device_group;
 
 struct edgetpu_mailbox {
@@ -53,11 +58,12 @@ struct edgetpu_mailbox {
 	void (*handle_irq)(struct edgetpu_mailbox *mailbox);
 
 	/*
-	 * Internal data. It's edgetpu_kci* for KCI mailbox,
-	 * edgetpu_device_group* for VII mailboxes.
+	 * Internal data. It's edgetpu_kci* for KCI mailbox, edgetpu_ikv* for in-kernel VII mailbox,
+	 * or edgetpu_device_group* for user-space VII mailboxes.
 	 */
 	union {
 		struct edgetpu_kci *etkci;
+		struct edgetpu_ikv *etikv;
 		struct edgetpu_device_group *group;
 	} internal;
 };
@@ -146,6 +152,7 @@ struct edgetpu_mailbox_manager {
 	get_csr_base_t get_cmd_queue_csr_base;
 	get_csr_base_t get_resp_queue_csr_base;
 	struct edgetpu_handshake open_devices;
+	bool use_ikv;
 };
 
 /* the structure to configure a mailbox manager */
@@ -157,6 +164,7 @@ struct edgetpu_mailbox_manager_desc {
 	get_csr_base_t get_context_csr_base;
 	get_csr_base_t get_cmd_queue_csr_base;
 	get_csr_base_t get_resp_queue_csr_base;
+	bool use_ikv;
 };
 
 /* Mailbox CSRs. The order and size are exactly the same as RTL defined. */
@@ -260,7 +268,12 @@ void edgetpu_mailbox_inc_cmd_queue_tail(struct edgetpu_mailbox *mailbox,
 void edgetpu_mailbox_inc_resp_queue_head(struct edgetpu_mailbox *mailbox,
 					 u32 inc);
 
-/* utility functions for VII */
+/* utility functions for in-kernel VII */
+
+/* requests the mailbox for in-kernel VII */
+struct edgetpu_mailbox *edgetpu_mailbox_ikv(struct edgetpu_mailbox_manager *mgr);
+
+/* utility functions for user-space VII */
 
 /*
  * Request the mailbox with mailbox_id equals @id.
@@ -343,36 +356,27 @@ int edgetpu_mailbox_enable_ext(struct edgetpu_client *client, int mailbox_id,
 int edgetpu_mailbox_disable_ext(struct edgetpu_client *client, int mailbox_id);
 
 /*
- * Activates all mailboxes included in @mailbox_map, OPEN_DEVICE KCI will be sent.
+ * Activates VII for the client with @vcid, using the page table specified by @pasid.
+ *
+ * Notifies firmware of the activation with the appropriate KCI command. If clients are
+ * given dedicated VII mailboxes, this is OPEN_DEVICE. If client traffic is routed via
+ * the kernel driver into a shared mailbox, ALLOCATE_VMBOX is sent instead.
+ *
+ * If VII is already activated for @pasid, no KCI is sent and this function returns 0.
  *
  * Returns what edgetpu_kci_open_device() returned.
  * Caller ensures device is powered on.
  */
-int edgetpu_mailbox_activate_bulk(struct edgetpu_dev *etdev, u32 mailbox_map, u32 client_priv,
-				  s16 vcid, bool first_open);
+int edgetpu_mailbox_activate_vii(struct edgetpu_dev *etdev, u32 pasid, u32 client_priv, s16 vcid,
+				 bool first_open);
 
 /*
- * Activates @mailbox_id, OPEN_DEVICE KCI will be sent.
+ * Deactivates VII, previously activated by edgetpu_mailbox_activate_vii().
  *
- * If @mailbox_id is known to be activated, KCI is not sent and this function
- * returns 0.
- *
- * Returns what edgetpu_kci_open_device() returned.
- * Caller ensures device is powered on.
+ * Sends CLOSE_DEVICE when clients have dedicated mailboxes and RELEASE_VMBOX when
+ * using a shared, in-kernel mailbox.
  */
-int edgetpu_mailbox_activate(struct edgetpu_dev *etdev, u32 mailbox_id, u32 client_priv, s16 vcid,
-			     bool first_open);
-
-/*
- * Similar to edgetpu_mailbox_activate_bulk() but sends CLOSE_DEVICE KCI with the @mailbox_map
- * instead.
- */
-void edgetpu_mailbox_deactivate_bulk(struct edgetpu_dev *etdev, u32 mailbox_map);
-
-/*
- * Similar to edgetpu_mailbox_activate() but sends CLOSE_DEVICE KCI instead.
- */
-void edgetpu_mailbox_deactivate(struct edgetpu_dev *etdev, u32 mailbox_id);
+void edgetpu_mailbox_deactivate_vii(struct edgetpu_dev *etdev, u32 pasid);
 
 /* Sets @eh->fw_state to 0. */
 void edgetpu_handshake_clear_fw_state(struct edgetpu_handshake *eh);

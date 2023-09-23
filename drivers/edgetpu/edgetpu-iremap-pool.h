@@ -9,6 +9,7 @@
 #define __EDGETPU_IREMAP_POOL_H_
 
 #include "edgetpu-internal.h"
+#include "edgetpu-mmu.h"
 
 struct edgetpu_mempool {
 	struct gen_pool *gen_pool;
@@ -38,17 +39,15 @@ void edgetpu_iremap_pool_destroy(struct edgetpu_dev *etdev);
  * has one.
  * Fall back to dma_alloc_coherent and edgetpu_mmu_map_sgt otherwise.
  */
-int edgetpu_iremap_alloc(struct edgetpu_dev *etdev, size_t size,
-			 struct edgetpu_coherent_mem *mem,
-			 enum edgetpu_context_id context_id);
+int edgetpu_iremap_alloc(struct edgetpu_dev *etdev, size_t size, struct edgetpu_coherent_mem *mem,
+			 struct edgetpu_iommu_domain *etdomain);
 
 /*
  * Free memory allocated by the function above, either from the instruction
  * remap pool or from dma coherent memory.
  */
-void edgetpu_iremap_free(struct edgetpu_dev *etdev,
-			 struct edgetpu_coherent_mem *mem,
-			 enum edgetpu_context_id context_id);
+void edgetpu_iremap_free(struct edgetpu_dev *etdev, struct edgetpu_coherent_mem *mem,
+			 struct edgetpu_iommu_domain *etdomain);
 
 /*
  * Map memory in the pool to user space. Falls back to dma_mmap_coherent when

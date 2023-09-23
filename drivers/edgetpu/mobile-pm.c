@@ -15,6 +15,7 @@
 
 #include "edgetpu-config.h"
 #include "edgetpu-firmware.h"
+#include "edgetpu-ikv.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-kci.h"
 #include "edgetpu-mailbox.h"
@@ -254,9 +255,14 @@ static int mobile_power_up(void *data)
 
 	edgetpu_chip_init(etdev);
 
+	/* TODO(b/269374029) Do *_reinit() results need to be checked? */
 	if (etdev->etkci) {
 		etdev_dbg(etdev, "Resetting KCI\n");
 		edgetpu_kci_reinit(etdev->etkci);
+	}
+	if (etdev->etikv) {
+		etdev_dbg(etdev, "Resetting in-kernel VII\n");
+		edgetpu_ikv_reinit(etdev->etikv);
 	}
 	if (etdev->mailbox_manager) {
 		etdev_dbg(etdev, "Resetting (VII/external) mailboxes\n");

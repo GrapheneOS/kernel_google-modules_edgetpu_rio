@@ -172,7 +172,7 @@ static int edgetpu_external_start_offload(struct device *edgetpu_dev,
 	struct edgetpu_client *client;
 	struct edgetpu_device_group *group;
 	struct file *file = client_info->tpu_file;
-	enum edgetpu_context_id context;
+	struct edgetpu_iommu_domain *etdomain;
 	int ret = 0;
 
 	if (!file)
@@ -201,13 +201,13 @@ static int edgetpu_external_start_offload(struct device *edgetpu_dev,
 	mutex_unlock(&client->group_lock);
 
 	mutex_lock(&group->lock);
-	context = edgetpu_group_context_id_locked(group);
-	if (context == EDGETPU_CONTEXT_INVALID || context & EDGETPU_CONTEXT_DOMAIN_TOKEN) {
+	etdomain = edgetpu_group_domain_locked(group);
+	if (edgetpu_mmu_domain_detached(etdomain)) {
 		ret = -EINVAL;
 		goto out_group_unlock;
 	}
 
-	offload_info->client_id = context;
+	offload_info->client_id = etdomain->pasid;
 
 out_group_unlock:
 	mutex_unlock(&group->lock);

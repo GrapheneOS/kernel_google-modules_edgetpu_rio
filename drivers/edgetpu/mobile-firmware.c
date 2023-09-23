@@ -20,6 +20,7 @@
 #include "edgetpu-config.h"
 #include "edgetpu-firmware.h"
 #include "edgetpu-firmware-util.h"
+#include "edgetpu-ikv.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-iremap-pool.h"
 #include "edgetpu-kci.h"
@@ -40,7 +41,8 @@ static int image_config_map(void *data, dma_addr_t daddr, phys_addr_t paddr, siz
 
 	if (flags & GCIP_IMAGE_CONFIG_FLAGS_SECURE)
 		return edgetpu_mmu_add_translation(etdev, daddr, paddr, size,
-						   IOMMU_READ | IOMMU_WRITE, EDGETPU_CONTEXT_KCI);
+						   IOMMU_READ | IOMMU_WRITE,
+						   edgetpu_mmu_default_domain(etdev));
 
 	fw_ctx = kzalloc(sizeof(*fw_ctx), GFP_KERNEL);
 	if (!fw_ctx)
@@ -55,7 +57,7 @@ static int image_config_map(void *data, dma_addr_t daddr, phys_addr_t paddr, siz
 	}
 
 	ret = edgetpu_mmu_map_iova_sgt(etdev, daddr, fw_ctx->sgt, DMA_BIDIRECTIONAL, 0,
-				       EDGETPU_CONTEXT_KCI);
+				       edgetpu_mmu_default_domain(etdev));
 	if (ret) {
 		gcip_free_noncontiguous(fw_ctx->sgt);
 		kfree(fw_ctx);
@@ -76,7 +78,8 @@ static void image_config_unmap(void *data, dma_addr_t daddr, size_t size, unsign
 	struct edgetpu_mobile_fw_ctx *fw_ctx = NULL, *cur;
 
 	if (flags & GCIP_IMAGE_CONFIG_FLAGS_SECURE) {
-		edgetpu_mmu_remove_translation(etdev, daddr, size, EDGETPU_CONTEXT_KCI);
+		edgetpu_mmu_remove_translation(etdev, daddr, size,
+					       edgetpu_mmu_default_domain(etdev));
 		return;
 	}
 
@@ -92,7 +95,7 @@ static void image_config_unmap(void *data, dma_addr_t daddr, size_t size, unsign
 
 	if (fw_ctx) {
 		edgetpu_mmu_unmap_iova_sgt(etdev, daddr, fw_ctx->sgt, DMA_BIDIRECTIONAL,
-					   EDGETPU_CONTEXT_KCI);
+					   edgetpu_mmu_default_domain(etdev));
 		gcip_free_noncontiguous(fw_ctx->sgt);
 		kfree(fw_ctx);
 	} else {
@@ -251,8 +254,12 @@ static int mobile_firmware_update_remapped_data_region(struct edgetpu_dev *etdev
 		  &remapped_data_addr);
 
 	if (etmdev->shared_mem_vaddr) {
-		/* No need to free the VII queues since allocated groups will block fw loading. */
+		/*
+		 * No need to free user-space VII queues, since allocated groups will block fw from
+		 * loading.
+		 */
 		edgetpu_kci_release(etdev, etdev->etkci);
+		edgetpu_ikv_release(etdev, etdev->etikv);
 		edgetpu_telemetry_exit(etdev);
 		edgetpu_iremap_pool_destroy(etdev);
 		memunmap(etmdev->shared_mem_vaddr);
@@ -297,8 +304,14 @@ static int mobile_firmware_update_remapped_data_region(struct edgetpu_dev *etdev
 	if (ret)
 		goto out_telemetry_exit;
 
+	ret = edgetpu_ikv_init(etdev->mailbox_manager, etdev->etikv);
+	if (ret)
+		goto out_kci_release;
+
 	return 0;
 
+out_kci_release:
+	edgetpu_kci_release(etdev, etdev->etkci);
 out_telemetry_exit:
 	edgetpu_telemetry_exit(etdev);
 out_iremap_pool_destroy:
@@ -321,8 +334,11 @@ static int mobile_firmware_prepare_run(struct edgetpu_firmware *et_fw,
 	struct edgetpu_dev *etdev = et_fw->etdev;
 	int ret;
 
-	/* Reset KCI mailbox before starting f/w, don't process anything old.*/
+	/* Reset KCI and IKV mailboxes before starting f/w, don't process anything old.*/
 	edgetpu_mailbox_reset(etdev->etkci->mailbox);
+	/* Need to check if in-kernel VII was enabled */
+	if (etdev->etikv->mbx_hardware)
+		edgetpu_mailbox_reset(etdev->etikv->mbx_hardware);
 
 	ret = mobile_firmware_update_remapped_data_region(etdev);
 	if (ret)

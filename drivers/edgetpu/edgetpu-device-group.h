@@ -68,6 +68,7 @@ struct edgetpu_device_group {
 	 * creating this group.
 	 */
 	bool mailbox_detachable;
+	bool mailbox_attached;
 	/*
 	 * Whether group->etdev is inaccessible.
 	 * Some group operations will access device CSRs. If the device is known to be
@@ -90,14 +91,7 @@ struct edgetpu_device_group {
 	enum edgetpu_device_group_status status;
 	bool activated; /* whether this group's VII has ever been activated */
 	struct edgetpu_vii vii;		/* VII mailbox */
-	/*
-	 * Context ID ranges from EDGETPU_CONTEXT_VII_BASE to
-	 * EDGETPU_NCONTEXTS - 1.
-	 * This equals EDGETPU_CONTEXT_INVALID or a token OR'ed with
-	 * EDGETPU_CONTEXT_DOMAIN_TOKEN when the group has mailbox detached
-	 * (means the group isn't in any context at this time).
-	 */
-	enum edgetpu_context_id context_id;
+
 	/* The IOMMU domain being associated to this group */
 	struct edgetpu_iommu_domain *etdomain;
 	/*
@@ -113,6 +107,15 @@ struct edgetpu_device_group {
 	struct list_head dma_fence_list;
 
 	/* end of fields protected by @lock */
+
+	/* Lists of `struct edgetpu_ikv_response`s for consuming/cleanup respectively */
+	struct list_head ready_ikv_resps;
+	struct list_head pending_ikv_resps;
+	/*
+	 * Protects access to @ready_ikv_resps, @pending_ikv_resps, and the "processed" field of any
+	 * responses currently enqueued in @pending_ikv_resps.
+	 */
+	struct mutex ikv_resp_lock;
 
 	/* TPU IOVA mapped to host DRAM space */
 	struct edgetpu_mapping_root host_mappings;
@@ -286,20 +289,36 @@ void edgetpu_mappings_clear_group(struct edgetpu_device_group *group);
 size_t edgetpu_group_mappings_total_size(struct edgetpu_device_group *group);
 
 /*
- * Return context ID for group MMU mappings.
+ * Return IOMMU domain for group mappings.
  *
- * Caller holds @group->lock to prevent race, the context ID may be changed by
- * edgetpu_group_{detach/attach}_mailbox.
+ * Caller holds @group->lock to prevent race, the domain may be attached or detached to a PASID
+ * by edgetpu_group_{detach/attach}_mailbox.
  */
-static inline enum edgetpu_context_id
-edgetpu_group_context_id_locked(struct edgetpu_device_group *group)
+static inline struct edgetpu_iommu_domain *
+edgetpu_group_domain_locked(struct edgetpu_device_group *group)
 {
-	return group->context_id;
+	return group->etdomain;
 }
 
 /* dump mappings in @group */
 void edgetpu_group_mappings_show(struct edgetpu_device_group *group,
 				 struct seq_file *s);
+
+/*
+ * Sends a VII command on behalf of `group`.
+ *
+ * Returns zero on success or a negative errno on error.
+ */
+int edgetpu_device_group_send_vii_command(struct edgetpu_device_group *group,
+					  struct edgetpu_vii_command *cmd);
+
+/*
+ * Pops the oldest received VII response sent to `group`, and copies it to `resp`
+ *
+ * Returns zero, with the response copied into `resp` on success, or a negative errno on error.
+ */
+int edgetpu_device_group_get_vii_response(struct edgetpu_device_group *group,
+					  struct edgetpu_vii_response *resp);
 
 /*
  * Maps the VII mailbox CSR.
@@ -385,8 +404,7 @@ int edgetpu_group_attach_and_open_mailbox(struct edgetpu_device_group *group);
 static inline bool
 edgetpu_group_mailbox_detached_locked(const struct edgetpu_device_group *group)
 {
-	return group->context_id == EDGETPU_CONTEXT_INVALID ||
-	       group->context_id & EDGETPU_CONTEXT_DOMAIN_TOKEN;
+	return !group->mailbox_attached;
 }
 
 /*

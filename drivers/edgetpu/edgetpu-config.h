@@ -25,6 +25,11 @@
 #define EDGETPU_NUM_CORES 1
 #endif
 
+/* Default to disabling in-kernel VII if not explicitly enabled */
+#ifndef EDGETPU_USE_IKV
+#define EDGETPU_USE_IKV 0
+#endif
+
 /* Uses a smaller size for unittests to avoid DMA warnings. */
 #if IS_ENABLED(CONFIG_EDGETPU_TEST)
 #undef EDGETPU_DEBUG_DUMP_MEM_SIZE

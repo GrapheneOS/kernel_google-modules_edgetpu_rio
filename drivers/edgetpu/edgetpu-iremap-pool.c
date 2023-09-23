@@ -65,16 +65,15 @@ void edgetpu_iremap_pool_destroy(struct edgetpu_dev *etdev)
 	etdev->iremap_pool = NULL;
 }
 
-int edgetpu_iremap_alloc(struct edgetpu_dev *etdev, size_t size,
-			 struct edgetpu_coherent_mem *mem,
-			 enum edgetpu_context_id context_id)
+int edgetpu_iremap_alloc(struct edgetpu_dev *etdev, size_t size, struct edgetpu_coherent_mem *mem,
+			 struct edgetpu_iommu_domain *etdomain)
 {
 	struct edgetpu_mempool *etmempool = etdev->iremap_pool;
 	unsigned long addr;
 	size_t offset;
 
 	if (!etmempool)
-		return edgetpu_alloc_coherent(etdev, size, mem, context_id);
+		return edgetpu_alloc_coherent(etdev, size, mem, etdomain);
 
 	size = __ALIGN_KERNEL(size, etmempool->granule);
 	addr = gen_pool_alloc(etmempool->gen_pool, size);
@@ -93,14 +92,13 @@ int edgetpu_iremap_alloc(struct edgetpu_dev *etdev, size_t size,
 	return 0;
 }
 
-void edgetpu_iremap_free(struct edgetpu_dev *etdev,
-			 struct edgetpu_coherent_mem *mem,
-			 enum edgetpu_context_id context_id)
+void edgetpu_iremap_free(struct edgetpu_dev *etdev, struct edgetpu_coherent_mem *mem,
+			 struct edgetpu_iommu_domain *etdomain)
 {
 	struct edgetpu_mempool *etmempool = etdev->iremap_pool;
 
 	if (!etmempool) {
-		edgetpu_free_coherent(etdev, mem, context_id);
+		edgetpu_free_coherent(etdev, mem, etdomain);
 		return;
 	}
 

@@ -12,11 +12,13 @@
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/mmzone.h> /* MAX_ORDER_NR_PAGES */
+#include <linux/moduleparam.h>
 #include <linux/slab.h>
 
 #include <gcip/gcip-pm.h>
 
 #include "edgetpu-device-group.h"
+#include "edgetpu-ikv.h"
 #include "edgetpu-iremap-pool.h"
 #include "edgetpu-kci.h"
 #include "edgetpu-mailbox.h"
@@ -25,14 +27,8 @@
 #include "edgetpu-wakelock.h"
 #include "edgetpu.h"
 
-/* Return context ID for mailbox. */
-static inline enum edgetpu_context_id
-edgetpu_mailbox_context_id(struct edgetpu_mailbox *mailbox)
-{
-	if (!mailbox)
-		return EDGETPU_CONTEXT_INVALID;
-	return EDGETPU_CONTEXT_VII_BASE + mailbox->mailbox_id - 1;
-}
+static bool disable_ikv = false;
+module_param(disable_ikv, bool, 0660);
 
 /* Sets mailbox->cmd_queue_tail and corresponding CSR on device. */
 static void edgetpu_mailbox_set_cmd_queue_tail(struct edgetpu_mailbox *mailbox,
@@ -87,6 +83,8 @@ static int edgetpu_mailbox_remove_locked(struct edgetpu_mailbox_manager *mgr,
 	/* KCI mailbox is a special case */
 	if (mailbox->mailbox_id == KERNEL_MAILBOX_INDEX)
 		edgetpu_kci_release(mgr->etdev, mailbox->internal.etkci);
+	if (mgr->use_ikv && mailbox->mailbox_id == IKV_MAILBOX_INDEX)
+		edgetpu_ikv_release(mgr->etdev, mailbox->internal.etikv);
 	kfree(mailbox);
 	return 0;
 }
@@ -229,28 +227,49 @@ edgetpu_mailbox_vii_add(struct edgetpu_mailbox_manager *mgr, uint id)
 }
 
 /*
- * Every mailbox manager can allocate one mailbox for KCI to use.
- * Previously allocated KCI mailbox is returned if it hasn't been removed via
- * edgetpu_mailbox_remove().
+ * Helper function for retrieving a specific mailbox based on its index.
  */
-struct edgetpu_mailbox *edgetpu_mailbox_kci(struct edgetpu_mailbox_manager *mgr)
+static struct edgetpu_mailbox *dedicated_mailbox(struct edgetpu_mailbox_manager *mgr, uint idx)
 {
 	struct edgetpu_mailbox *mailbox;
 	unsigned long flags;
 
 	write_lock_irqsave(&mgr->mailboxes_lock, flags);
-	if (mgr->mailboxes[KERNEL_MAILBOX_INDEX]) {
-		mailbox = mgr->mailboxes[KERNEL_MAILBOX_INDEX];
+	if (mgr->mailboxes[idx]) {
+		mailbox = mgr->mailboxes[idx];
 		goto out;
 	}
 
-	mailbox = edgetpu_mailbox_create_locked(mgr, KERNEL_MAILBOX_INDEX);
+	mailbox = edgetpu_mailbox_create_locked(mgr, idx);
 	if (!IS_ERR(mailbox))
-		mgr->mailboxes[KERNEL_MAILBOX_INDEX] = mailbox;
+		mgr->mailboxes[idx] = mailbox;
 
 out:
 	write_unlock_irqrestore(&mgr->mailboxes_lock, flags);
 	return mailbox;
+}
+
+/*
+ * Every mailbox manager can allocate one mailbox for KCI to use.
+ * Previously allocated KCI mailbox is returned if it hasn't been removed via
+ * edgetpu_mailbox_remove().
+ */
+inline struct edgetpu_mailbox *edgetpu_mailbox_kci(struct edgetpu_mailbox_manager *mgr)
+{
+	return dedicated_mailbox(mgr, KERNEL_MAILBOX_INDEX);
+}
+
+/*
+ * Every mailbox manager can allocate one mailbox for in-kernel VII to use.
+ * Previously allocated VII mailbox is returned if it hasn't been removed via
+ * edgetpu_mailbox_remove().
+ */
+inline struct edgetpu_mailbox *edgetpu_mailbox_ikv(struct edgetpu_mailbox_manager *mgr)
+{
+	if (mgr && mgr->use_ikv)
+		return dedicated_mailbox(mgr, IKV_MAILBOX_INDEX);
+	else
+		return NULL;
 }
 
 /*
@@ -321,6 +340,11 @@ int edgetpu_mailbox_init_vii(struct edgetpu_vii *vii,
 	const struct edgetpu_mailbox_attr *attr = &group->mbox_attr;
 	int ret;
 
+	if (mgr->use_ikv) {
+		etdev_dbg(group->etdev, "Using in-kernel VII, no client mbox allocated\n");
+		return 0;
+	}
+
 	if (!group->etdomain || group->etdomain->pasid == IOMMU_PASID_INVALID) {
 		etdev_err(group->etdev, "Invalid IOMMU domain or PASID.\n");
 		return -EINVAL;
@@ -371,9 +395,13 @@ int edgetpu_mailbox_init_vii(struct edgetpu_vii *vii,
 
 void edgetpu_mailbox_remove_vii(struct edgetpu_vii *vii)
 {
-	struct edgetpu_dev *etdev;
+	struct edgetpu_dev *etdev = vii->etdev;
 
-	etdev = vii->etdev;
+	if (etdev->mailbox_manager->use_ikv) {
+		etdev_dbg(etdev, "Using in-kernel VII, no client mbox to remove\n");
+		return;
+	}
+
 	edgetpu_mailbox_free_queue(etdev, vii->mailbox, &vii->cmd_queue_mem);
 	edgetpu_mailbox_free_queue(etdev, vii->mailbox, &vii->resp_queue_mem);
 	if (vii->mailbox) {
@@ -391,10 +419,13 @@ static int edgetpu_mailbox_do_alloc_queue(struct edgetpu_dev *etdev,
 {
 	u32 size = unit * queue_size;
 
+	if (!mailbox)
+		return -ENODEV;
+
 	/* Align queue size to page size for TPU MMU map. */
 	size = __ALIGN_KERNEL(size, PAGE_SIZE);
 	return edgetpu_iremap_alloc(etdev, size, mem,
-				    edgetpu_mailbox_context_id(mailbox));
+				    edgetpu_mmu_domain_for_pasid(etdev, mailbox->mailbox_id));
 }
 
 /*
@@ -433,10 +464,10 @@ void edgetpu_mailbox_free_queue(struct edgetpu_dev *etdev,
 				struct edgetpu_mailbox *mailbox,
 				edgetpu_queue_mem *mem)
 {
-	if (!mem->vaddr)
+	if (!mem->vaddr || !mailbox)
 		return;
 
-	edgetpu_iremap_free(etdev, mem, edgetpu_mailbox_context_id(mailbox));
+	edgetpu_iremap_free(etdev, mem, edgetpu_mmu_domain_for_pasid(etdev, mailbox->mailbox_id));
 }
 
 /*
@@ -448,8 +479,10 @@ edgetpu_mailbox_create_mgr(struct edgetpu_dev *etdev,
 {
 	struct edgetpu_mailbox_manager *mgr;
 	uint total = 0;
+	bool use_ikv = desc->use_ikv && !disable_ikv;
 
 	total += 1; /* KCI mailbox */
+	total += use_ikv ? 1 : 0;
 	total += desc->num_vii_mailbox;
 	total += desc->num_ext_mailbox;
 	if (total > desc->num_mailbox)
@@ -460,8 +493,8 @@ edgetpu_mailbox_create_mgr(struct edgetpu_dev *etdev,
 
 	mgr->etdev = etdev;
 	mgr->num_mailbox = desc->num_mailbox;
-	/* index 0 is reserved for KCI */
-	mgr->vii_index_from = 1;
+	/* index 0 is reserved for KCI; index 1 for in-kernel VII, if enabled */
+	mgr->vii_index_from = use_ikv ? IKV_MAILBOX_INDEX + 1 : KERNEL_MAILBOX_INDEX + 1;
 	mgr->vii_index_to = mgr->vii_index_from +
 		(desc->num_use_vii_mailbox ? desc->num_use_vii_mailbox :
 		 desc->num_vii_mailbox);
@@ -471,6 +504,7 @@ edgetpu_mailbox_create_mgr(struct edgetpu_dev *etdev,
 	mgr->get_context_csr_base = desc->get_context_csr_base;
 	mgr->get_cmd_queue_csr_base = desc->get_cmd_queue_csr_base;
 	mgr->get_resp_queue_csr_base = desc->get_resp_queue_csr_base;
+	mgr->use_ikv = use_ikv;
 
 	mgr->mailboxes = devm_kcalloc(etdev->dev, mgr->num_mailbox,
 				      sizeof(*mgr->mailboxes), GFP_KERNEL);
@@ -487,6 +521,7 @@ void edgetpu_mailbox_remove_all(struct edgetpu_mailbox_manager *mgr, bool hwacce
 {
 	uint i;
 	struct edgetpu_mailbox *kci_mailbox = NULL;
+	struct edgetpu_mailbox *ikv_mailbox = NULL;
 	unsigned long flags;
 
 	if (IS_ERR_OR_NULL(mgr))
@@ -502,6 +537,8 @@ void edgetpu_mailbox_remove_all(struct edgetpu_mailbox_manager *mgr, bool hwacce
 			/* KCI needs special handling */
 			if (i == KERNEL_MAILBOX_INDEX)
 				kci_mailbox = mailbox;
+			else if (mgr->use_ikv && i == IKV_MAILBOX_INDEX)
+				ikv_mailbox = mailbox;
 			else
 				kfree(mailbox);
 			mgr->mailboxes[i] = NULL;
@@ -513,6 +550,11 @@ void edgetpu_mailbox_remove_all(struct edgetpu_mailbox_manager *mgr, bool hwacce
 	if (kci_mailbox) {
 		edgetpu_kci_release(mgr->etdev, kci_mailbox->internal.etkci);
 		kfree(kci_mailbox);
+	}
+
+	if (ikv_mailbox) {
+		edgetpu_ikv_release(mgr->etdev, ikv_mailbox->internal.etikv);
+		kfree(ikv_mailbox);
 	}
 }
 
@@ -553,6 +595,11 @@ void edgetpu_mailbox_reinit_vii(struct edgetpu_device_group *group)
 	int cmd_queue_size, resp_queue_size;
 	struct edgetpu_mailbox *mailbox = group->vii.mailbox;
 	const struct edgetpu_mailbox_attr *attr = &group->mbox_attr;
+
+	if (group->etdev->mailbox_manager->use_ikv) {
+		etdev_dbg(group->etdev, "Using in-kernel VII, no client mbox to reinit\n");
+		return;
+	}
 
 	cmd_queue_size = convert_runtime_queue_size_to_fw(attr->cmd_queue_size,
 							  attr->sizeof_cmd);
@@ -680,6 +727,105 @@ void edgetpu_mailbox_restore_active_mailbox_queues(struct edgetpu_dev *etdev)
 		edgetpu_device_group_put(group);
 	}
 	kfree(groups);
+}
+
+static int edgetpu_mailbox_activate_bulk(struct edgetpu_dev *etdev, u32 mailbox_map,
+					 u32 client_priv, s16 vcid, bool first_open)
+{
+	struct edgetpu_handshake *eh = &etdev->mailbox_manager->open_devices;
+	int ret = 0;
+
+	mutex_lock(&eh->lock);
+	if (mailbox_map & ~eh->fw_state)
+		ret = edgetpu_kci_open_device(etdev->etkci, mailbox_map & ~eh->fw_state,
+					      client_priv, vcid, first_open);
+	if (!ret) {
+		eh->state |= mailbox_map;
+		eh->fw_state |= mailbox_map;
+	}
+	mutex_unlock(&eh->lock);
+	/*
+	 * We are observing OPEN_DEVICE KCI fails while other KCIs (usage update / shutdown) still
+	 * succeed and no firmware crash is reported. Kick off the firmware restart when we are
+	 * facing this and hope this can rescue the device from the bad state.
+	 */
+	if (ret == -ETIMEDOUT)
+		edgetpu_watchdog_bite(etdev);
+	return ret;
+
+}
+
+int edgetpu_mailbox_activate_vii(struct edgetpu_dev *etdev, u32 pasid, u32 client_priv, s16 vcid,
+				 bool first_open)
+{
+	bool first_party_client;
+	int ret;
+
+	if (!etdev->mailbox_manager->use_ikv)
+		return edgetpu_mailbox_activate_bulk(etdev, BIT(pasid), client_priv, vcid,
+						     first_open);
+
+	/*
+	 * TODO(b/271938964) ALLOCATE_VMBOX only has a u8 for storing VCID.
+	 * Cast the vcid to an unsigned, or values with the top bit set will pass this check.
+	 */
+	if ((u16)vcid > 0xFF) {
+		etdev_err(etdev, "VCID too large to use (vcid=%#x, vcid_pool=%#0x)\n", vcid,
+			  etdev->vcid_pool);
+		return -EINVAL;
+	}
+
+	/*
+	 * While `client_priv` is a u32, it comes from `edgetpu_mailbox_attr` where it is defined
+	 * as only being used as 1-bit bitfield, despite being a 32-bit value. As long as it's not
+	 * 0, it indicates the client is first-party.
+	 */
+	first_party_client = client_priv != 0;
+
+	/* TODO(b/267978887) Finalize `client_id` field format */
+	ret = edgetpu_kci_allocate_vmbox(etdev->etkci, pasid, (u8)vcid, first_open,
+					 first_party_client);
+	if (ret == -ETIMEDOUT)
+		edgetpu_watchdog_bite(etdev);
+
+	return ret;
+}
+
+static void edgetpu_mailbox_deactivate_bulk(struct edgetpu_dev *etdev, u32 mailbox_map)
+{
+	struct edgetpu_handshake *eh = &etdev->mailbox_manager->open_devices;
+	int ret = 0;
+
+	mutex_lock(&eh->lock);
+	if (mailbox_map & eh->fw_state)
+		ret = edgetpu_kci_close_device(etdev->etkci, mailbox_map & eh->fw_state);
+	if (ret)
+		etdev_err(etdev, "Deactivate mailbox for map %x failed: %d", mailbox_map, ret);
+	/*
+	 * Always clears the states, FW should never reject CLOSE_DEVICE requests unless it's
+	 * unresponsive.
+	 */
+	eh->state &= ~mailbox_map;
+	eh->fw_state &= ~mailbox_map;
+	mutex_unlock(&eh->lock);
+}
+
+void edgetpu_mailbox_deactivate_vii(struct edgetpu_dev *etdev, u32 pasid)
+{
+	if (!etdev->mailbox_manager->use_ikv) {
+		edgetpu_mailbox_deactivate_bulk(etdev, BIT(pasid));
+		return;
+	}
+
+	/* TODO(b/267978887) Finalize `client_id` field format */
+	edgetpu_kci_release_vmbox(etdev->etkci, pasid);
+}
+
+void edgetpu_handshake_clear_fw_state(struct edgetpu_handshake *eh)
+{
+	mutex_lock(&eh->lock);
+	eh->fw_state = 0;
+	mutex_unlock(&eh->lock);
 }
 
 static int edgetpu_mailbox_external_alloc_queue_batch(struct edgetpu_external_mailbox *ext_mailbox)
@@ -973,7 +1119,7 @@ static int edgetpu_mailbox_external_enable_by_id(struct edgetpu_client *client, 
 
 	etdev_dbg(client->etdev, "Enabling mailbox: %d\n", mailbox_id);
 
-	ret = edgetpu_mailbox_activate(client->etdev, mailbox_id, client_priv, -1, false);
+	ret = edgetpu_mailbox_activate_bulk(client->etdev, BIT(mailbox_id), client_priv, -1, false);
 	if (ret)
 		etdev_err(client->etdev, "Activate mailbox %d failed: %d", mailbox_id, ret);
 	else
@@ -1001,7 +1147,7 @@ static int edgetpu_mailbox_external_disable_by_id(struct edgetpu_client *client,
 
 	etdev_dbg(client->etdev, "Disabling mailbox: %d\n", mailbox_id);
 
-	edgetpu_mailbox_deactivate(client->etdev, mailbox_id);
+	edgetpu_mailbox_deactivate_bulk(client->etdev, BIT(mailbox_id));
 	edgetpu_wakelock_dec_event_locked(client->wakelock, EDGETPU_WAKELOCK_EVENT_EXT_MAILBOX);
 	edgetpu_wakelock_unlock(client->wakelock);
 	return ret;
@@ -1072,67 +1218,4 @@ int edgetpu_mailbox_disable_ext(struct edgetpu_client *client, int mailbox_id)
 		return edgetpu_mailbox_external_disable_free(client);
 	else
 		return edgetpu_mailbox_external_disable_by_id(client, mailbox_id);
-}
-
-int edgetpu_mailbox_activate_bulk(struct edgetpu_dev *etdev, u32 mailbox_map, u32 client_priv,
-				  s16 vcid, bool first_open)
-{
-	struct edgetpu_handshake *eh = &etdev->mailbox_manager->open_devices;
-	int ret = 0;
-
-	mutex_lock(&eh->lock);
-	if (mailbox_map & ~eh->fw_state)
-		ret = edgetpu_kci_open_device(etdev->etkci, mailbox_map & ~eh->fw_state,
-					      client_priv, vcid, first_open);
-	if (!ret) {
-		eh->state |= mailbox_map;
-		eh->fw_state |= mailbox_map;
-	}
-	mutex_unlock(&eh->lock);
-	/*
-	 * We are observing OPEN_DEVICE KCI fails while other KCIs (usage update / shutdown) still
-	 * succeed and no firmware crash is reported. Kick off a firmware restart when we are
-	 * facing this and hope it can rescue the device from the bad state.
-	 */
-	if (ret == -ETIMEDOUT)
-		edgetpu_watchdog_bite(etdev);
-	return ret;
-
-}
-
-int edgetpu_mailbox_activate(struct edgetpu_dev *etdev, u32 mailbox_id, u32 client_priv, s16 vcid,
-			     bool first_open)
-{
-	return edgetpu_mailbox_activate_bulk(etdev, BIT(mailbox_id), client_priv, vcid, first_open);
-}
-
-void edgetpu_mailbox_deactivate_bulk(struct edgetpu_dev *etdev, u32 mailbox_map)
-{
-	struct edgetpu_handshake *eh = &etdev->mailbox_manager->open_devices;
-	int ret = 0;
-
-	mutex_lock(&eh->lock);
-	if (mailbox_map & eh->fw_state)
-		ret = edgetpu_kci_close_device(etdev->etkci, mailbox_map & eh->fw_state);
-	if (ret)
-		etdev_err(etdev, "Deactivate mailbox for map %x failed: %d", mailbox_map, ret);
-	/*
-	 * Always clears the states, FW should never reject CLOSE_DEVICE requests unless it's
-	 * unresponsive.
-	 */
-	eh->state &= ~mailbox_map;
-	eh->fw_state &= ~mailbox_map;
-	mutex_unlock(&eh->lock);
-}
-
-void edgetpu_mailbox_deactivate(struct edgetpu_dev *etdev, u32 mailbox_id)
-{
-	edgetpu_mailbox_deactivate_bulk(etdev, BIT(mailbox_id));
-}
-
-void edgetpu_handshake_clear_fw_state(struct edgetpu_handshake *eh)
-{
-	mutex_lock(&eh->lock);
-	eh->fw_state = 0;
-	mutex_unlock(&eh->lock);
 }

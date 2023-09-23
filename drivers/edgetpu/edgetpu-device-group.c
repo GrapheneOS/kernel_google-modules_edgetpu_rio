@@ -29,6 +29,7 @@
 #include "edgetpu-config.h"
 #include "edgetpu-device-group.h"
 #include "edgetpu-dmabuf.h"
+#include "edgetpu-ikv.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-iremap-pool.h"
 #include "edgetpu-kci.h"
@@ -78,16 +79,18 @@ static int edgetpu_group_activate_external_mailbox(struct edgetpu_device_group *
  */
 static int edgetpu_group_activate(struct edgetpu_device_group *group)
 {
-	u8 mailbox_id;
+	struct edgetpu_iommu_domain *etdomain;
 	int ret;
 
 	if (edgetpu_group_mailbox_detached_locked(group))
 		return 0;
 
-	mailbox_id = edgetpu_group_context_id_locked(group);
-	edgetpu_soc_activate_context(group->etdev, mailbox_id);
-	ret = edgetpu_mailbox_activate(group->etdev, mailbox_id, group->mbox_attr.client_priv,
-				       group->vcid, !group->activated);
+	/* Activate the mailbox whose index == the assigned PASID */
+	etdomain = edgetpu_group_domain_locked(group);
+	edgetpu_soc_activate_context(group->etdev, etdomain->pasid);
+	ret = edgetpu_mailbox_activate_vii(group->etdev, etdomain->pasid,
+					   group->mbox_attr.client_priv, group->vcid,
+					   !group->activated);
 	if (ret) {
 		etdev_err(group->etdev, "activate mailbox for VCID %d failed with %d", group->vcid,
 			  ret);
@@ -112,18 +115,18 @@ static void edgetpu_group_deactivate_external_mailbox(struct edgetpu_device_grou
  */
 static void edgetpu_group_deactivate(struct edgetpu_device_group *group)
 {
-	u8 mailbox_id;
+	struct edgetpu_iommu_domain *etdomain;
 
 	if (edgetpu_group_mailbox_detached_locked(group))
 		return;
 	edgetpu_sw_wdt_dec_active_ref(group->etdev);
-	mailbox_id = edgetpu_group_context_id_locked(group);
-	edgetpu_mailbox_deactivate(group->etdev, mailbox_id);
+	etdomain = edgetpu_group_domain_locked(group);
+	edgetpu_mailbox_deactivate_vii(group->etdev, etdomain->pasid);
 	/*
 	 * Deactivate the context to prevent speculative accesses from being issued to a disabled
 	 * context.
 	 */
-	edgetpu_soc_deactivate_context(group->etdev, mailbox_id);
+	edgetpu_soc_deactivate_context(group->etdev, etdomain->pasid);
 }
 
 /*
@@ -139,10 +142,10 @@ static void edgetpu_device_group_kci_leave(struct edgetpu_device_group *group)
 	/*
 	 * Theoretically we don't need to check @dev_inaccessible here.
 	 * @dev_inaccessible is true implies the client has wakelock count zero, under such case
-	 * edgetpu_mailbox_deactivate() has been called on releasing the wakelock and therefore this
-	 * edgetpu_group_deactivate() call won't send any KCI.
+	 * edgetpu_mailbox_deactivate_vii() has been called on releasing the wakelock and therefore
+	 * this edgetpu_group_deactivate() call won't send any KCI.
 	 * Still have a check here in case this function does CSR programming other than calling
-	 * edgetpu_mailbox_deactivate() someday.
+	 * edgetpu_mailbox_deactivate_vii() someday.
 	 */
 	if (!group->dev_inaccessible)
 		edgetpu_group_deactivate(group);
@@ -214,6 +217,60 @@ static void edgetpu_group_clear_events(struct edgetpu_device_group *group)
 	write_unlock_irqrestore(&group->events.lock, flags);
 }
 
+static void edgetpu_group_clear_responses(struct edgetpu_device_group *group)
+{
+	struct edgetpu_ikv_response *cur, *nxt;
+
+	mutex_lock(&group->ikv_resp_lock);
+
+	/*
+	 * Setting all pending responses as `processed` indicates that any processing or timeout
+	 * threads currently waiting on `ikv_resp_lock` should exit immediately when unblocked.
+	 *
+	 * This ensures no other threads will access pending_ikv_resps or ready_ikv_resps.
+	 */
+	list_for_each_entry(cur, &group->pending_ikv_resps, list_entry) {
+		cur->processed = true;
+	}
+
+	/*
+	 * It's necessary to release the group's ikv_resp_lock, so that any pending timeouts can
+	 * proceed during calls to `gcip_mailbox_cancel_awaiter()` below.
+	 */
+	mutex_unlock(&group->ikv_resp_lock);
+
+	/*
+	 * Free all responses that were still pending.
+	 *
+	 * With the group being released (preventing new commands) and all existing responses marked
+	 * as processed, no other threads will modify `pending_ikv_resps`.
+	 */
+	list_for_each_entry_safe(cur, nxt, &group->pending_ikv_resps, list_entry) {
+		gcip_mailbox_cancel_awaiter(cur->awaiter);
+		gcip_mailbox_release_awaiter(cur->awaiter);
+	}
+
+	mutex_lock(&group->ikv_resp_lock);
+
+	/*
+	 * Free all responses that were ready for consumption.
+	 *
+	 * Now that all pending response awaiters have been cancelled and additional pending
+	 * responses will not be created due to the group being released, it is guaranteed no more
+	 * responses will be added to `ready_ikv_resps`.
+	 */
+	list_for_each_entry_safe(cur, nxt, &group->ready_ikv_resps, list_entry) {
+		list_del(&cur->list_entry);
+		/*
+		 * Clean-up the mailbox protocol's async response structure.
+		 * This will also free the edgetpu_ikv_response.
+		 */
+		gcip_mailbox_release_awaiter(cur->awaiter);
+	}
+
+	mutex_unlock(&group->ikv_resp_lock);
+}
+
 void edgetpu_group_notify(struct edgetpu_device_group *group, uint event_id)
 {
 	if (event_id >= EDGETPU_EVENT_COUNT)
@@ -236,7 +293,10 @@ void edgetpu_group_notify(struct edgetpu_device_group *group, uint event_id)
  */
 static void edgetpu_device_group_release(struct edgetpu_device_group *group)
 {
+	lockdep_assert_held(&group->lock);
+
 	edgetpu_group_clear_events(group);
+	edgetpu_group_clear_responses(group);
 	if (is_finalized_or_errored(group)) {
 		edgetpu_device_group_kci_leave(group);
 		/*
@@ -422,6 +482,9 @@ edgetpu_device_group_alloc(struct edgetpu_client *client,
 	group->status = EDGETPU_DEVICE_GROUP_WAITING;
 	group->etdev = client->etdev;
 	group->vii.etdev = client->etdev;
+	INIT_LIST_HEAD(&group->ready_ikv_resps);
+	INIT_LIST_HEAD(&group->pending_ikv_resps);
+	mutex_init(&group->ikv_resp_lock);
 	mutex_init(&group->lock);
 	rwlock_init(&group->events.lock);
 	INIT_LIST_HEAD(&group->dma_fence_list);
@@ -437,11 +500,6 @@ edgetpu_device_group_alloc(struct edgetpu_client *client,
 		goto error_put_group;
 	}
 	group->etdomain = etdomain;
-	if (etdomain->token != EDGETPU_DOMAIN_TOKEN_END)
-		group->context_id =
-			EDGETPU_CONTEXT_DOMAIN_TOKEN | etdomain->token;
-	else
-		group->context_id = EDGETPU_CONTEXT_INVALID;
 
 	/* adds @client as the only member */
 	ret = edgetpu_device_group_add(group, client);
@@ -507,10 +565,8 @@ err_remove_detach_mailbox:
 		edgetpu_group_detach_mailbox_locked(group);
 
 err_detach_mmu_domain:
-	if (!group->mailbox_detachable) {
+	if (!group->mailbox_detachable)
 		edgetpu_mmu_detach_domain(group->etdev, group->etdomain);
-		group->context_id = EDGETPU_CONTEXT_INVALID;
-	}
 
 err_unlock:
 	mutex_unlock(&group->lock);
@@ -549,7 +605,7 @@ bool edgetpu_set_group_join_lockout(struct edgetpu_dev *etdev, bool lockout)
 static void edgetpu_unmap_node(struct edgetpu_mapping *map)
 {
 	struct edgetpu_device_group *group = map->priv;
-	enum edgetpu_context_id ctx_id = edgetpu_group_context_id_locked(group);
+	struct edgetpu_iommu_domain *etdomain = edgetpu_group_domain_locked(group);
 	struct edgetpu_host_map *hmap =
 		container_of(map, struct edgetpu_host_map, map);
 	struct sg_page_iter sg_iter;
@@ -559,7 +615,7 @@ static void edgetpu_unmap_node(struct edgetpu_mapping *map)
 		  &map->device_address);
 
 	if (map->device_address)
-		edgetpu_mmu_unmap(group->etdev, map, ctx_id);
+		edgetpu_mmu_unmap(group->etdev, map, etdomain);
 
 	for_each_sg_page(map->sgt.sgl, &sg_iter, map->sgt.orig_nents, 0) {
 		struct page *page = sg_page_iter_page(&sg_iter);
@@ -898,7 +954,7 @@ int edgetpu_device_group_map(struct edgetpu_device_group *group,
 	edgetpu_map_flag_t flags = arg->flags;
 	struct edgetpu_host_map *hmap;
 	struct edgetpu_mapping *map = NULL;
-	enum edgetpu_context_id context_id;
+	struct edgetpu_iommu_domain *etdomain;
 	const u32 mmu_flags = map_to_mmu_flags(flags) | EDGETPU_MMU_HOST;
 	int i;
 	bool readonly;
@@ -931,13 +987,13 @@ int edgetpu_device_group_map(struct edgetpu_device_group *group,
 	mmgrab(current->mm);
 	hmap->owning_mm = current->mm;
 	mutex_lock(&group->lock);
-	context_id = edgetpu_group_context_id_locked(group);
+	etdomain = edgetpu_group_domain_locked(group);
 	if (!edgetpu_device_group_is_finalized(group)) {
 		ret = edgetpu_group_errno(group);
 		mutex_unlock(&group->lock);
 		goto error;
 	}
-	ret = edgetpu_mmu_map(group->etdev, map, context_id, mmu_flags);
+	ret = edgetpu_mmu_map(group->etdev, map, etdomain, mmu_flags);
 	mutex_unlock(&group->lock);
 	if (ret) {
 		etdev_err(group->etdev, "map %lldB failed: %d (already mapped %zdB)",
@@ -981,7 +1037,10 @@ int edgetpu_device_group_unmap(struct edgetpu_device_group *group,
 	}
 
 	edgetpu_mapping_unlink(&group->host_mappings, map);
-	map->dma_attrs = map_to_dma_attr(flags, false);
+
+	if (flags & EDGETPU_MAP_SKIP_CPU_SYNC)
+		map->dma_attrs |= DMA_ATTR_SKIP_CPU_SYNC;
+
 	edgetpu_unmap_node(map);
 	edgetpu_mapping_unlock(&group->host_mappings);
 	return 0;
@@ -1038,8 +1097,7 @@ void edgetpu_mappings_clear_group(struct edgetpu_device_group *group)
 void edgetpu_group_mappings_show(struct edgetpu_device_group *group,
 				 struct seq_file *s)
 {
-	enum edgetpu_context_id context =
-		edgetpu_group_context_id_locked(group);
+	struct edgetpu_iommu_domain *etdomain = edgetpu_group_domain_locked(group);
 
 	seq_printf(s, "group %u", group->workload_id);
 	switch (group->status) {
@@ -1054,13 +1112,10 @@ void edgetpu_group_mappings_show(struct edgetpu_device_group *group,
 		return;
 	}
 
-	if (context == EDGETPU_CONTEXT_INVALID)
-		seq_puts(s, " context (none):\n");
-	else if (context & EDGETPU_CONTEXT_DOMAIN_TOKEN)
-		seq_printf(s, " context detached %#x:\n",
-			   context & ~(EDGETPU_CONTEXT_DOMAIN_TOKEN));
+	if (edgetpu_mmu_domain_detached(etdomain))
+		seq_puts(s, " pasid detached:\n");
 	else
-		seq_printf(s, " context mbox %d:\n", context);
+		seq_printf(s, " pasid %u:\n", etdomain->pasid);
 
 	if (group->host_mappings.count) {
 		seq_printf(s, "host buffer mappings (%zd):\n",
@@ -1085,6 +1140,72 @@ void edgetpu_group_mappings_show(struct edgetpu_device_group *group,
 	}
 }
 
+int edgetpu_device_group_send_vii_command(struct edgetpu_device_group *group,
+					  struct edgetpu_vii_command *cmd)
+{
+	struct edgetpu_dev *etdev = group->etdev;
+	struct edgetpu_iommu_domain *etdomain;
+	int ret = 0;
+
+	mutex_lock(&group->lock);
+	if (!edgetpu_device_group_is_finalized(group) || edgetpu_device_group_is_errored(group)) {
+		etdev_err(etdev, "Unable to send VII command, device group is %s",
+			  edgetpu_device_group_is_errored(group) ? "errored" : "not finalized");
+		ret = -EINVAL;
+		goto unlock_group;
+	}
+
+	etdomain = edgetpu_group_domain_locked(group);
+	if (!etdomain) {
+		etdev_err(etdev, "Unable to send VII command, device group has no domain");
+		ret = -EINVAL;
+		goto unlock_group;
+	}
+
+	cmd->client_id = etdomain->pasid;
+	ret = edgetpu_ikv_send_cmd(etdev->etikv, cmd, &group->pending_ikv_resps,
+				   &group->ready_ikv_resps, &group->ikv_resp_lock, group);
+
+unlock_group:
+	mutex_unlock(&group->lock);
+	return ret;
+}
+
+int edgetpu_device_group_get_vii_response(struct edgetpu_device_group *group,
+					  struct edgetpu_vii_response *resp)
+{
+	struct edgetpu_ikv_response *ikv_resp;
+	int ret = 0;
+
+	mutex_lock(&group->lock);
+	if (!edgetpu_device_group_is_finalized(group) || edgetpu_device_group_is_errored(group)) {
+		ret = -EINVAL;
+		goto unlock_group;
+	}
+
+	mutex_lock(&group->ikv_resp_lock);
+
+	if (list_empty(&group->ready_ikv_resps)) {
+		ret = -ENOENT;
+		mutex_unlock(&group->ikv_resp_lock);
+		goto unlock_group;
+	}
+
+	ikv_resp = list_first_entry(&group->ready_ikv_resps, typeof(struct edgetpu_ikv_response),
+				    list_entry);
+	list_del(&ikv_resp->list_entry);
+
+	mutex_unlock(&group->ikv_resp_lock);
+
+	memcpy(resp, &ikv_resp->resp, sizeof(*resp));
+	/* This will also free `ikv_resp` */
+	gcip_mailbox_release_awaiter(ikv_resp->awaiter);
+
+unlock_group:
+	mutex_unlock(&group->lock);
+	return ret;
+}
+
 int edgetpu_mmap_csr(struct edgetpu_device_group *group,
 		     struct vm_area_struct *vma, bool is_external)
 {
@@ -1094,6 +1215,8 @@ int edgetpu_mmap_csr(struct edgetpu_device_group *group,
 
 	if (is_external && !uid_eq(current_euid(), GLOBAL_ROOT_UID))
 		return -EPERM;
+	if (!is_external && etdev->mailbox_manager->use_ikv)
+		return -EOPNOTSUPP;
 
 	mutex_lock(&group->lock);
 	if (!edgetpu_group_finalized_and_attached(group)) {
@@ -1132,6 +1255,8 @@ int edgetpu_mmap_queue(struct edgetpu_device_group *group, enum gcip_mailbox_que
 
 	if (is_external && !uid_eq(current_euid(), GLOBAL_ROOT_UID))
 		return -EPERM;
+	if (!is_external && etdev->mailbox_manager->use_ikv)
+		return -EOPNOTSUPP;
 
 	mutex_lock(&group->lock);
 	if (!edgetpu_group_finalized_and_attached(group)) {
@@ -1250,10 +1375,7 @@ void edgetpu_group_detach_mailbox_locked(struct edgetpu_device_group *group)
 	if (group->mailbox_detachable)
 		edgetpu_mmu_detach_domain(group->etdev, group->etdomain);
 
-	if (group->etdomain->token != EDGETPU_DOMAIN_TOKEN_END)
-		group->context_id = EDGETPU_CONTEXT_DOMAIN_TOKEN | group->etdomain->token;
-	else
-		group->context_id = EDGETPU_CONTEXT_INVALID;
+	group->mailbox_attached = false;
 }
 
 void edgetpu_group_close_and_detach_mailbox(struct edgetpu_device_group *group)
@@ -1291,7 +1413,8 @@ int edgetpu_group_attach_mailbox_locked(struct edgetpu_device_group *group)
 			edgetpu_mmu_detach_domain(group->etdev, group->etdomain);
 		return ret;
 	}
-	group->context_id = group->vii.mailbox->mailbox_id;
+
+	group->mailbox_attached = true;
 
 	return 0;
 }
