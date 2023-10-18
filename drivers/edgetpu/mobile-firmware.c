@@ -8,7 +8,6 @@
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
 #include <linux/firmware.h>
-#include <linux/gsa/gsa_tpu.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/types.h>
@@ -20,6 +19,7 @@
 #include "edgetpu-config.h"
 #include "edgetpu-firmware.h"
 #include "edgetpu-firmware-util.h"
+#include "edgetpu-gsa.h"
 #include "edgetpu-ikv.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-iremap-pool.h"

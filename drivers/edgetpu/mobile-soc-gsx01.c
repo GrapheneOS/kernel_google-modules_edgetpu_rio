@@ -8,7 +8,6 @@
 #include <linux/acpm_dvfs.h>
 #include <linux/device.h>
 #include <linux/errno.h>
-#include <linux/gsa/gsa_tpu.h>
 #include <linux/interrupt.h>
 #include <linux/notifier.h>
 #include <linux/platform_device.h>
@@ -23,6 +22,7 @@
 
 #include "edgetpu-internal.h"
 #include "edgetpu-firmware.h"
+#include "edgetpu-gsa.h"
 #include "edgetpu-kci.h"
 #include "edgetpu-mobile-platform.h"
 #include "edgetpu-soc.h"

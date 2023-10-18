@@ -31,6 +31,16 @@ enum fault_inject_status {
 	GCIP_FAULT_INJECT_STATUS_UNSUPPORTED
 };
 
+/* Show fault injection progress. */
+enum fault_inject_progress {
+	/* Haven't set the fault injection yet. */
+	GCIP_FAULT_INJECT_PROGRESS_NONE,
+	/* Fault injection is set but haven't sent to the firmware. */
+	GCIP_FAULT_INJECT_PROGRESS_PENDING,
+	/* Fault injection is sent. */
+	GCIP_FAULT_INJECT_PROGRESS_INJECTED
+};
+
 /**
  * struct gcip_fault_inject - The container of fault injection data.
  * @dev: The device pointer used to allocate local memory and print messages.
@@ -38,11 +48,11 @@ enum fault_inject_status {
  * @pm: The power management object used to check mcu status.
  * @send_kci: The callback function used to send KCI.
  * @kci_data: The data that will be passed into send_kci.
- * @lock: Protects opaque and is_pending.
+ * @lock: Protects opaque and progress.
  * @opaque: It contains the fault injection data and will be read or write by runtime via debugfs.
  *          The callback function send_kci should send FAULT_INJECTION with this to the firmware.
- * @is_pending: This flag will be set to true if the fault has not been injected.
- * @fw_support_status: This flag records whether the firmware supports the fault injection.
+ * @progress: This field records the fault injection progress in the KD side.
+ * @fw_support_status: This field records whether the firmware supports the fault injection.
  */
 struct gcip_fault_inject {
 	struct device *dev;
@@ -53,7 +63,8 @@ struct gcip_fault_inject {
 
 	struct mutex lock;
 	uint32_t opaque[GCIP_FAULT_INJECT_OPAQUE_SIZE];
-	bool is_pending;
+	enum fault_inject_progress progress;
+
 	enum fault_inject_status fw_support_status;
 };
 

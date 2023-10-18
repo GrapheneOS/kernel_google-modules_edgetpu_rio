@@ -6,7 +6,6 @@
  */
 
 #include <linux/device.h>
-#include <linux/gsa/gsa_tpu.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -20,6 +19,7 @@
 #include "edgetpu-config.h"
 #include "edgetpu-debug-dump.h"
 #include "edgetpu-dmabuf.h"
+#include "edgetpu-gsa.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-iremap-pool.h"
 #include "edgetpu-mmu.h"

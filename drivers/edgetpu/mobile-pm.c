@@ -7,7 +7,6 @@
 
 #include <linux/atomic.h>
 #include <linux/delay.h>
-#include <linux/gsa/gsa_tpu.h>
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
 
@@ -15,6 +14,7 @@
 
 #include "edgetpu-config.h"
 #include "edgetpu-firmware.h"
+#include "edgetpu-gsa.h"
 #include "edgetpu-ikv.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-kci.h"

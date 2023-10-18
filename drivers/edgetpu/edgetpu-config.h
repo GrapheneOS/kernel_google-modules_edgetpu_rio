@@ -30,6 +30,10 @@
 #define HAS_DETACHABLE_IOMMU_DOMAINS	1
 #endif
 
+#ifndef EDGETPU_HAS_GSA
+#define EDGETPU_HAS_GSA 1
+#endif
+
 /* Uses a smaller size for unittests to avoid DMA warnings. */
 #if IS_ENABLED(CONFIG_EDGETPU_TEST)
 #undef EDGETPU_DEBUG_DUMP_MEM_SIZE
