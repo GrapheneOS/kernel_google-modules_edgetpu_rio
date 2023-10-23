@@ -25,9 +25,9 @@
 #define EDGETPU_NUM_CORES 1
 #endif
 
-/* Default to disabling in-kernel VII if not explicitly enabled */
-#ifndef EDGETPU_USE_IKV
-#define EDGETPU_USE_IKV 0
+/* By default IOMMU domains can be modified while detached from a mailbox.*/
+#ifndef HAS_DETACHABLE_IOMMU_DOMAINS
+#define HAS_DETACHABLE_IOMMU_DOMAINS	1
 #endif
 
 /* Uses a smaller size for unittests to avoid DMA warnings. */

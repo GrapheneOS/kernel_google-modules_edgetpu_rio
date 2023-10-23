@@ -15,6 +15,7 @@
 #include "edgetpu-device-group.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-mailbox.h"
+#include "edgetpu-mobile-platform.h"
 
 static enum edgetpu_ext_mailbox_type
 edgetpu_external_client_to_mailbox_type(enum edgetpu_ext_client_type client_type)
@@ -169,6 +170,7 @@ static int edgetpu_external_start_offload(struct device *edgetpu_dev,
 					  struct edgetpu_ext_client_info *client_info,
 					  struct edgetpu_ext_offload_info *offload_info)
 {
+	struct edgetpu_mobile_platform_dev *etmdev;
 	struct edgetpu_client *client;
 	struct edgetpu_device_group *group;
 	struct file *file = client_info->tpu_file;
@@ -207,7 +209,11 @@ static int edgetpu_external_start_offload(struct device *edgetpu_dev,
 		goto out_group_unlock;
 	}
 
-	offload_info->client_id = etdomain->pasid;
+	etmdev = to_mobile_dev(client->etdev);
+	if (client_info->flags & EDGETPU_EXT_SECURE_CLIENT && client == etmdev->secure_client)
+		offload_info->client_id = EDGETPU_EXT_TZ_CONTEXT_ID;
+	else
+		offload_info->client_id = etdomain->pasid;
 
 out_group_unlock:
 	mutex_unlock(&group->lock);

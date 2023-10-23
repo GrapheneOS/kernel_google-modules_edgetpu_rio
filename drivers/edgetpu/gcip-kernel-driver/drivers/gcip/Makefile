@@ -4,7 +4,7 @@
 #
 
 CONFIG_GCIP		?= m
-obj-$(CONFIG_GCIP)	+= gcip.o
+obj-$(CONFIG_GCIP)	+= gcip.o iif/
 
 gcip-objs		:= gcip-alloc-helper.o \
 			   gcip-dma-fence.o \

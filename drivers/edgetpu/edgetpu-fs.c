@@ -615,13 +615,21 @@ static int edgetpu_ioctl_vii_command(struct edgetpu_client *client,
 
 	trace_edgetpu_vii_command_start(client);
 
-	if (!lock_check_group_member(client))
-		return -EINVAL;
+	if (!client->etdev->mailbox_manager->use_ikv) {
+		ret = -EOPNOTSUPP;
+		goto out;
+	}
+
+	if (!lock_check_group_member(client)) {
+		ret = -EINVAL;
+		goto out;
+	}
 
 	ret = edgetpu_device_group_send_vii_command(client->group, &command.command);
 
 	UNLOCK(client);
 
+out:
 	trace_edgetpu_vii_command_end(client, &command, ret);
 	return ret;
 }
@@ -634,19 +642,27 @@ static int edgetpu_ioctl_vii_response(struct edgetpu_client *client,
 
 	trace_edgetpu_vii_response_start(client);
 
-	if (!lock_check_group_member(client))
-		return -EINVAL;
+	if (!client->etdev->mailbox_manager->use_ikv) {
+		ret = -EOPNOTSUPP;
+		goto out_end_trace;
+	}
+
+	if (!lock_check_group_member(client)) {
+		ret = -EINVAL;
+		goto out_end_trace;
+	}
 
 	ret = edgetpu_device_group_get_vii_response(client->group, &ibuf.response);
 	if (ret)
-		goto out;
+		goto out_unlock;
 
 	if (copy_to_user(argp, &ibuf, sizeof(ibuf)))
 		ret = -EFAULT;
 
-out:
+out_unlock:
 	UNLOCK(client);
 
+out_end_trace:
 	trace_edgetpu_vii_response_end(client, &ibuf, ret);
 	return ret;
 }

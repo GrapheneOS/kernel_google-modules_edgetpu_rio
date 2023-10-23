@@ -12,7 +12,6 @@
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/mmzone.h> /* MAX_ORDER_NR_PAGES */
-#include <linux/moduleparam.h>
 #include <linux/slab.h>
 
 #include <gcip/gcip-pm.h>
@@ -26,9 +25,6 @@
 #include "edgetpu-sw-watchdog.h"
 #include "edgetpu-wakelock.h"
 #include "edgetpu.h"
-
-static bool disable_ikv = false;
-module_param(disable_ikv, bool, 0660);
 
 /* Sets mailbox->cmd_queue_tail and corresponding CSR on device. */
 static void edgetpu_mailbox_set_cmd_queue_tail(struct edgetpu_mailbox *mailbox,
@@ -479,7 +475,7 @@ edgetpu_mailbox_create_mgr(struct edgetpu_dev *etdev,
 {
 	struct edgetpu_mailbox_manager *mgr;
 	uint total = 0;
-	bool use_ikv = desc->use_ikv && !disable_ikv;
+	bool use_ikv = desc->use_ikv;
 
 	total += 1; /* KCI mailbox */
 	total += use_ikv ? 1 : 0;

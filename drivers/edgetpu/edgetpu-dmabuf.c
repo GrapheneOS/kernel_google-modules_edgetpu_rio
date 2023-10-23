@@ -13,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/ktime.h>
 #include <linux/list.h>
+#include <linux/module.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
@@ -475,6 +476,4 @@ int edgetpu_sync_fence_debugfs_show(struct seq_file *s, void *unused)
 	return 0;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,16,0)
 MODULE_IMPORT_NS(DMA_BUF);
-#endif

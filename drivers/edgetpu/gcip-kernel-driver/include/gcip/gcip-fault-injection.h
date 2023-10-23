@@ -19,6 +19,18 @@
 #define GCIP_FAULT_INJECT_OPAQUE_SIZE 16
 #define FAULT_INJECT_BUF_SIZE 256
 
+/* Show immediate fault injection supporting status. */
+enum fault_inject_status {
+	/* Haven't known the fault injection status yet. */
+	GCIP_FAULT_INJECT_STATUS_UNKNOWN,
+	/* Encountered errors when sending a fault injection request. */
+	GCIP_FAULT_INJECT_STATUS_ERROR,
+	/* Fault injection is supported. */
+	GCIP_FAULT_INJECT_STATUS_SUPPORTED,
+	/* Fault injection is not supported by the firmware side. */
+	GCIP_FAULT_INJECT_STATUS_UNSUPPORTED
+};
+
 /**
  * struct gcip_fault_inject - The container of fault injection data.
  * @dev: The device pointer used to allocate local memory and print messages.
@@ -30,6 +42,7 @@
  * @opaque: It contains the fault injection data and will be read or write by runtime via debugfs.
  *          The callback function send_kci should send FAULT_INJECTION with this to the firmware.
  * @is_pending: This flag will be set to true if the fault has not been injected.
+ * @fw_support_status: This flag records whether the firmware supports the fault injection.
  */
 struct gcip_fault_inject {
 	struct device *dev;
@@ -41,6 +54,7 @@ struct gcip_fault_inject {
 	struct mutex lock;
 	uint32_t opaque[GCIP_FAULT_INJECT_OPAQUE_SIZE];
 	bool is_pending;
+	enum fault_inject_status fw_support_status;
 };
 
 /**

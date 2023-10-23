@@ -430,6 +430,7 @@ static int gcip_pin_user_pages_fast(struct page **pages, unsigned long start_add
 
 /**
  * gcip_pin_user_pages() - Try pin_user_pages_fast and try again with pin_user_pages if failed.
+ * @dev: device for which the pages are being pinned, for logs.
  * @pages: The allocated pages to be pinned.
  * @start_addr: The starting user address, must be page-aligned.
  * @num_pages: Same as gcip_iommu_alloc_and_pin_user_pages.
@@ -914,6 +915,9 @@ struct page **gcip_iommu_alloc_and_pin_user_pages(struct device *dev, u64 host_a
 	if (ret == num_pages)
 		return pages;
 
+	if (!(*gup_flags & FOLL_WRITE))
+		goto err_pin_read_only;
+
 	dev_dbg(dev, "pin failed with fault, assuming buffer is read-only");
 	*gup_flags &= ~FOLL_WRITE;
 
@@ -922,6 +926,7 @@ struct page **gcip_iommu_alloc_and_pin_user_pages(struct device *dev, u64 host_a
 	if (ret == num_pages)
 		return pages;
 
+err_pin_read_only:
 	kvfree(pages);
 	dev_err(dev, "Pin user pages failed: user_add=%#llx, num_pages=%u, %s, ret=%d\n",
 		host_address, num_pages, ((*gup_flags & FOLL_WRITE) ? "writeable" : "read-only"),

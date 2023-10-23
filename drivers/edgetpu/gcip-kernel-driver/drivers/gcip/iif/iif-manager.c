@@ -1,0 +1,50 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * GCIP-integrated IIF driver manager.
+ *
+ * Copyright (C) 2023 Google LLC
+ */
+
+#include <linux/idr.h>
+#include <linux/kref.h>
+#include <linux/slab.h>
+#include <linux/version.h>
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 16, 0)
+#include <linux/container_of.h>
+#endif
+
+#include <gcip/iif/iif-manager.h>
+
+static void iif_manager_destroy(struct kref *kref)
+{
+	struct iif_manager *mgr = container_of(kref, struct iif_manager, kref);
+
+	ida_destroy(&mgr->idp);
+	kfree(mgr);
+}
+
+struct iif_manager *iif_manager_init(void)
+{
+	struct iif_manager *mgr;
+
+	mgr = kzalloc(sizeof(*mgr), GFP_KERNEL);
+	if (!mgr)
+		return ERR_PTR(-ENOMEM);
+
+	kref_init(&mgr->kref);
+	ida_init(&mgr->idp);
+
+	return mgr;
+}
+
+struct iif_manager *iif_manager_get(struct iif_manager *mgr)
+{
+	kref_get(&mgr->kref);
+	return mgr;
+}
+
+void iif_manager_put(struct iif_manager *mgr)
+{
+	kref_put(&mgr->kref, iif_manager_destroy);
+}

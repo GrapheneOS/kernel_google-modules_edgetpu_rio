@@ -11,6 +11,7 @@
 #include <linux/uaccess.h>
 
 #include <gcip/gcip-fault-injection.h>
+#include <gcip/gcip-kci.h>
 #include <gcip/gcip-pm.h>
 
 static int gcip_fault_inject_send_locked(struct gcip_fault_inject *injection)
@@ -32,14 +33,23 @@ static int gcip_fault_inject_send_locked(struct gcip_fault_inject *injection)
 	}
 	kfree(buf);
 
+	injection->is_pending = false;
+
 	ret = injection->send_kci(injection);
-	if (ret >= 0) {
-		injection->is_pending = false;
-		if (ret > 0)
+	if (!ret) {
+		injection->fw_support_status = GCIP_FAULT_INJECT_STATUS_SUPPORTED;
+	} else if (ret == GCIP_KCI_ERROR_UNIMPLEMENTED) {
+		injection->fw_support_status = GCIP_FAULT_INJECT_STATUS_UNSUPPORTED;
+	} else {
+		injection->fw_support_status = GCIP_FAULT_INJECT_STATUS_ERROR;
+		if (ret > 0) {
 			dev_warn(injection->dev,
 				 "Fault injection KCI not accepted by the firmware: %d\n", ret);
-	} else {
-		dev_err(injection->dev, "Failed to send the fault injection KCI: %d", ret);
+		} else {
+			/* Keep pending if the failure was in the driver side. */
+			injection->is_pending = true;
+			dev_warn(injection->dev, "Failed to send the fault injection KCI: %d", ret);
+		}
 	}
 
 	return ret;
@@ -116,6 +126,20 @@ out:
 	return ret;
 }
 
+/* Write the fault injection progress rate and content. */
+static void write_injection_content(struct gcip_fault_inject *injection, char *output, loff_t *offp,
+				    const size_t buf_size)
+{
+	int i;
+
+	*offp += scnprintf(output + *offp, buf_size - *offp, "%s\n",
+			   injection->is_pending ? "pending" : "injected");
+	for (i = 0; i < GCIP_FAULT_INJECT_OPAQUE_SIZE; i++)
+		*offp += scnprintf(output + *offp, buf_size - *offp, "%.*s%u", i, " ",
+				   injection->opaque[i]);
+	*offp += scnprintf(output + *offp, buf_size - *offp, "\n");
+}
+
 /**
  * gcip_fault_injection_get() - Get the fault-injection values.
  * @filp: The file pointer.
@@ -130,7 +154,6 @@ static ssize_t gcip_fault_injection_get(struct file *filp, char __user *buff, si
 {
 	struct gcip_fault_inject *injection = filp->f_inode->i_private;
 	const size_t buf_size = min_t(size_t, count, FAULT_INJECT_BUF_SIZE);
-	int i;
 	int ret;
 	char *output;
 
@@ -143,12 +166,25 @@ static ssize_t gcip_fault_injection_get(struct file *filp, char __user *buff, si
 
 	mutex_lock(&injection->lock);
 
-	*offp += scnprintf(output + *offp, buf_size - *offp, "%s\n",
-			   injection->is_pending ? "pending" : "injected");
-	for (i = 0; i < GCIP_FAULT_INJECT_OPAQUE_SIZE; i++)
-		*offp += scnprintf(output + *offp, buf_size - *offp, "%.*s%u", i, " ",
-				   injection->opaque[i]);
-	*offp += scnprintf(output + *offp, buf_size - *offp, "\n");
+	switch (injection->fw_support_status) {
+	case GCIP_FAULT_INJECT_STATUS_UNKNOWN:
+		if (injection->is_pending) {
+			*offp += scnprintf(output + *offp, buf_size - *offp, "unknown\n");
+			write_injection_content(injection, output, offp, buf_size);
+		} else {
+			*offp += scnprintf(output + *offp, buf_size - *offp, "none\n");
+		}
+		break;
+	case GCIP_FAULT_INJECT_STATUS_ERROR:
+		*offp += scnprintf(output + *offp, buf_size - *offp, "error\n");
+		break;
+	case GCIP_FAULT_INJECT_STATUS_UNSUPPORTED:
+		*offp += scnprintf(output + *offp, buf_size - *offp, "unsupported\n");
+		break;
+	default:
+		*offp += scnprintf(output + *offp, buf_size - *offp, "supported\n");
+		write_injection_content(injection, output, offp, buf_size);
+	}
 
 	mutex_unlock(&injection->lock);
 
@@ -177,6 +213,7 @@ struct gcip_fault_inject *gcip_fault_inject_create(const struct gcip_fault_injec
 	injection->pm = args->pm;
 	injection->send_kci = args->send_kci;
 	injection->kci_data = args->kci_data;
+	injection->fw_support_status = GCIP_FAULT_INJECT_STATUS_UNKNOWN;
 
 	mutex_init(&injection->lock);
 	injection->d_entry = debugfs_create_file(DEBUGFS_FAULT_INJECTION, 0600, args->parent_dentry,

@@ -491,8 +491,10 @@ edgetpu_device_group_alloc(struct edgetpu_client *client,
 	edgetpu_mapping_init(&group->host_mappings);
 	edgetpu_mapping_init(&group->dmabuf_mappings);
 	group->mbox_attr = *attr;
+#if HAS_DETACHABLE_IOMMU_DOMAINS
 	if (attr->priority & EDGETPU_PRIORITY_DETACHABLE)
 		group->mailbox_detachable = true;
+#endif
 
 	etdomain = edgetpu_mmu_alloc_domain(group->etdev);
 	if (!etdomain) {
@@ -660,159 +662,6 @@ size_t edgetpu_group_mappings_total_size(struct edgetpu_device_group *group)
 }
 
 /*
- * Pins the user-space address @arg->host_address and returns the pinned pages.
- * @pnum_pages is set to the number of pages.
- *
- * Returns -errno if failed on pinning @size bytes.
- */
-static struct page **edgetpu_pin_user_pages(struct edgetpu_device_group *group,
-					    struct edgetpu_map_ioctl *arg,
-					    uint *pnum_pages, bool *preadonly)
-{
-	u64 host_addr = untagged_addr(arg->host_address);
-	u64 size = arg->size;
-	uint num_pages;
-	ulong offset;
-	struct edgetpu_dev *etdev = group->etdev;
-	struct page **pages;
-	int i;
-	int ret;
-	struct vm_area_struct *vma;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
-	struct vm_area_struct **vmas;
-#endif
-	unsigned int foll_flags = FOLL_LONGTERM | FOLL_WRITE;
-
-	if (size == 0)
-		return ERR_PTR(-EINVAL);
-	if (!access_ok((const void *)host_addr, size)) {
-		etdev_err(etdev, "invalid address range in buffer map request");
-		return ERR_PTR(-EFAULT);
-	}
-	offset = host_addr & (PAGE_SIZE - 1);
-	num_pages = DIV_ROUND_UP((size + offset), PAGE_SIZE);
-	if (num_pages * PAGE_SIZE < size + offset)
-		return ERR_PTR(-EINVAL);
-	etdev_dbg(etdev, "%s: hostaddr=%#llx pages=%u", __func__, host_addr, num_pages);
-	/*
-	 * "num_pages" is decided from user-space arguments, don't show warnings
-	 * when facing malicious input.
-	 */
-	pages = kvmalloc((num_pages * sizeof(*pages)), GFP_KERNEL | __GFP_NOWARN);
-	if (!pages) {
-		etdev_err(etdev, "out of memory allocating pages (%lu bytes)",
-			  num_pages * sizeof(*pages));
-		return ERR_PTR(-ENOMEM);
-	}
-	/*
-	 * The host pages might be read-only and could fail if we attempt to pin
-	 * it with FOLL_WRITE.
-	 * default to read/write if find_extend_vma returns NULL
-	 */
-	mmap_read_lock(current->mm);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 14, 1)
-	vma = find_extend_vma(current->mm, host_addr & PAGE_MASK);
-#else
-	vma = vma_lookup(current->mm, host_addr & PAGE_MASK);
-#endif
-	if (vma && !(vma->vm_flags & VM_WRITE)) {
-		foll_flags &= ~FOLL_WRITE;
-		*preadonly = true;
-	} else {
-		*preadonly = false;
-	}
-	mmap_read_unlock(current->mm);
-
-	/* Try fast call first, in case it's actually faster. */
-	ret = pin_user_pages_fast(host_addr & PAGE_MASK, num_pages, foll_flags,
-				  pages);
-	if (ret == num_pages) {
-		*pnum_pages = num_pages;
-		atomic64_add(num_pages, &current->mm->pinned_vm);
-		return pages;
-	}
-	if (ret == -EFAULT && !*preadonly) {
-		foll_flags &= ~FOLL_WRITE;
-		*preadonly = true;
-		ret = pin_user_pages_fast(host_addr & PAGE_MASK, num_pages,
-					  foll_flags, pages);
-	}
-	if (ret < 0) {
-		etdev_dbg(etdev, "pin_user_pages failed %u:%pK-%u: %d",
-			  group->workload_id, (void *)host_addr, num_pages,
-			  ret);
-		if (ret == -EFAULT)
-			etdev_err(etdev,
-				  "bad address locking %u pages for %s",
-				  num_pages, *preadonly ? "read" : "write");
-		if (ret != -ENOMEM) {
-			num_pages = 0;
-			goto error;
-		}
-	}
-	etdev_dbg(etdev,
-		  "pin_user_pages_fast error %u:%pK npages=%u ret=%d",
-		  group->workload_id, (void *)host_addr, num_pages,
-		  ret);
-	/* Unpin any partial mapping and start over again. */
-	for (i = 0; i < ret; i++)
-		unpin_user_page(pages[i]);
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
-	/* Allocate our own vmas array non-contiguous. */
-	vmas = kvmalloc((num_pages * sizeof(*vmas)), GFP_KERNEL | __GFP_NOWARN);
-	if (!vmas) {
-		etdev_err(etdev, "out of memory allocating vmas (%lu bytes)",
-			  num_pages * sizeof(*pages));
-		kvfree(pages);
-		return ERR_PTR(-ENOMEM);
-	}
-#endif
-	mmap_read_lock(current->mm);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
-	ret = pin_user_pages(host_addr & PAGE_MASK, num_pages, foll_flags, pages, vmas);
-#else
-	ret = pin_user_pages(host_addr & PAGE_MASK, num_pages, foll_flags, pages);
-#endif
-	mmap_read_unlock(current->mm);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
-	kvfree(vmas);
-#endif
-	if (ret < 0) {
-		etdev_dbg(etdev, "pin_user_pages failed %u:%pK-%u: %d",
-			  group->workload_id, (void *)host_addr, num_pages,
-			  ret);
-		if (ret == -ENOMEM)
-			etdev_err(etdev,
-				  "system out of memory locking %u pages",
-				  num_pages);
-		num_pages = 0;
-		goto error;
-	}
-	if (ret < num_pages) {
-		etdev_dbg(etdev,
-			  "pin_user_pages partial %u:%pK npages=%u pinned=%d",
-			  group->workload_id, (void *)host_addr, num_pages,
-			  ret);
-		etdev_err(etdev, "can only lock %u of %u pages requested",
-			  (unsigned int)ret, num_pages);
-		num_pages = ret;
-		ret = -EFAULT;
-		goto error;
-	}
-	atomic64_add(num_pages, &current->mm->pinned_vm);
-	*pnum_pages = num_pages;
-	return pages;
-
-error:
-	for (i = 0; i < num_pages; i++)
-		unpin_user_page(pages[i]);
-	kvfree(pages);
-
-	return ERR_PTR(ret);
-}
-
-/*
  * Allocates an edgetpu_host_map with the user-space address @host_addr.
  */
 static struct edgetpu_host_map *
@@ -957,17 +806,32 @@ int edgetpu_device_group_map(struct edgetpu_device_group *group,
 	struct edgetpu_iommu_domain *etdomain;
 	const u32 mmu_flags = map_to_mmu_flags(flags) | EDGETPU_MMU_HOST;
 	int i;
-	bool readonly;
 	tpu_addr_t tpu_addr;
+	ulong offset;
+	uint gup_flags = gcip_iommu_get_gup_flags(host_addr, group->etdev->dev);
 
 	if (!valid_dma_direction(flags & EDGETPU_MAP_DIR_MASK))
 		return -EINVAL;
 	/* Pin user pages before holding any lock. */
-	pages = edgetpu_pin_user_pages(group, arg, &num_pages, &readonly);
-	if (IS_ERR(pages))
-		return PTR_ERR(pages);
+
+	ret = gcip_iommu_get_offset_npages(group->etdev->dev, host_addr, arg->size, &offset,
+					   &num_pages);
+	if (ret) {
+		etdev_err(group->etdev, "Buffer size overflow: size=%llu", arg->size);
+		return ret;
+	}
+
+	pages = gcip_iommu_alloc_and_pin_user_pages(group->etdev->dev, host_addr, num_pages,
+						    &gup_flags, NULL);
+	if (IS_ERR(pages)) {
+		ret = PTR_ERR(pages);
+		etdev_err(group->etdev, "Failed to pin user pages (ret=%d)\n", ret);
+		return ret;
+	}
+	atomic64_add(num_pages, &current->mm->pinned_vm);
+
 	/* If the host pages are read-only, fallback to use DMA_TO_DEVICE. */
-	if (readonly) {
+	if (!(gup_flags & FOLL_WRITE)) {
 		flags &= ~EDGETPU_MAP_DIR_MASK;
 		flags |= EDGETPU_MAP_DMA_TO_DEVICE;
 	}

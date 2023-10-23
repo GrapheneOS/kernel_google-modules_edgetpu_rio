@@ -15,6 +15,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
+#include <linux/moduleparam.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
@@ -39,6 +40,18 @@
 #include "edgetpu-usage-stats.h"
 #include "edgetpu-wakelock.h"
 #include "edgetpu.h"
+
+/*
+ * Module parameter to override in-kernel VII usage found in device-tree.
+ * By default in-kernel VII will be enabled if the `use-kernel-vii` property is defined in the
+ * device-tree, and disabled otherwise. This behavior can be overridden during insmod by passing
+ * "force_ikv=x" for the following values:
+ * - 0: Disable in-kernel VII regardless of device-tree
+ * - 1: Enable in-kernel VII regardless of device-tree
+ * - other: ignored
+ */
+static int force_ikv = -1;
+module_param(force_ikv, int, 0440);
 
 #ifndef EDGETPU_NUM_USE_VII_MAILBOXES
 #define EDGETPU_NUM_USE_VII_MAILBOXES EDGETPU_NUM_VII_MAILBOXES
@@ -383,7 +396,6 @@ static struct edgetpu_mailbox_manager_desc mailbox_manager_desc = {
 	.get_context_csr_base = edgetpu_mailbox_get_context_csr_base,
 	.get_cmd_queue_csr_base = edgetpu_mailbox_get_cmd_queue_csr_base,
 	.get_resp_queue_csr_base = edgetpu_mailbox_get_resp_queue_csr_base,
-	.use_ikv = (EDGETPU_USE_IKV != 0),
 };
 
 int edgetpu_get_state_errno_locked(struct edgetpu_dev *etdev)
@@ -464,6 +476,23 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 	if (ret) {
 		dev_err(etdev->dev, "%s: edgetpu_fs_add returns %d\n", etdev->dev_name, ret);
 		goto remove_dev;
+	}
+
+	switch (force_ikv) {
+	case 1:
+		mailbox_manager_desc.use_ikv = true;
+		break;
+	case 0:
+		mailbox_manager_desc.use_ikv = false;
+		break;
+	default:
+		mailbox_manager_desc.use_ikv =
+			of_get_property(etdev->dev->of_node, "use-kernel-vii", NULL) != NULL;
+	}
+	if (mailbox_manager_desc.use_ikv) {
+		/* If using in-kernel VII, don't allocate any mailboxes for user-space VII. */
+		mailbox_manager_desc.num_vii_mailbox--;
+		mailbox_manager_desc.num_use_vii_mailbox = 0;
 	}
 
 	etdev->mailbox_manager =
