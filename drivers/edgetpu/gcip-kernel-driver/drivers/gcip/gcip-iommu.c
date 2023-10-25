@@ -461,9 +461,9 @@ static int gcip_pin_user_pages(struct device *dev, struct page **pages, unsigned
 		return -ENOMEM;
 #endif
 
-	mmap_read_lock(current->mm);
 	if (pin_user_pages_lock)
 		mutex_lock(pin_user_pages_lock);
+	mmap_read_lock(current->mm);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
 	ret = pin_user_pages(start_addr, num_pages, gup_flags, pages, vmas);
@@ -471,9 +471,9 @@ static int gcip_pin_user_pages(struct device *dev, struct page **pages, unsigned
 	ret = pin_user_pages(start_addr, num_pages, gup_flags, pages);
 #endif
 
+	mmap_read_unlock(current->mm);
 	if (pin_user_pages_lock)
 		mutex_unlock(pin_user_pages_lock);
-	mmap_read_unlock(current->mm);
 
 	kvfree(vmas);
 

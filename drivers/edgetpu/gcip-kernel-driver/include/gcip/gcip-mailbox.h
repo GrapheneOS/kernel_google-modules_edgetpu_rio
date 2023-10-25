@@ -39,6 +39,15 @@
  */
 #define GCIP_MAILBOX_STATUS_NO_RESPONSE (2)
 
+/*
+ * With this flag, the sequence number of the command will not be assigned by set_cmd_elem_seq.
+ * The sequence number in the mailbox is not increased either.
+ * The command's sequence number must be pre-set before passing to gcip_mailbox_put_cmd_flags().
+ */
+#define GCIP_MAILBOX_CMD_FLAGS_SKIP_ASSIGN_SEQ BIT(0)
+
+typedef u32 gcip_mailbox_cmd_flags_t;
+
 /* To specify the operation is toward cmd or resp queue. */
 enum gcip_mailbox_queue_type { GCIP_MAILBOX_CMD_QUEUE, GCIP_MAILBOX_RESP_QUEUE };
 
@@ -287,10 +296,8 @@ struct gcip_mailbox_ops {
 					struct gcip_mailbox_resp_awaiter *awaiter);
 	/*
 	 * This callback will be called after putting the @cmd to the command queue. It can be used
-	 * for triggering the doorbell. Also, @mailbox->cur_seq will be increased by the return
-	 * value. If error occurs, returns negative value and @mailbox->cur_seq will not be changed
-	 * in that case. If this callback is not defined, @mailbox->cur_seq will be increased by 1
-	 * each time cmd enters the queue. This is called with the `cmd_queue_lock` being held.
+	 * for triggering the doorbell. Returns 0 on success, or returns error code otherwise.
+	 * This is called with the `cmd_queue_lock` being held.
 	 * Context: normal.
 	 */
 	int (*after_enqueue_cmd)(struct gcip_mailbox *mailbox, void *cmd);
@@ -438,7 +445,8 @@ void gcip_mailbox_consume_responses_work(struct gcip_mailbox *mailbox);
  * Returns the code of response, or a negative errno on error.
  * @resp is updated with the response, as to retrieve returned retval field.
  */
-int gcip_mailbox_send_cmd(struct gcip_mailbox *mailbox, void *cmd, void *resp);
+int gcip_mailbox_send_cmd(struct gcip_mailbox *mailbox, void *cmd, void *resp,
+			  gcip_mailbox_cmd_flags_t flags);
 
 /*
  * Executes @cmd command asynchronously. This function returns an instance of
@@ -476,6 +484,11 @@ int gcip_mailbox_send_cmd(struct gcip_mailbox *mailbox, void *cmd, void *resp);
  * can release the returned awaiter right away by calling the `gcip_mailbox_release_awaiter`
  * function.
  */
+struct gcip_mailbox_resp_awaiter *gcip_mailbox_put_cmd_flags(struct gcip_mailbox *mailbox,
+							     void *cmd, void *resp, void *data,
+							     gcip_mailbox_cmd_flags_t flags);
+
+/* Calls gcip_mailbox_put_cmd_flags() with flags = 0. */
 struct gcip_mailbox_resp_awaiter *gcip_mailbox_put_cmd(struct gcip_mailbox *mailbox, void *cmd,
 						       void *resp, void *data);
 
@@ -527,6 +540,16 @@ void gcip_mailbox_release_awaiter(struct gcip_mailbox_resp_awaiter *awaiter);
  * schedule `gcip_mailbox_consume_responses_work` work in the IRQ handler of mailbox.
  */
 void gcip_mailbox_consume_one_response(struct gcip_mailbox *mailbox, void *resp);
+
+/**
+ * gcip_mailbox_inc_seq_num() - Increases the sequence number of the mailbox and returns the
+ *                              original one.
+ * @mailbox: The mailbox to increase the sequence number.
+ * @n: The number that the sequence number needs to be increased.
+ *
+ * Return: The sequence number before increasing.
+ */
+uint gcip_mailbox_inc_seq_num(struct gcip_mailbox *mailbox, uint n);
 
 /* Getters for member variables of the `struct gcip_mailbox`. */
 

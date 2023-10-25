@@ -197,14 +197,14 @@ static int edgetpu_ikv_before_enqueue_wait_list(struct gcip_mailbox *mailbox, vo
 
 	return 0;
 }
+
 static int edgetpu_ikv_after_enqueue_cmd(struct gcip_mailbox *mailbox, void *cmd)
 {
 	struct edgetpu_ikv *ikv = gcip_mailbox_get_data(mailbox);
 
 	EDGETPU_MAILBOX_CMD_QUEUE_WRITE_SYNC(ikv->mbx_hardware, doorbell_set, 1);
 
-	/* Sequence number increments by this return value. */
-	return 1;
+	return 0;
 }
 
 static void edgetpu_ikv_after_fetch_resps(struct gcip_mailbox *mailbox, u32 num_resps)

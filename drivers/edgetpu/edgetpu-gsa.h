@@ -52,4 +52,4 @@ static inline int gsa_send_tpu_cmd(struct device *gsa, enum gsa_tpu_cmd cmd)
 
 #endif /* EDGETPU_HAS_GSA */
 
-#endif /* __DISABLED_GSA_TPU_H__ */
+#endif /* __EDGETPU_GSA_H__ */

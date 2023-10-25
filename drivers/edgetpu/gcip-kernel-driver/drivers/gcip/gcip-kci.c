@@ -69,8 +69,7 @@ static void gcip_kci_set_cmd_elem_seq(struct gcip_mailbox *mailbox, void *cmd, u
 {
 	struct gcip_kci_command_element *elem = cmd;
 
-	if (!(elem->seq & GCIP_KCI_REVERSE_FLAG))
-		elem->seq = seq;
+	elem->seq = seq;
 }
 
 static u32 gcip_kci_get_resp_queue_size(struct gcip_mailbox *mailbox)
@@ -177,11 +176,9 @@ static int gcip_kci_wait_for_cmd_queue_not_full(struct gcip_mailbox *mailbox)
 static int gcip_kci_after_enqueue_cmd(struct gcip_mailbox *mailbox, void *cmd)
 {
 	struct gcip_kci *kci = gcip_mailbox_get_data(mailbox);
-	struct gcip_kci_command_element *elem = cmd;
 
 	kci->ops->trigger_doorbell(kci, GCIP_KCI_PUSH_CMD);
-	if (!(elem->seq & GCIP_KCI_REVERSE_FLAG))
-		return 1;
+
 	return 0;
 }
 
@@ -286,8 +283,12 @@ int gcip_kci_send_cmd_return_resp(struct gcip_kci *kci, struct gcip_kci_command_
 				  struct gcip_kci_response_element *resp)
 {
 	int ret;
+	gcip_mailbox_cmd_flags_t flags = 0;
 
-	ret = gcip_mailbox_send_cmd(&kci->mailbox, cmd, resp);
+	if (cmd->seq & GCIP_KCI_REVERSE_FLAG)
+		flags |= GCIP_MAILBOX_CMD_FLAGS_SKIP_ASSIGN_SEQ;
+
+	ret = gcip_mailbox_send_cmd(&kci->mailbox, cmd, resp, flags);
 	if (ret || !resp)
 		return ret;
 

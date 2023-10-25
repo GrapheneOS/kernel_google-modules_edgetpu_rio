@@ -142,6 +142,16 @@ static int gcip_mailbox_push_wait_resp(struct gcip_mailbox *mailbox,
 	return 0;
 }
 
+/* The locked version of gcip_mailbox_inc_seq_num */
+static uint gcip_mailbox_inc_seq_num_locked(struct gcip_mailbox *mailbox, uint n)
+{
+	uint ret = mailbox->cur_seq;
+
+	mailbox->cur_seq += n;
+
+	return ret;
+}
+
 /*
  * Pushes @cmd to the command queue of mailbox and returns. @resp should be passed if the request
  * is synchronous and want to get the response. If @resp is NULL even though the request is
@@ -150,7 +160,8 @@ static int gcip_mailbox_push_wait_resp(struct gcip_mailbox *mailbox,
  */
 static int gcip_mailbox_enqueue_cmd(struct gcip_mailbox *mailbox, void *cmd,
 				    struct gcip_mailbox_async_resp *async_resp,
-				    struct gcip_mailbox_resp_awaiter *awaiter)
+				    struct gcip_mailbox_resp_awaiter *awaiter,
+				    gcip_mailbox_cmd_flags_t flags)
 {
 	int ret = 0;
 	u32 tail;
@@ -158,7 +169,8 @@ static int gcip_mailbox_enqueue_cmd(struct gcip_mailbox *mailbox, void *cmd,
 
 	ACQUIRE_CMD_QUEUE_LOCK(false, &atomic);
 
-	SET_CMD_ELEM_SEQ(cmd, mailbox->cur_seq);
+	if (!(flags & GCIP_MAILBOX_CMD_FLAGS_SKIP_ASSIGN_SEQ))
+		SET_CMD_ELEM_SEQ(cmd, mailbox->cur_seq);
 	/*
 	 * The lock ensures mailbox cmd_queue_tail cannot be changed by other processes (this
 	 * method should be the only one to modify the value of tail), therefore we can remember
@@ -195,7 +207,7 @@ static int gcip_mailbox_enqueue_cmd(struct gcip_mailbox *mailbox, void *cmd,
 	INC_CMD_QUEUE_TAIL(1);
 	if (mailbox->ops->after_enqueue_cmd) {
 		ret = mailbox->ops->after_enqueue_cmd(mailbox, cmd);
-		if (ret < 0) {
+		if (ret) {
 			/*
 			 * Currently, as both DSP and EdgeTPU never return errors, do nothing
 			 * here. We can decide later how to rollback the status such as
@@ -206,10 +218,10 @@ static int gcip_mailbox_enqueue_cmd(struct gcip_mailbox *mailbox, void *cmd,
 				 ret);
 			goto out;
 		}
-		mailbox->cur_seq += ret;
-		ret = 0;
-	} else
-		mailbox->cur_seq += 1;
+	}
+
+	if (!(flags & GCIP_MAILBOX_CMD_FLAGS_SKIP_ASSIGN_SEQ))
+		gcip_mailbox_inc_seq_num_locked(mailbox, 1);
 
 out:
 	RELEASE_CMD_QUEUE_LOCK();
@@ -606,14 +618,15 @@ void gcip_mailbox_consume_responses_work(struct gcip_mailbox *mailbox)
 	kfree(responses);
 }
 
-int gcip_mailbox_send_cmd(struct gcip_mailbox *mailbox, void *cmd, void *resp)
+int gcip_mailbox_send_cmd(struct gcip_mailbox *mailbox, void *cmd, void *resp,
+			  gcip_mailbox_cmd_flags_t flags)
 {
 	struct gcip_mailbox_async_resp async_resp = {
 		.resp = resp,
 	};
 	int ret;
 
-	ret = gcip_mailbox_enqueue_cmd(mailbox, cmd, &async_resp, NULL);
+	ret = gcip_mailbox_enqueue_cmd(mailbox, cmd, &async_resp, NULL, flags);
 	if (ret)
 		return ret;
 
@@ -641,8 +654,9 @@ int gcip_mailbox_send_cmd(struct gcip_mailbox *mailbox, void *cmd, void *resp)
 	return 0;
 }
 
-struct gcip_mailbox_resp_awaiter *gcip_mailbox_put_cmd(struct gcip_mailbox *mailbox, void *cmd,
-						       void *resp, void *data)
+struct gcip_mailbox_resp_awaiter *gcip_mailbox_put_cmd_flags(struct gcip_mailbox *mailbox,
+							     void *cmd, void *resp, void *data,
+							     gcip_mailbox_cmd_flags_t flags)
 {
 	struct gcip_mailbox_resp_awaiter *awaiter;
 	int ret;
@@ -665,7 +679,7 @@ struct gcip_mailbox_resp_awaiter *gcip_mailbox_put_cmd(struct gcip_mailbox *mail
 	INIT_DELAYED_WORK(&awaiter->timeout_work, gcip_mailbox_async_cmd_timeout_work);
 	schedule_delayed_work(&awaiter->timeout_work, msecs_to_jiffies(timeout));
 
-	ret = gcip_mailbox_enqueue_cmd(mailbox, cmd, &awaiter->async_resp, awaiter);
+	ret = gcip_mailbox_enqueue_cmd(mailbox, cmd, &awaiter->async_resp, awaiter, flags);
 	if (ret)
 		goto err_free_resp;
 
@@ -675,6 +689,12 @@ err_free_resp:
 	gcip_mailbox_cancel_awaiter_timeout(awaiter);
 	kfree(awaiter);
 	return ERR_PTR(ret);
+}
+
+struct gcip_mailbox_resp_awaiter *gcip_mailbox_put_cmd(struct gcip_mailbox *mailbox, void *cmd,
+						       void *resp, void *data)
+{
+	return gcip_mailbox_put_cmd_flags(mailbox, cmd, resp, data, 0);
 }
 
 void gcip_mailbox_cancel_awaiter(struct gcip_mailbox_resp_awaiter *awaiter)
@@ -707,4 +727,18 @@ void gcip_mailbox_consume_one_response(struct gcip_mailbox *mailbox, void *resp)
 
 	/* Responses handled, wakes up threads that are waiting for a response. */
 	wake_up(&mailbox->wait_list_waitq);
+}
+
+uint gcip_mailbox_inc_seq_num(struct gcip_mailbox *mailbox, uint n)
+{
+	bool atomic = false;
+	uint ret;
+
+	ACQUIRE_CMD_QUEUE_LOCK(false, &atomic);
+
+	ret = gcip_mailbox_inc_seq_num_locked(mailbox, n);
+
+	RELEASE_CMD_QUEUE_LOCK();
+
+	return ret;
 }
