@@ -5,6 +5,8 @@
 
 obj-y		+= iif.o
 
-iif-objs	:= iif-fence.o \
+iif-objs	:= iif-fence-table.o \
+		   iif-fence.o \
 		   iif-manager.o \
 		   iif-sync-file.o
+

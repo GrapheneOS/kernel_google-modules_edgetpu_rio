@@ -110,4 +110,7 @@ int edgetpu_get_debug_dump(struct edgetpu_dev *etdev,
  */
 void edgetpu_debug_dump_resp_handler(struct edgetpu_dev *etdev);
 
+/* Dump the external debug TPU CPU registers. */
+void edgetpu_debug_dump_cpu_regs(struct edgetpu_dev *etdev);
+
 #endif /* EDGETPU_DEBUG_DUMP_H_ */

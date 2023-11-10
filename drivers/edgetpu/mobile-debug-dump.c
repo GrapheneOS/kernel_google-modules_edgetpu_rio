@@ -16,6 +16,8 @@
 #include <linux/rbtree.h>
 #include <linux/slab.h>
 
+#include <gcip/gcip-pm.h>
+
 #include "edgetpu-config.h"
 #include "edgetpu-device-group.h"
 #include "edgetpu-dump-info.h"
@@ -37,6 +39,20 @@
  * coredump_<SUBSYSTEM_NAME>_<%Y-%m-%d_%H-%M-%S>.bin.
  */
 #define SSCD_REPORT_WAIT_TIME (1000ULL)
+
+#define EXTERNAL_DEBUG_NS_INVASIVE_MASK (BIT(2) - 1)
+#define EXTERNAL_DEBUG_NS_INVASIVE_ENABLE (BIT(0) | BIT(1))
+
+#define EXTERNAL_DEBUG_LOCK_KEY 0
+#define EXTERNAL_DEBUG_UNLOCK_KEY 0xC5ACCE55
+#define EXTERNAL_DEBUG_LOCK_SLK BIT(1)
+
+#define EXTERNAL_DEBUG_OS_LOCK_KEY 1
+#define EXTERNAL_DEBUG_OS_UNLOCK_KEY 0
+#define EXTERNAL_DEBUG_OS_LOCK_UP BIT(0)
+#define EXTERNAL_DEBUG_OS_LOCK_R BIT(2)
+#define EXTERNAL_DEBUG_OS_LOCK_OSLK BIT(5)
+#define EXTERNAL_DEBUG_OS_LOCK_DLK BIT(6)
 
 #define SET_FIELD(info, obj, __field) ((info)->__field = (obj)->__field)
 
@@ -182,10 +198,10 @@ static int mobile_sscd_collect_mappings_info(struct edgetpu_mapping_root *root, 
 		struct edgetpu_mapping *map = container_of(node, struct edgetpu_mapping, node);
 
 		SET_FIELD(info, map, host_address);
-		SET_FIELD(info, map, device_address);
+		SET_FIELD(info, map->gcip_mapping, device_address);
 		SET_FIELD(info, map, flags);
-		SET_FIELD(info, map, dir);
-		info->size = (u64)map->map_size;
+		SET_FIELD(info, map->gcip_mapping, dir);
+		info->size = (u64)map->gcip_mapping->size;
 		info++;
 	}
 
@@ -536,6 +552,71 @@ err_release:
 err:
 	etdev_err(etdev, "failed to generate dump: %d", ret);
 	return ret;
+}
+
+void edgetpu_debug_dump_cpu_regs(struct edgetpu_dev *etdev)
+{
+	u32 val;
+
+	/* Acquires the PM count to ensure the TPU block and control cluster are powered. */
+	if (gcip_pm_get_if_powered(etdev->pm, false)) {
+		dev_info(etdev->dev, "Device off. Skip CPU registers dump.");
+		return;
+	}
+
+	/* Non-secure invasive debug is disabled on fused devices. */
+	val = edgetpu_dev_read_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_AUTHSTATUS);
+	if ((val & EXTERNAL_DEBUG_NS_INVASIVE_MASK) != EXTERNAL_DEBUG_NS_INVASIVE_ENABLE) {
+		dev_info(etdev->dev, "Fused device. Skip CPU registers dump.");
+		goto err_pm_put;
+	}
+
+	/* Unlocks external debug lock. */
+	edgetpu_dev_write_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_LOCK_ACCESS,
+				  EXTERNAL_DEBUG_UNLOCK_KEY);
+	val = edgetpu_dev_read_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_LOCK_STATUS);
+	if (val & EXTERNAL_DEBUG_LOCK_SLK) {
+		dev_err(etdev->dev, "Fail to unlock external debug lock.");
+		goto err_pm_put;
+	}
+
+	/*
+	 * Checks if:
+	 *   1. external debug processor is in a low-power or powerdown state where the debug
+	 *      registers cannot be accessed.
+	 *   2. OS is double locked.
+	 *   3. external debug processor is in reset state.
+	 */
+	val = edgetpu_dev_read_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_PROCESSOR_STATUS);
+	if (!(val & EXTERNAL_DEBUG_OS_LOCK_UP) || (val & EXTERNAL_DEBUG_OS_LOCK_DLK) ||
+	    (val & EXTERNAL_DEBUG_OS_LOCK_R)) {
+		dev_err(etdev->dev, "External debug OS lock status unknown. Processor status: %#x",
+			val);
+		goto err_external_debug_lock;
+	}
+
+	/* Unlocks OS lock. */
+	edgetpu_dev_write_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_OS_LOCK_ACCESS,
+				  EXTERNAL_DEBUG_OS_UNLOCK_KEY);
+	val = edgetpu_dev_read_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_PROCESSOR_STATUS);
+	if (val & EXTERNAL_DEBUG_OS_LOCK_OSLK) {
+		dev_err(etdev->dev, "Fail to unlock external debug OS lock.");
+		goto err_external_debug_lock;
+	}
+
+	/* Reads external debug registers. */
+	val = edgetpu_dev_read_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_PROGRAM_COUNTER);
+	dev_info(etdev->dev, "External debug program counter: %#x", val);
+
+	/* Locks OS lock. */
+	edgetpu_dev_write_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_OS_LOCK_ACCESS,
+				  EXTERNAL_DEBUG_OS_LOCK_KEY);
+err_external_debug_lock:
+	/* Locks external debug lock. */
+	edgetpu_dev_write_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_LOCK_ACCESS,
+				  EXTERNAL_DEBUG_LOCK_KEY);
+err_pm_put:
+	gcip_pm_put(etdev->pm);
 }
 
 int edgetpu_debug_dump_init(struct edgetpu_dev *etdev)

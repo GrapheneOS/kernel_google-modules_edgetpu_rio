@@ -10,7 +10,10 @@ KBUILD_OPTIONS	+= CONFIG_RIO=m
 KBUILD_OPTIONS	+= CONFIG_GCIP=y
 
 -include $(KERNEL_SRC)/../private/google-modules/soc/gs/Makefile.include
+
+ifneq ("$(wildcard $(OUT_DIR)/../private/google-modules/power/mitigation/Module.symvers)","")
 EXTRA_SYMBOLS	+= $(OUT_DIR)/../private/google-modules/power/mitigation/Module.symvers
+endif
 
 GCIP_DIR=gcip-kernel-driver/drivers/gcip
 

@@ -9,11 +9,40 @@
 #define __IIF_IIF_FENCE_H__
 
 #include <linux/kref.h>
+#include <linux/spinlock.h>
+#include <linux/types.h>
 
 #include <gcip/iif/iif-manager.h>
 #include <gcip/iif/iif.h>
 
+struct iif_fence;
 struct iif_fence_ops;
+struct iif_fence_poll_cb;
+struct iif_fence_all_signaler_submitted_cb;
+
+/* The callback which will be called when all signalers have signaled @fence. */
+typedef void (*iif_fence_poll_cb_t)(struct iif_fence *fence, struct iif_fence_poll_cb *cb);
+
+/* The callback which will be called when all signalers have been submitted to @fence. */
+typedef void (*iif_fence_all_signaler_submitted_cb_t)(
+	struct iif_fence *fence, struct iif_fence_all_signaler_submitted_cb *cb);
+
+/*
+ * The state of a fence object.
+ * The state transition is
+ *   INITED {-> FILE_CREATED -> FILE_RELEASED} -> RETIRED
+ * i.e. Sync file creation is optional.
+ */
+enum iif_fence_state {
+	/* Initial state. */
+	IIF_FENCE_STATE_INITIALIZED,
+	/* There is a sync file bound with this fence. */
+	IIF_FENCE_STATE_FILE_CREATED,
+	/* The file bound to this fence has been released. */
+	IIF_FENCE_STATE_FILE_RELEASED,
+	/* The fence ID has been retired. */
+	IIF_FENCE_STATE_RETIRED,
+};
 
 /* The fence object. */
 struct iif_fence {
@@ -22,11 +51,29 @@ struct iif_fence {
 	/* Fence ID. */
 	int id;
 	/* The number of total signalers to be submitted. */
-	unsigned int total_signalers;
+	uint16_t total_signalers;
+	/* The number of submitted signalers. */
+	uint16_t submitted_signalers;
+	/* Protects @submitted_signalers. */
+	spinlock_t submitted_signalers_lock;
+	/* The number of signaled signalers. */
+	uint16_t signaled_signalers;
+	/* Protects @signaled_signalers and @poll_cb_list. */
+	spinlock_t signaled_signalers_lock;
+	/* The number of outstanding waiters. */
+	uint16_t outstanding_waiters;
+	/* Protects @outstanding_waiters. */
+	spinlock_t outstanding_waiters_lock;
 	/* Reference count. */
 	struct kref kref;
 	/* Operators. */
 	const struct iif_fence_ops *ops;
+	/* State of this fence object. */
+	enum iif_fence_state state;
+	/* List of callbacks which will be called when the fence is signaled. */
+	struct list_head poll_cb_list;
+	/* List of callbacks which will be called when all signalers have been submitted. */
+	struct list_head all_signaler_submitted_cb_list;
 };
 
 /* Operators of `struct iif_fence`. */
@@ -42,6 +89,33 @@ struct iif_fence_ops {
 };
 
 /*
+ * Contains the callback function which will be called when all signalers have signaled the fence.
+ *
+ * The callback can be registered to the fence by the `iif_fence_add_poll_callback` function.
+ */
+struct iif_fence_poll_cb {
+	/* Node to be added to the list. */
+	struct list_head node;
+	/* Actual callback function to be called. */
+	iif_fence_poll_cb_t func;
+};
+
+/*
+ * Contains the callback function which will be called when all signalers have been submitted.
+ *
+ * The callback will be registered to the fence when the `iif_fence_submit_waiter` function fails
+ * in the submission.
+ */
+struct iif_fence_all_signaler_submitted_cb {
+	/* Node to be added to the list. */
+	struct list_head node;
+	/* Actual callback function to be called. */
+	iif_fence_all_signaler_submitted_cb_t func;
+	/* The number of remaining signalers to be submitted. */
+	int remaining_signalers;
+};
+
+/*
  * Initializes @fence which will be signaled by @signaler_ip IP. @total_signalers is the number of
  * signalers which must be submitted to the fence. Its initial reference count is 1.
  *
@@ -51,12 +125,106 @@ struct iif_fence_ops {
  */
 int iif_fence_init(struct iif_manager *mgr, struct iif_fence *fence,
 		   const struct iif_fence_ops *ops, enum iif_ip_type signaler_ip,
-		   unsigned int total_signalers);
+		   uint16_t total_signalers);
+
+/*
+ * Opens a file which syncs with @fence and returns its FD. The file will hold a reference to
+ * @fence until it is closed.
+ */
+int iif_fence_install_fd(struct iif_fence *fence);
+
+/*
+ * Has @fence know the sync file bound to it is about to be released. This function would try to
+ * retire the fence if applicable.
+ */
+void iif_fence_on_sync_file_release(struct iif_fence *fence);
 
 /* Increases the reference count of @fence. */
 struct iif_fence *iif_fence_get(struct iif_fence *fence);
 
+/*
+ * Gets a fence from @fd and increments its reference count of the file pointer.
+ *
+ * Returns the fence pointer, if @fd is for IIF. Otherwise, returns a negative errno.
+ */
+struct iif_fence *iif_fence_fdget(int fd);
+
 /* Decreases the reference count of @fence and if it becomes 0, releases @fence. */
 void iif_fence_put(struct iif_fence *fence);
+
+/*
+ * Submits a signaler. @fence->submitted_signalers will be incremented by 1.
+ *
+ * Returns 0 if the submission succeeds. Otherwise, returns a negative errno.
+ */
+int iif_fence_submit_signaler(struct iif_fence *fence);
+
+/*
+ * Returns the number of remaining signalers to be submitted. Returns 0 if all signalers are
+ * submitted.
+ *
+ * Note that this function holds @fence->submitted_signalers_lock internally and read the value.
+ * Therefore, the number of remaining signalers can be changed after the function returns. The one
+ * must use this function only for the debugging purpose.
+ */
+int iif_fence_unsubmitted_signalers(struct iif_fence *fence);
+
+/*
+ * Submits a waiter of @ip IP. @fence->outstanding_waiters will be incremented by 1.
+ * Note that the waiter submission will not be done when not all signalers have been submitted.
+ * (i.e., @fence->submitted_signalers < @fence->total_signalers)
+ *
+ * Returns the number of remaining signalers to be submitted (i.e., returning 0 means the submission
+ * actually succeeded). Otherwise, returns a negative errno if it fails with other reasons.
+ */
+int iif_fence_submit_waiter(struct iif_fence *fence, enum iif_ip_type ip);
+
+/* Signals @fence. If all signalers have signaled, it will notify polling FDs. */
+void iif_fence_signal(struct iif_fence *fence);
+
+/*
+ * Returns whether all signalers have signaled @fence.
+ *
+ * As this function doesn't require to hold any lock, even if this function returns false, @fence
+ * can be signaled right after this function returns. One should care about this and may not use
+ * this function directly. This function will be mostly used when iif_sync_file is polling @fence.
+ */
+bool iif_fence_is_signaled(struct iif_fence *fence);
+
+/* Notifies the driver that a waiter finished waiting on @fence. */
+void iif_fence_waited(struct iif_fence *fence);
+
+/*
+ * Registers a callback which will be called when all signalers of @fence signaled. Once the
+ * callback is called, it will be automatically unregistered from @fence. The @func can be called
+ * in the IRQ context.
+ *
+ * Returns 0 if succeeded. Otherwise, returns a negative errno on failure. Note that even when
+ * @fence is already signaled, it won't add the callback and return -EPERM.
+ */
+int iif_fence_add_poll_callback(struct iif_fence *fence, struct iif_fence_poll_cb *poll_cb,
+				iif_fence_poll_cb_t func);
+
+/* Unregisters the callback from @fence. */
+void iif_fence_remove_poll_callback(struct iif_fence *fence, struct iif_fence_poll_cb *poll_cb);
+
+/*
+ * Registers a callback which will be called when all signalers are submitted for @fence and
+ * returns the number of remaining signalers to be submitted to @cb->remaining_signalers. Once the
+ * callback is called, it will be automatically unregistered from @fence.
+ *
+ * Returns 0 if succeeded. If all signalers are already submitted, returns -EPERM.
+ */
+int iif_fence_add_all_signaler_submitted_callback(struct iif_fence *fence,
+						  struct iif_fence_all_signaler_submitted_cb *cb,
+						  iif_fence_all_signaler_submitted_cb_t func);
+
+/*
+ * Unregisters the callback which is registered by the callback above.
+ *
+ * Returns true if the callback is removed before its being called.
+ */
+bool iif_fence_remove_all_signaler_submitted_callback(
+	struct iif_fence *fence, struct iif_fence_all_signaler_submitted_cb *cb);
 
 #endif /* __IIF_IIF_FENCE_H__ */

@@ -25,6 +25,8 @@
 #include <linux/uaccess.h>
 #include <linux/uidgid.h>
 
+#include <gcip/gcip-iommu.h>
+
 #include "edgetpu-async.h"
 #include "edgetpu-config.h"
 #include "edgetpu-device-group.h"
@@ -39,12 +41,6 @@
 #include "edgetpu-sw-watchdog.h"
 #include "edgetpu-wakelock.h"
 #include "edgetpu.h"
-
-/* Records the mapping and other fields needed for a host buffer mapping */
-struct edgetpu_host_map {
-	struct edgetpu_mapping map;
-	struct mm_struct *owning_mm;
-};
 
 /*
  * A helper structure for the return value of find_sg_to_sync().
@@ -604,36 +600,18 @@ bool edgetpu_set_group_join_lockout(struct edgetpu_dev *etdev, bool lockout)
  *
  * Caller locks group->host_mappings.
  */
-static void edgetpu_unmap_node(struct edgetpu_mapping *map)
+static void buffer_mapping_destroy(struct edgetpu_mapping *map)
 {
 	struct edgetpu_device_group *group = map->priv;
-	struct edgetpu_iommu_domain *etdomain = edgetpu_group_domain_locked(group);
-	struct edgetpu_host_map *hmap =
-		container_of(map, struct edgetpu_host_map, map);
-	struct sg_page_iter sg_iter;
-	unsigned long num_pages = 0;
 
 	etdev_dbg(group->etdev, "%s: %u: iova=%pad", __func__, group->workload_id,
-		  &map->device_address);
+		  &map->gcip_mapping->device_address);
 
-	if (map->device_address)
-		edgetpu_mmu_unmap(group->etdev, map, etdomain);
+	map->gcip_mapping->gcip_map_flags =
+		edgetpu_mappings_encode_gcip_map_flags(map->flags, map->dma_attrs, false);
+	gcip_iommu_mapping_unmap(map->gcip_mapping);
 
-	for_each_sg_page(map->sgt.sgl, &sg_iter, map->sgt.orig_nents, 0) {
-		struct page *page = sg_page_iter_page(&sg_iter);
-
-		if (map->dir == DMA_FROM_DEVICE ||
-		    map->dir == DMA_BIDIRECTIONAL)
-			set_page_dirty(page);
-
-		unpin_user_page(page);
-		num_pages++;
-	}
-	atomic64_sub(num_pages, &hmap->owning_mm->pinned_vm);
-	mmdrop(hmap->owning_mm);
-	sg_free_table(&map->sgt);
-	edgetpu_device_group_put(map->priv);
-	kfree(hmap);
+	kfree(map);
 }
 
 static void edgetpu_host_map_show(struct edgetpu_mapping *map,
@@ -644,12 +622,13 @@ static void edgetpu_host_map_show(struct edgetpu_mapping *map,
 	size_t cur_offset = 0;
 
 	/* Only 1 entry per mapped segment is shown, with the phys addr of the 1st segment. */
-	for_each_sg(map->sgt.sgl, sg, map->sgt.nents, i) {
+	for_each_sg(map->gcip_mapping->sgt->sgl, sg, map->gcip_mapping->sgt->nents, i) {
 		dma_addr_t phys_addr = sg_phys(sg);
 		dma_addr_t dma_addr = sg_dma_address(sg);
 
 		seq_printf(s, "  %pad %lu %s %#llx %pap\n", &dma_addr,
-			   DIV_ROUND_UP(sg_dma_len(sg), PAGE_SIZE), edgetpu_dma_dir_rw_s(map->dir),
+			   DIV_ROUND_UP(sg_dma_len(sg), PAGE_SIZE),
+			   edgetpu_dma_dir_rw_s(map->gcip_mapping->dir),
 			   map->host_address + cur_offset, &phys_addr);
 		cur_offset += sg_dma_len(sg);
 	}
@@ -659,62 +638,6 @@ size_t edgetpu_group_mappings_total_size(struct edgetpu_device_group *group)
 {
 	return edgetpu_mappings_total_size(&group->host_mappings) +
 		edgetpu_mappings_total_size(&group->dmabuf_mappings);
-}
-
-/*
- * Allocates an edgetpu_host_map with the user-space address @host_addr.
- */
-static struct edgetpu_host_map *
-alloc_mapping_from_useraddr(struct edgetpu_device_group *group, u64 host_addr,
-			    edgetpu_map_flag_t flags, struct page **pages,
-			    uint num_pages)
-{
-	struct edgetpu_dev *etdev = group->etdev;
-	struct edgetpu_host_map *hmap;
-	int ret;
-
-	hmap = kzalloc(sizeof(*hmap), GFP_KERNEL);
-	if (!hmap) {
-		ret = -ENOMEM;
-		goto error;
-	}
-
-	hmap->map.host_address = host_addr;
-	hmap->map.dir = map_flag_to_host_dma_dir(flags);
-	hmap->map.priv = edgetpu_device_group_get(group);
-	hmap->map.release = edgetpu_unmap_node;
-	hmap->map.show = edgetpu_host_map_show;
-	hmap->map.flags = flags;
-	hmap->map.dma_attrs = map_to_dma_attr(flags, true);
-
-	ret = sg_alloc_table_from_pages(&hmap->map.sgt, pages, num_pages, 0,
-					num_pages * PAGE_SIZE,
-					GFP_KERNEL);
-	if (ret) {
-		etdev_dbg(etdev,
-			  "%s: sg_alloc_table_from_pages failed %u:%pK-%u: %d",
-			  __func__, group->workload_id,
-			  (void *)host_addr, num_pages, ret);
-		goto error_free_sgt;
-	}
-
-	return hmap;
-
-error_free_sgt:
-	/*
-	 * Starting from kernel version 5.10, the caller must call sg_free_table
-	 * to clean up any leftover allocations if sg_alloc_table_from_pages
-	 * returns non-0 for failures. Calling sg_free_table is also fine with
-	 * older kernel versions since sg_free_table handles this properly.
-	 */
-	sg_free_table(&hmap->map.sgt);
-error:
-	if (hmap) {
-		edgetpu_device_group_put(hmap->map.priv);
-		kfree(hmap);
-	}
-
-	return ERR_PTR(ret);
 }
 
 /*
@@ -769,13 +692,11 @@ static void restore_sg_after_sync(struct sglist_to_sync *sglist)
 /*
  * Performs DMA sync of the mapping with region [offset, offset + size).
  *
- * Caller holds mapping's lock, to prevent @hmap being modified / removed by
+ * Caller holds mapping's lock, to prevent @map being modified / removed by
  * other processes.
  */
-static int group_sync_host_map(struct edgetpu_device_group *group,
-			       struct edgetpu_host_map *hmap, u64 offset,
-			       u64 size, enum dma_data_direction dir,
-			       bool for_cpu)
+static int group_sync_host_map(struct edgetpu_device_group *group, struct edgetpu_mapping *map,
+			       u64 offset, u64 size, enum dma_data_direction dir, bool for_cpu)
 {
 	const u64 end = offset + size;
 	typeof(dma_sync_sg_for_cpu) *sync =
@@ -783,7 +704,7 @@ static int group_sync_host_map(struct edgetpu_device_group *group,
 	struct sg_table *sgt;
 	struct sglist_to_sync sglist;
 
-	sgt = &hmap->map.sgt;
+	sgt = map->gcip_mapping->sgt;
 	find_sg_to_sync(sgt, offset, end, &sglist);
 	if (!sglist.nelems)
 		return -EINVAL;
@@ -793,96 +714,95 @@ static int group_sync_host_map(struct edgetpu_device_group *group,
 	return 0;
 }
 
-int edgetpu_device_group_map(struct edgetpu_device_group *group,
-			     struct edgetpu_map_ioctl *arg)
+/**
+ * buffer_mapping_create() - Maps the buffer and creates the corresponding mapping object.
+ * @group: The group that the buffer belongs to.
+ * @host_addr: The memory address of the buffer.
+ * @size: The size of the buffer.
+ * @flags: The flags used to map the buffer.
+ *
+ * Return: The pointer of the target mapping object or an error pointer on failure.
+ */
+static struct edgetpu_mapping *buffer_mapping_create(struct edgetpu_device_group *group,
+						     u64 host_addr, u64 size,
+						     edgetpu_map_flag_t flags)
 {
-	uint num_pages = 0;
-	struct page **pages;
 	int ret = -EINVAL;
-	u64 host_addr = arg->host_address;
-	edgetpu_map_flag_t flags = arg->flags;
-	struct edgetpu_host_map *hmap;
 	struct edgetpu_mapping *map = NULL;
 	struct edgetpu_iommu_domain *etdomain;
-	const u32 mmu_flags = map_to_mmu_flags(flags) | EDGETPU_MMU_HOST;
-	int i;
-	tpu_addr_t tpu_addr;
-	ulong offset;
-	uint gup_flags = gcip_iommu_get_gup_flags(host_addr, group->etdev->dev);
+	u64 gcip_map_flags;
 
-	if (!valid_dma_direction(flags & EDGETPU_MAP_DIR_MASK))
-		return -EINVAL;
-	/* Pin user pages before holding any lock. */
-
-	ret = gcip_iommu_get_offset_npages(group->etdev->dev, host_addr, arg->size, &offset,
-					   &num_pages);
-	if (ret) {
-		etdev_err(group->etdev, "Buffer size overflow: size=%llu", arg->size);
-		return ret;
+	map = kzalloc(sizeof(*map), GFP_KERNEL);
+	if (!map) {
+		ret = -ENOMEM;
+		goto err_ret;
 	}
 
-	pages = gcip_iommu_alloc_and_pin_user_pages(group->etdev->dev, host_addr, num_pages,
-						    &gup_flags, NULL);
-	if (IS_ERR(pages)) {
-		ret = PTR_ERR(pages);
-		etdev_err(group->etdev, "Failed to pin user pages (ret=%d)\n", ret);
-		return ret;
-	}
-	atomic64_add(num_pages, &current->mm->pinned_vm);
+	map->host_address = host_addr;
+	map->priv = edgetpu_device_group_get(group);
+	map->release = buffer_mapping_destroy;
+	map->show = edgetpu_host_map_show;
+	map->flags = flags;
+	map->dma_attrs = map_to_dma_attr(flags, true);
 
-	/* If the host pages are read-only, fallback to use DMA_TO_DEVICE. */
-	if (!(gup_flags & FOLL_WRITE)) {
-		flags &= ~EDGETPU_MAP_DIR_MASK;
-		flags |= EDGETPU_MAP_DMA_TO_DEVICE;
-	}
-
-	hmap = alloc_mapping_from_useraddr(group, host_addr, flags, pages, num_pages);
-	if (IS_ERR(hmap)) {
-		/* revert edgetpu_pin_user_pages() */
-		for (i = 0; i < num_pages; i++)
-			unpin_user_page(pages[i]);
-		atomic64_sub(num_pages, &current->mm->pinned_vm);
-		kvfree(pages);
-		return PTR_ERR(hmap);
-	}
-
-	kvfree(pages);
-	map = &hmap->map;
-	mmgrab(current->mm);
-	hmap->owning_mm = current->mm;
 	mutex_lock(&group->lock);
 	etdomain = edgetpu_group_domain_locked(group);
 	if (!edgetpu_device_group_is_finalized(group)) {
 		ret = edgetpu_group_errno(group);
 		mutex_unlock(&group->lock);
-		goto error;
+		goto err_free_map;
 	}
-	ret = edgetpu_mmu_map(group->etdev, map, etdomain, mmu_flags);
+	gcip_map_flags = edgetpu_mappings_encode_gcip_map_flags(flags, map->dma_attrs, true);
+	map->gcip_mapping = gcip_iommu_domain_map_buffer(etdomain->gdomain, host_addr, size,
+							 gcip_map_flags, NULL);
 	mutex_unlock(&group->lock);
-	if (ret) {
-		etdev_err(group->etdev, "map %lldB failed: %d (already mapped %zdB)",
-			  arg->size, ret, edgetpu_group_mappings_total_size(group));
-		goto error;
+	if (IS_ERR(map->gcip_mapping)) {
+		ret = PTR_ERR(map->gcip_mapping);
+		etdev_err(group->etdev, "map %lldB failed: %d (already mapped %zdB)", size, ret,
+			  edgetpu_group_mappings_total_size(group));
+		goto err_free_map;
 	}
-	map->map_size = arg->size;
+
+	return map;
+
+err_free_map:
+	kfree(map);
+err_ret:
+	return ERR_PTR(ret);
+}
+
+int edgetpu_device_group_map(struct edgetpu_device_group *group, struct edgetpu_map_ioctl *arg)
+{
+	int ret;
+	struct edgetpu_mapping *map;
+	tpu_addr_t tpu_addr;
+
+	map = buffer_mapping_create(group, arg->host_address, arg->size, arg->flags);
+	if (IS_ERR(map)) {
+		ret = PTR_ERR(map);
+		etdev_err(group->etdev, "map %lldB failed: %d (already mapped %zdB)", arg->size,
+			  ret, edgetpu_group_mappings_total_size(group));
+		return ret;
+	}
+
 	/*
 	 * @map can be freed (by another thread) once it's added to the mappings, record the address
 	 * before that.
 	 */
-	tpu_addr = map->device_address;
+	tpu_addr = map->gcip_mapping->device_address;
 	ret = edgetpu_mapping_add(&group->host_mappings, map);
 	if (ret) {
 		etdev_dbg(group->etdev, "duplicate mapping %u:%pad", group->workload_id, &tpu_addr);
-		goto error;
+		goto err_destroy_mapping;
 	}
 
 	arg->device_address = tpu_addr;
+
 	return 0;
 
-error:
-	edgetpu_mapping_lock(&group->host_mappings);
-	edgetpu_unmap_node(map); /* this will free @hmap */
-	edgetpu_mapping_unlock(&group->host_mappings);
+err_destroy_mapping:
+	buffer_mapping_destroy(map);
+
 	return ret;
 }
 
@@ -905,7 +825,7 @@ int edgetpu_device_group_unmap(struct edgetpu_device_group *group,
 	if (flags & EDGETPU_MAP_SKIP_CPU_SYNC)
 		map->dma_attrs |= DMA_ATTR_SKIP_CPU_SYNC;
 
-	edgetpu_unmap_node(map);
+	buffer_mapping_destroy(map);
 	edgetpu_mapping_unlock(&group->host_mappings);
 	return 0;
 }
@@ -921,7 +841,6 @@ int edgetpu_device_group_sync_buffer(struct edgetpu_device_group *group,
 	 * sync FROM_DEVICE only, so @dir here doesn't need to be wrapped with host_dma_dir().
 	 */
 	enum dma_data_direction dir = arg->flags & EDGETPU_MAP_DIR_MASK;
-	struct edgetpu_host_map *hmap;
 
 	if (!valid_dma_direction(dir))
 		return -EINVAL;
@@ -942,8 +861,7 @@ int edgetpu_device_group_sync_buffer(struct edgetpu_device_group *group,
 		goto unlock_mapping;
 	}
 
-	hmap = container_of(map, struct edgetpu_host_map, map);
-	ret = group_sync_host_map(group, hmap, arg->offset, arg->size, dir,
+	ret = group_sync_host_map(group, map, arg->offset, arg->size, dir,
 				  arg->flags & EDGETPU_SYNC_FOR_CPU);
 unlock_mapping:
 	edgetpu_mapping_unlock(&group->host_mappings);

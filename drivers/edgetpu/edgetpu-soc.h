@@ -18,6 +18,9 @@
 /* Probe-time init */
 int edgetpu_soc_init(struct edgetpu_dev *etdev);
 
+/* Module remove-time exit. */
+void edgetpu_soc_exit(struct edgetpu_dev *etdev);
+
 /* Prep for running firmware: set access control, etc. */
 int edgetpu_soc_prepare_firmware(struct edgetpu_dev *etdev);
 

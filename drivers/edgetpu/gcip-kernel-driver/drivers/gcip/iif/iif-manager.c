@@ -7,6 +7,7 @@
 
 #include <linux/idr.h>
 #include <linux/kref.h>
+#include <linux/of.h>
 #include <linux/slab.h>
 #include <linux/version.h>
 
@@ -14,6 +15,7 @@
 #include <linux/container_of.h>
 #endif
 
+#include <gcip/iif/iif-fence-table.h>
 #include <gcip/iif/iif-manager.h>
 
 static void iif_manager_destroy(struct kref *kref)
@@ -24,13 +26,20 @@ static void iif_manager_destroy(struct kref *kref)
 	kfree(mgr);
 }
 
-struct iif_manager *iif_manager_init(void)
+struct iif_manager *iif_manager_init(const struct device_node *np)
 {
 	struct iif_manager *mgr;
+	int ret;
 
 	mgr = kzalloc(sizeof(*mgr), GFP_KERNEL);
 	if (!mgr)
 		return ERR_PTR(-ENOMEM);
+
+	ret = iif_fence_table_init(np, &mgr->fence_table);
+	if (ret) {
+		kfree(mgr);
+		return ERR_PTR(ret);
+	}
 
 	kref_init(&mgr->kref);
 	ida_init(&mgr->idp);

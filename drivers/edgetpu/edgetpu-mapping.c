@@ -21,8 +21,8 @@
  */
 static int compare(struct edgetpu_mapping *map, tpu_addr_t iova)
 {
-	if (map->device_address != iova) {
-		if (map->device_address < iova)
+	if (map->gcip_mapping->device_address != iova) {
+		if (map->gcip_mapping->device_address < iova)
 			return -1;
 		else
 			return 1;
@@ -52,8 +52,7 @@ int edgetpu_mapping_add(struct edgetpu_mapping_root *mappings,
 	while (*new) {
 		struct edgetpu_mapping *this =
 			container_of(*new, struct edgetpu_mapping, node);
-		const int cmp =
-			compare(this, map->device_address);
+		const int cmp = compare(this, map->gcip_mapping->device_address);
 
 		parent = *new;
 		if (cmp > 0)
@@ -157,9 +156,22 @@ size_t edgetpu_mappings_total_size(struct edgetpu_mapping_root *mappings)
 		struct edgetpu_mapping *map =
 			container_of(node, struct edgetpu_mapping, node);
 
-		total += map->map_size;
+		total += map->gcip_mapping->size;
 	}
 
 	edgetpu_mapping_unlock(mappings);
 	return total;
+}
+
+u64 edgetpu_mappings_encode_gcip_map_flags(edgetpu_map_flag_t flags, unsigned long dma_attrs,
+					   bool adjust_dir)
+{
+	enum dma_data_direction dir = flags & EDGETPU_MAP_DIR_MASK;
+	bool coherent = flags & EDGETPU_MAP_COHERENT;
+	bool restrict_iova = !(flags & EDGETPU_MAP_CPU_NONACCESSIBLE);
+
+	if (adjust_dir)
+		dir = edgetpu_host_dma_dir(dir);
+
+	return gcip_iommu_encode_gcip_map_flags(dir, coherent, dma_attrs, restrict_iova);
 }

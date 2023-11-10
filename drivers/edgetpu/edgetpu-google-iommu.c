@@ -249,22 +249,25 @@ int edgetpu_mmu_map(struct edgetpu_dev *etdev, struct edgetpu_mapping *map,
 {
 	int ret;
 
-	ret = edgetpu_mmu_map_sgt(etdev, &map->sgt, etdomain, map->dir, map->dma_attrs, mmu_flags);
+	ret = edgetpu_mmu_map_sgt(etdev, map->gcip_mapping->sgt, etdomain, map->gcip_mapping->dir,
+				  map->dma_attrs, mmu_flags);
 	if (!ret)
 		return -ENOSPC;
 
-	map->sgt.nents = ret;
-	map->device_address = sg_dma_address(map->sgt.sgl);
+	map->gcip_mapping->sgt->nents = ret;
+	map->gcip_mapping->device_address = sg_dma_address(map->gcip_mapping->sgt->sgl);
 	etdev_dbg(etdev, "%s: pasid=%u iova=%pad dma=%pad size=%zx flags=%#x\n", __func__,
-		  etdomain->pasid, &map->device_address, &sg_dma_address(map->sgt.sgl),
-		  map->map_size, mmu_flags);
+		  etdomain->pasid, &map->gcip_mapping->device_address,
+		  &sg_dma_address(map->gcip_mapping->sgt->sgl), map->gcip_mapping->size, mmu_flags);
+
 	return 0;
 }
 
 void edgetpu_mmu_unmap(struct edgetpu_dev *etdev, struct edgetpu_mapping *map,
 		       struct edgetpu_iommu_domain *etdomain)
 {
-	edgetpu_mmu_unmap_sgt(etdev, &map->sgt, etdomain, map->dir, map->dma_attrs, 0);
+	edgetpu_mmu_unmap_sgt(etdev, map->gcip_mapping->sgt, etdomain, map->gcip_mapping->dir,
+			      map->dma_attrs, 0);
 }
 
 int edgetpu_mmu_map_sgt(struct edgetpu_dev *etdev, struct sg_table *sgt,

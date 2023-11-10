@@ -575,6 +575,7 @@ remove_mboxes:
 	edgetpu_mailbox_remove_all(etdev->mailbox_manager, false);
 remove_dev:
 	edgetpu_fs_remove(etdev);
+	edgetpu_soc_exit(etdev);
 	return ret;
 }
 
@@ -595,6 +596,7 @@ void edgetpu_device_remove(struct edgetpu_dev *etdev)
 	gcip_pm_shutdown(etdev->pm, true);
 	edgetpu_pm_destroy(etdev);
 	edgetpu_fs_remove(etdev);
+	edgetpu_soc_exit(etdev);
 }
 
 struct edgetpu_client *edgetpu_client_add(struct edgetpu_dev_iface *etiface)

@@ -169,6 +169,10 @@ int edgetpu_soc_init(struct edgetpu_dev *etdev)
 	return 0;
 }
 
+void edgetpu_soc_exit(struct edgetpu_dev *etdev)
+{
+}
+
 /* Caller ensures vid < EDGETPU_MAX_STREAM_ID. */
 static void set_ssmt_vid(struct edgetpu_dev *etdev, uint vid, uint val)
 {

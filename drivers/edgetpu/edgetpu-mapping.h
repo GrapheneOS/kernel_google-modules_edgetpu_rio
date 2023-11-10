@@ -18,6 +18,8 @@
 #include <linux/types.h>
 #include <linux/version.h>
 
+#include <gcip/gcip-iommu.h>
+
 #include "edgetpu-internal.h"
 #include "edgetpu-mmu.h"
 
@@ -28,11 +30,9 @@ struct edgetpu_mapping_root {
 };
 
 struct edgetpu_mapping {
+	struct gcip_iommu_mapping *gcip_mapping;
 	struct rb_node node;
 	u64 host_address;
-	tpu_addr_t device_address;
-	/* Size of buffer mapped in bytes. Always set. */
-	size_t map_size;
 	/*
 	 * The size used for allocating @alloc_iova in bytes. This field may be
 	 * set by edgetpu_mmu_map().
@@ -47,10 +47,9 @@ struct edgetpu_mapping {
 	 */
 	tpu_addr_t alloc_iova;
 	edgetpu_map_flag_t flags; /* the flag passed by the runtime */
+	u32 mmu_flags;
 	/* DMA attributes to be performed for dma_(un)map calls. */
 	unsigned long dma_attrs;
-	struct sg_table sgt;
-	enum dma_data_direction dir;
 	/* Private data set by whom created this mapping. */
 	void *priv;
 	/*
@@ -166,5 +165,12 @@ static inline int mmu_flag_to_iommu_prot(u32 mmu_flags, struct device *dev,
 
 /* Return total size of mappings under the supplied root. */
 size_t edgetpu_mappings_total_size(struct edgetpu_mapping_root *mappings);
+
+/*
+ * Returns the gcip_map_flags encoded from edgetpu_dma_flags and dma_attrs.
+ * If @adjust_dir is true, the dma data direction will be adjusted with edgetpu_host_dma_dir.
+ */
+u64 edgetpu_mappings_encode_gcip_map_flags(edgetpu_map_flag_t flags, unsigned long dma_attrs,
+					   bool adjust_dir);
 
 #endif /* __EDGETPU_MAPPING_H__ */

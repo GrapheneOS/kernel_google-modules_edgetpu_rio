@@ -389,6 +389,37 @@ static inline void sync_sg_if_needed(struct gcip_iommu_mapping *mapping, bool fo
 }
 
 /**
+ * gcip_iommu_mapping_unmap_buffer() - Revert gcip_iommu_domain_map_buffer
+ * @mapping: The target mapping that should be unmapped.
+ */
+static void gcip_iommu_mapping_unmap_buffer(struct gcip_iommu_mapping *mapping)
+{
+	struct sg_page_iter sg_iter;
+	struct page *page;
+	unsigned long num_pages = 0;
+	struct sg_table *sgt = mapping->sgt;
+	struct mm_struct *owning_mm = mapping->owning_mm;
+	enum dma_data_direction dir = GCIP_MAP_FLAGS_GET_DMA_DIRECTION(mapping->gcip_map_flags);
+
+	gcip_iommu_mapping_unmap_sgt(mapping);
+
+	for_each_sg_page(sgt->sgl, &sg_iter, sgt->orig_nents, 0) {
+		page = sg_page_iter_page(&sg_iter);
+		if (dir == DMA_FROM_DEVICE || dir == DMA_BIDIRECTIONAL)
+			set_page_dirty(page);
+
+		unpin_user_page(page);
+		num_pages++;
+	}
+
+	atomic64_sub(num_pages, &owning_mm->pinned_vm);
+	mmdrop(owning_mm);
+	sg_free_table(sgt);
+	kfree(sgt);
+	kfree(mapping);
+}
+
+/**
  * gcip_pin_user_pages_fast() - Tries pin_user_pages_fast and returns success only if all pages are
  *                              pinned.
  * @pages: The allocated pages to be pinned.
@@ -842,8 +873,19 @@ void gcip_iommu_dmabuf_map_show(struct gcip_iommu_mapping *mapping, struct seq_f
 	entry_show_dma_addrs(mapping, s);
 }
 
-int gcip_iommu_get_offset_npages(struct device *dev, u64 host_address, size_t size, ulong *off_ptr,
-				 uint *n_pg_ptr)
+/**
+ * gcip_iommu_get_offset_npages() - Calculates the offset and the number of pages from given
+ *                                  host_addr and size.
+ * @dev: The device pointer for printing debug message.
+ * @host_address: The host address passed by user.
+ * @size: The size passed by user.
+ * @off_ptr: The pointer used to output the offset of the first page that the buffer starts at.
+ * @n_pg_ptr: The pointer used to output the number of pages.
+ *
+ * Return: Error code or 0 on success.
+ */
+static int gcip_iommu_get_offset_npages(struct device *dev, u64 host_address, size_t size,
+					ulong *off_ptr, uint *n_pg_ptr)
 {
 	ulong offset;
 	uint num_pages;
@@ -868,7 +910,17 @@ int gcip_iommu_get_offset_npages(struct device *dev, u64 host_address, size_t si
 	return 0;
 }
 
-unsigned int gcip_iommu_get_gup_flags(u64 host_addr, struct device *dev)
+/**
+ * gcip_iommu_get_gup_flags() - Checks the access mode of the given address with VMA.
+ * @host_addr: The target host_addr for checking the access.
+ * @dev: The device struct used to print messages.
+ *
+ * Checks and returns the read/write permission of address @host_addr.
+ * If the target address can not be found in current->mm, assuming it is RW.
+ *
+ * Return: The encoded gup_flags of target host_addr.
+ */
+static unsigned int gcip_iommu_get_gup_flags(u64 host_addr, struct device *dev)
 {
 	struct vm_area_struct *vma;
 	unsigned int gup_flags;
@@ -894,9 +946,26 @@ unsigned int gcip_iommu_get_gup_flags(u64 host_addr, struct device *dev)
 }
 
 /* TODO(302510715): Put atomic64_add here after the buffer mapping process is moved to GCIP. */
-struct page **gcip_iommu_alloc_and_pin_user_pages(struct device *dev, u64 host_address,
-						  uint num_pages, unsigned int *gup_flags,
-						  struct mutex *pin_user_pages_lock)
+/**
+ * gcip_iommu_alloc_and_pin_user_pages() - Pins the user pages and returns an array of struct page
+ *                                         pointers for the pinned pages.
+ * @dev: The device pointer used to print messages.
+ * @host_address: The requested host address.
+ * @num_pages: The requested number of pages.
+ * @gup_flags: The pointer gup_flags for pinning user pages.
+ *             The flag FOLL_WRITE in gup_flags may be reomved if the user pages cannot be pinned
+ *             with write access.
+ * @pin_user_pages_lock: The lock to protect pin_user_page
+ *
+ * This function tries to pin the user pages with `pin_user_page_fast` first and will try
+ * `pin_user_page` on failure.
+ * If both of above functions failed, it will retry with read-only mode.
+ *
+ * Return: Pinned user pages or error pointer on failure.
+ */
+static struct page **gcip_iommu_alloc_and_pin_user_pages(struct device *dev, u64 host_address,
+							 uint num_pages, unsigned int *gup_flags,
+							 struct mutex *pin_user_pages_lock)
 {
 	unsigned long start_addr = host_address & PAGE_MASK;
 	struct page **pages;
@@ -935,8 +1004,23 @@ err_pin_read_only:
 	return ERR_PTR(ret >= 0 ? -EFAULT : ret);
 }
 
-struct gcip_iommu_mapping *gcip_iommu_domain_map_sgt(struct gcip_iommu_domain *domain,
-						     struct sg_table *sgt, u64 gcip_map_flags)
+/**
+ * gcip_iommu_domain_map_sgt() - Maps the scatter-gather table to the target IOMMU domain
+ * @domain: The desired IOMMU domain where the sgt should be mapped.
+ * @sgt: The sg_table to mapped to the target IOMMU domain.
+ * @gcip_map_flags: The flags used to create the mapping, which can be encoded with
+ *                  gcip_iommu_encode_gcip_map_flags() or `GCIP_MAP_FLAGS_DMA_*_TO_FLAGS` macros.
+ *
+ * This function will map the scatter-gather table to the target IOMMU domain.
+ * sgt->nents will be updated to the number of mapped chunks.
+ * The caller must not release sgt until gcip_iommu_mapping_unmap is called.
+ *
+ * Return: The mapping of the desired DMA buffer with type GCIP_IOMMU_MAPPING_BUFFER
+ *         or an error pointer on failure.
+ */
+static struct gcip_iommu_mapping *gcip_iommu_domain_map_sgt(struct gcip_iommu_domain *domain,
+							    struct sg_table *sgt,
+							    u64 gcip_map_flags)
 {
 	struct gcip_iommu_mapping *mapping;
 	int ret;
@@ -974,6 +1058,96 @@ struct gcip_iommu_mapping *gcip_iommu_domain_map_sgt(struct gcip_iommu_domain *d
 
 err_map_sgt:
 	kfree(mapping);
+	return ERR_PTR(ret);
+}
+
+struct gcip_iommu_mapping *gcip_iommu_domain_map_buffer(struct gcip_iommu_domain *domain,
+							u64 host_address, size_t size,
+							u64 gcip_map_flags,
+							struct mutex *pin_user_pages_lock)
+{
+	struct gcip_iommu_mapping *mapping;
+	enum dma_data_direction dir = GCIP_MAP_FLAGS_GET_DMA_DIRECTION(gcip_map_flags);
+	uint num_pages = 0;
+	struct page **pages;
+	ulong offset;
+	int ret, i;
+	struct sg_table *sgt;
+	uint gup_flags = gcip_iommu_get_gup_flags(host_address, domain->dev);
+
+	if (!valid_dma_direction(dir))
+		return ERR_PTR(-EINVAL);
+
+	if (size == 0)
+		return ERR_PTR(-EINVAL);
+
+	if (!access_ok((const void *)host_address, size)) {
+		dev_err(domain->dev, "invalid address range in buffer map request");
+		return ERR_PTR(-EFAULT);
+	}
+
+	ret = gcip_iommu_get_offset_npages(domain->dev, host_address, size, &offset, &num_pages);
+	if (ret) {
+		dev_err(domain->dev, "Buffer size overflow: size=%#zx", size);
+		return ERR_PTR(ret);
+	}
+
+	pages = gcip_iommu_alloc_and_pin_user_pages(domain->dev, host_address, num_pages,
+						    &gup_flags, pin_user_pages_lock);
+	if (IS_ERR(pages)) {
+		dev_err(domain->dev, "Failed to pin user pages (ret=%ld)\n", PTR_ERR(pages));
+		return ERR_CAST(pages);
+	}
+
+	if (!(gup_flags & FOLL_WRITE)) {
+		dir = DMA_TO_DEVICE;
+		gcip_map_flags &= ~(((BIT(GCIP_MAP_FLAGS_DMA_DIRECTION_BIT_SIZE) - 1)
+				     << GCIP_MAP_FLAGS_DMA_DIRECTION_OFFSET));
+		gcip_map_flags |= GCIP_MAP_FLAGS_DMA_DIRECTION_TO_FLAGS(DMA_TO_DEVICE);
+	}
+
+	sgt = kzalloc(sizeof(*sgt), GFP_KERNEL);
+	if (!sgt) {
+		ret = -ENOMEM;
+		goto err_unpin_page;
+	}
+
+	ret = sg_alloc_table_from_pages(sgt, pages, num_pages, 0, num_pages * PAGE_SIZE,
+					GFP_KERNEL);
+	if (ret) {
+		dev_err(domain->dev, "Failed to alloc sgt for mapping (ret=%d)\n", ret);
+		goto err_free_table;
+	}
+
+	mapping = gcip_iommu_domain_map_sgt(domain, sgt, gcip_map_flags);
+	if (IS_ERR(mapping)) {
+		ret = PTR_ERR(mapping);
+		goto err_free_table;
+	}
+
+	atomic64_add(num_pages, &current->mm->pinned_vm);
+	mmgrab(current->mm);
+	mapping->owning_mm = current->mm;
+	mapping->size = size;
+	mapping->dir = dir;
+	mapping->device_address = sg_dma_address(mapping->sgt->sgl) + offset;
+
+	kvfree(pages);
+
+	return mapping;
+
+err_free_table:
+	/*
+	 * The caller must call sg_free_table to clean up any leftover allocations if
+	 * sg_alloc_table_from_pages returns non-zero values.
+	 */
+	sg_free_table(sgt);
+	kfree(sgt);
+err_unpin_page:
+	for (i = 0; i < num_pages; i++)
+		unpin_user_page(pages[i]);
+	kvfree(pages);
+
 	return ERR_PTR(ret);
 }
 
@@ -1084,12 +1258,7 @@ void gcip_iommu_mapping_unmap(struct gcip_iommu_mapping *mapping)
 	sync_sg_if_needed(mapping, false);
 
 	if (mapping->type == GCIP_IOMMU_MAPPING_BUFFER) {
-		gcip_iommu_mapping_unmap_sgt(mapping);
-		/*
-		 * TODO(b/302127145): Refactor the function to make buffer and dmabuf interface
-		 *                    symmetric.
-		 */
-		kfree(mapping);
+		gcip_iommu_mapping_unmap_buffer(mapping);
 	} else if (mapping->type == GCIP_IOMMU_MAPPING_DMA_BUF) {
 		gcip_iommu_mapping_unmap_dma_buf(mapping);
 	}
