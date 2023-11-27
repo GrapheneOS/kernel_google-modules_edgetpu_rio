@@ -15,6 +15,7 @@
 
 #include <gcip/gcip-pm.h>
 #include <gcip/gcip-iommu.h>
+#include <gcip/iif/iif-manager.h>
 
 #include "edgetpu-config.h"
 #include "edgetpu-debug-dump.h"
@@ -28,7 +29,6 @@
 #include "edgetpu-telemetry.h"
 #include "edgetpu-thermal.h"
 #include "mobile-firmware.h"
-#include "mobile-pm.h"
 
 static struct edgetpu_dev *edgetpu_debug_pointer;
 
@@ -383,11 +383,17 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		goto out_destroy_thermal;
 	}
 
+	etdev->iif_mgr = iif_manager_init(etdev->dev->of_node);
+	if (IS_ERR(etdev->iif_mgr)) {
+		etdev_warn(etdev, "Failed to init IIF manager: %ld", PTR_ERR(etdev->iif_mgr));
+		etdev->iif_mgr = NULL;
+	}
+
 	if (etmdev->after_probe) {
 		ret = etmdev->after_probe(etmdev);
 		if (ret) {
 			dev_err(dev, "after_probe callback failed: %d", ret);
-			goto out_destroy_thermal;
+			goto out_put_iif_mgr;
 		}
 	}
 
@@ -400,6 +406,9 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 
 	return 0;
 
+out_put_iif_mgr:
+	if (etdev->iif_mgr)
+		iif_manager_put(etdev->iif_mgr);
 out_destroy_thermal:
 	edgetpu_thermal_destroy(etdev);
 	edgetpu_mobile_firmware_destroy(etdev);
@@ -422,6 +431,8 @@ static int edgetpu_mobile_platform_remove(struct platform_device *pdev)
 	struct edgetpu_dev *etdev = platform_get_drvdata(pdev);
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 
+	if (etdev->iif_mgr)
+		iif_manager_put(etdev->iif_mgr);
 	edgetpu_thermal_destroy(etdev);
 	edgetpu_mobile_firmware_destroy(etdev);
 	edgetpu_telemetry_exit(etdev);

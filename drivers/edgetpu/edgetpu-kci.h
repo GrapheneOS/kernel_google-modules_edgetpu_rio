@@ -261,8 +261,20 @@ int edgetpu_kci_thermal_control(struct edgetpu_dev *etdev, bool enable);
  * Sends device properties to firmware.
  * The KCI command will be sent only when @device_prop is initialized.
  */
-int edgetpu_kci_set_device_properties(struct edgetpu_kci *gkci,
+int edgetpu_kci_set_device_properties(struct edgetpu_kci *etkci,
 				      struct edgetpu_dev_prop *device_prop);
+/*
+ * Sends min/max frequency limits for firmware to enforce when handling client power requests.
+ *
+ * Arguments are in kHz and inclusive. For example, a max of 1000 kHz will allow frequencies up to
+ * and including 1000 kHz. If a value of 0 is requested for a given limit, than no limit is enforced
+ * when considering client power state requests.
+ *
+ * Note that thermal constraints can still override a minimum limit set by this KCI command.
+ *
+ * Returns 0 on success or < 0 on error.
+ */
+int edgetpu_kci_set_power_limits(struct edgetpu_kci *etkci, u32 min_freq, u32 max_freq);
 
 /*
  * Send an ack to the FW after handling a reverse KCI request.
@@ -272,6 +284,16 @@ int edgetpu_kci_set_device_properties(struct edgetpu_kci *gkci,
  */
 int edgetpu_kci_resp_rkci_ack(struct edgetpu_dev *etdev,
 			      struct gcip_kci_response_element *rkci_cmd);
+
+/*
+ * Flush any pending reverse KCI requests.
+ *
+ * All pending requests at time of call will be complete upon return. Requests arriving after the
+ * call may or may not be still pending.
+ *
+ * Returns true if any work was pending, false if the worker was already idle.
+ */
+bool edgetpu_kci_flush_rkci(struct edgetpu_dev *etdev);
 
 static inline void edgetpu_kci_update_usage_async(struct edgetpu_kci *etkci)
 {

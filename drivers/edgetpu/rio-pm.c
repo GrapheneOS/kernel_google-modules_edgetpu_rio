@@ -15,9 +15,8 @@
 #include "edgetpu-pm.h"
 #include "edgetpu-soc.h"
 #include "mobile-soc-gsx01.h"
-#include "mobile-pm.h"
 
-#include "mobile-pm.c"
+#include "edgetpu-pm.c"
 
 #define SHUTDOWN_DELAY_US_MIN 200
 #define SHUTDOWN_DELAY_US_MAX 200
@@ -169,5 +168,5 @@ int edgetpu_chip_pm_create(struct edgetpu_dev *etdev)
 
 	etdev->soc_data->bcl_dev = google_retrieve_bcl_handle();
 
-	return edgetpu_mobile_pm_create(etdev);
+	return 0;
 }

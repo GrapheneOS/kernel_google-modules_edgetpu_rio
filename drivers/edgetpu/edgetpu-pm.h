@@ -26,8 +26,13 @@ struct edgetpu_pm_handlers {
 extern const struct dev_pm_ops edgetpu_pm_ops;
 
 /* Initialize a power management interface for an edgetpu device */
-int edgetpu_pm_create(struct edgetpu_dev *etdev,
-		      const struct edgetpu_pm_handlers *handlers);
+int edgetpu_pm_create(struct edgetpu_dev *etdev);
+
+#if IS_ENABLED(CONFIG_EDGETPU_TEST)
+/* As above but specifying custom handlers, for unit tests */
+int edgetpu_pm_create_handlers(struct edgetpu_dev *etdev,
+			       const struct edgetpu_pm_handlers *handlers);
+#endif
 
 /*
  * Wrapper for chip-specific implementation.

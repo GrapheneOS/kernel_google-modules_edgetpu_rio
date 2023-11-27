@@ -34,7 +34,6 @@ struct edgetpu_mobile_platform_pwr {
 	struct mutex policy_lock;
 	enum edgetpu_pwr_state curr_policy;
 	struct mutex state_lock;
-	u64 min_state;
 	u64 requested_state;
 
 	/* LPM callbacks, NULL for chips without LPM */

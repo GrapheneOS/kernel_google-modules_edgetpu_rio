@@ -57,7 +57,7 @@ static int gcip_resource_accessor_addr_read(struct gcip_resource_accessor *acces
 	int type = gcip_resource_accessor_get_type(accessor, addr);
 
 	if (type < 0) {
-		dev_warn(accessor->dev, "Failed to find a registered resource for %pad\n", &addr);
+		dev_warn(accessor->dev, "Failed to find a registered resource for %pap\n", &addr);
 		return -EINVAL;
 	}
 
@@ -87,12 +87,12 @@ static int gcip_resource_accessor_addr_write(struct gcip_resource_accessor *acce
 	} else if (type == IORESOURCE_IO) {
 		vaddr = ioremap(addr, width);
 	} else {
-		dev_warn(accessor->dev, "Failed to find a registered resource for %pad\n", &addr);
+		dev_warn(accessor->dev, "Failed to find a registered resource for %pap\n", &addr);
 		return -EINVAL;
 	}
 
 	if (!vaddr) {
-		dev_warn(accessor->dev, "Failed to map %pad\n", &addr);
+		dev_warn(accessor->dev, "Failed to map %pap\n", &addr);
 		return -EFAULT;
 	}
 
@@ -129,13 +129,14 @@ static ssize_t gcip_resource_accessor_read(struct file *file, char __user *user_
 					   loff_t *ppos)
 {
 	/* 64 is enough for an 8-byte address, 8-byte value, the space and the separator. */
-	char buf[64] = {};
+	char buf[64];
 	ssize_t ret;
 	struct gcip_resource_accessor *accessor;
 	void __iomem *vaddr;
 	phys_addr_t addr;
 	unsigned int width;
-	int type;
+	u64 val = 0;
+	int type, size;
 
 	accessor = file->private_data;
 	addr = accessor->last_query_addr;
@@ -156,36 +157,38 @@ static ssize_t gcip_resource_accessor_read(struct file *file, char __user *user_
 	} else if (type == IORESOURCE_IO) {
 		vaddr = ioremap(addr, width);
 	} else {
-		dev_warn(accessor->dev, "Failed to find a registered resource for %pad\n", &addr);
+		dev_warn(accessor->dev, "Failed to find a registered resource for %pap\n", &addr);
 		return -EINVAL;
 	}
 
 	if (!vaddr) {
-		dev_warn(accessor->dev, "Failed to map %pad\n", &addr);
+		dev_warn(accessor->dev, "Failed to map %pap\n", &addr);
 		return -EFAULT;
 	}
 
 	switch (width) {
 	case 1:
-		scnprintf(buf, sizeof(buf), "%#llx: %#02x\n", addr, readb(vaddr));
+		val = readb(vaddr);
 		break;
 	case 2:
-		scnprintf(buf, sizeof(buf), "%#llx: %#04x\n", addr, readw(vaddr));
+		val = readw(vaddr);
 		break;
 	case 4:
-		scnprintf(buf, sizeof(buf), "%#llx: %#08x\n", addr, readl(vaddr));
+		val = readl(vaddr);
 		break;
 	case 8:
-		scnprintf(buf, sizeof(buf), "%#llx: %#016llx\n", addr, readq(vaddr));
+		val = readq(vaddr);
 		break;
 	}
+	/* width-byte value is width * 2 long in hex, + 2 for '0x'. */
+	size = scnprintf(buf, sizeof(buf), "%pap: %#0*llx\n", &addr, width * 2 + 2, val);
 
 	if (type == IORESOURCE_MEM)
 		memunmap(vaddr);
 	else if (type == IORESOURCE_IO)
 		iounmap(vaddr);
 
-	ret = simple_read_from_buffer(user_buf, len, ppos, buf, sizeof(buf));
+	ret = simple_read_from_buffer(user_buf, len, ppos, buf, size);
 	return ret;
 }
 

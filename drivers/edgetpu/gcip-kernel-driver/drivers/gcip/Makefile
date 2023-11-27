@@ -4,7 +4,7 @@
 #
 
 CONFIG_GCIP		?= m
-obj-$(CONFIG_GCIP)	+= gcip.o iif/
+obj-$(CONFIG_GCIP)	+= gcip.o
 
 gcip-objs		:= gcip-alloc-helper.o \
 			   gcip-dma-fence.o \
@@ -23,9 +23,16 @@ gcip-objs		:= gcip-alloc-helper.o \
 			   gcip-thermal.o \
 			   gcip-usage-stats.o
 
+gcip-objs		+= iif/iif-fence-table.o \
+			   iif/iif-fence.o \
+			   iif/iif-manager.o \
+			   iif/iif-signaler-submission-waiter.o \
+			   iif/iif-sync-file.o
+
 CURRENT_DIR=$(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 ccflags-y += -I$(CURRENT_DIR)/../../include
+
 
 
 modules modules_install clean:

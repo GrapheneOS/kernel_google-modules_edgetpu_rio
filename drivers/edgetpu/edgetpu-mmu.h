@@ -104,18 +104,6 @@ static inline unsigned long map_to_dma_attr(edgetpu_map_flag_t flags, bool map)
 int edgetpu_mmu_attach(struct edgetpu_dev *dev);
 void edgetpu_mmu_detach(struct edgetpu_dev *dev);
 
-int edgetpu_mmu_map(struct edgetpu_dev *dev, struct edgetpu_mapping *map,
-		    struct edgetpu_iommu_domain *etdomain, u32 mmu_flags);
-void edgetpu_mmu_unmap(struct edgetpu_dev *dev, struct edgetpu_mapping *map,
-		       struct edgetpu_iommu_domain *etdomain);
-
-int edgetpu_mmu_map_sgt(struct edgetpu_dev *etdev, struct sg_table *sgt,
-			struct edgetpu_iommu_domain *etdomain, enum dma_data_direction dir,
-			unsigned long dma_attrs, u32 mmu_flags);
-void edgetpu_mmu_unmap_sgt(struct edgetpu_dev *etdev, struct sg_table *sgt,
-			   struct edgetpu_iommu_domain *etdomain, enum dma_data_direction dir,
-			   unsigned long dma_attrs, u32 mmu_flags);
-
 /**
  * Maps TPU IOVA @iova to @sgt.
  * @sgt: the sg table presents the list of pages.

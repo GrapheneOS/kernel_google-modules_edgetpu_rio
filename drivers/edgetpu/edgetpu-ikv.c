@@ -7,7 +7,6 @@
 
 #include <gcip/gcip-mailbox.h>
 #include <linux/slab.h>
-#include <uapi/linux/sched/types.h>
 
 #include "edgetpu-ikv.h"
 #include "edgetpu-ikv-mailbox-ops.h"
@@ -28,18 +27,18 @@
 #define IKV_TIMEOUT	(1000)
 #endif
 
-static void edgetpu_ikv_consume_responses_work(struct kthread_work *work)
-{
-	struct edgetpu_ikv *ikv = container_of(work, struct edgetpu_ikv, response_work);
-
-	gcip_mailbox_consume_responses_work(ikv->mbx_protocol);
-}
-
 static void edgetpu_ikv_handle_irq(struct edgetpu_mailbox *mailbox)
 {
 	struct edgetpu_ikv *ikv = mailbox->internal.etikv;
 
-	kthread_queue_work(&ikv->response_worker, &ikv->response_work);
+	/*
+	 * Process responses directly, to avoid the latency from scheduling a worker thread.
+	 *
+	 * Since the in-kernel VII `acquire_resp_queue_lock` op sets @atomic to true, the response
+	 * processing function will be safe to call in an IRQ context.
+	 */
+	/* TODO(b/312098074) Rename this function to indicate it is not only called by workers */
+	gcip_mailbox_consume_responses_work(ikv->mbx_protocol);
 }
 
 static int edgetpu_ikv_alloc_queue(struct edgetpu_ikv *etikv, enum gcip_mailbox_queue_type type)
@@ -94,30 +93,6 @@ static void edgetpu_ikv_free_queue(struct edgetpu_ikv *etikv, enum gcip_mailbox_
 	}
 }
 
-#define RT_THREAD_PRIORITY 2
-/*
- * Helper function to create a kthread with custom priority to execute the response handling worker
- */
-static struct task_struct *edgetpu_ikv_create_response_thread(struct edgetpu_dev *etdev, void *data)
-{
-	static const struct sched_param param = {
-		.sched_priority = RT_THREAD_PRIORITY,
-	};
-	struct task_struct *task = kthread_create(kthread_worker_fn, data, "edgetpu_ikv_response");
-
-	if (IS_ERR(task))
-		return task;
-
-	wake_up_process(task);
-	if (sched_setscheduler(task, SCHED_FIFO, &param))
-		etdev_warn(etdev, "in-kernel VII response task NOT set to RT priority\n");
-	else
-		etdev_dbg(etdev, "in-kernel VII response task set to RT priority: %i\n",
-			  param.sched_priority);
-
-	return task;
-}
-
 int edgetpu_ikv_init(struct edgetpu_mailbox_manager *mgr, struct edgetpu_ikv *etikv)
 {
 	struct edgetpu_mailbox *mbx_hardware;
@@ -168,17 +143,8 @@ int edgetpu_ikv_init(struct edgetpu_mailbox_manager *mgr, struct edgetpu_ikv *et
 	if (ret)
 		goto err_free_resp_queue;
 
-	kthread_init_worker(&etikv->response_worker);
-	etikv->response_thread =
-		edgetpu_ikv_create_response_thread(etikv->etdev, &etikv->response_worker);
-	if (IS_ERR(etikv->response_thread)) {
-		ret = PTR_ERR(etikv->response_thread);
-		goto err_free_resp_queue;
-	}
-	kthread_init_work(&etikv->response_work, edgetpu_ikv_consume_responses_work);
-
 	init_waitqueue_head(&etikv->pending_commands);
-	mutex_init(&etikv->wait_list_lock);
+	spin_lock_init(&etikv->wait_list_lock);
 
 	edgetpu_mailbox_enable(mbx_hardware);
 
@@ -251,10 +217,6 @@ void edgetpu_ikv_release(struct edgetpu_dev *etdev, struct edgetpu_ikv *etikv)
 		write_unlock_irqrestore(&mgr->mailboxes_lock, flags);
 	}
 
-	kthread_cancel_work_sync(&etikv->response_work);
-	kthread_flush_worker(&etikv->response_worker);
-	kthread_stop(etikv->response_thread);
-
 	gcip_mailbox_release(etikv->mbx_protocol);
 	etikv->mbx_hardware = NULL;
 
@@ -264,10 +226,11 @@ void edgetpu_ikv_release(struct edgetpu_dev *etdev, struct edgetpu_ikv *etikv)
 
 int edgetpu_ikv_send_cmd(struct edgetpu_ikv *etikv, struct edgetpu_vii_command *cmd,
 			 struct list_head *pending_queue, struct list_head *ready_queue,
-			 struct mutex *queue_lock, struct edgetpu_device_group *group_to_notify)
+			 spinlock_t *queue_lock, struct edgetpu_device_group *group_to_notify)
 {
 	struct edgetpu_ikv_response *resp;
 	struct gcip_mailbox_resp_awaiter *awaiter;
+	unsigned long flags;
 	int ret;
 
 	if (!etikv->enabled)
@@ -286,9 +249,9 @@ int edgetpu_ikv_send_cmd(struct edgetpu_ikv *etikv, struct edgetpu_vii_command *
 	resp->processed = false;
 	resp->client_seq = cmd->seq;
 	resp->group_to_notify = group_to_notify;
-	mutex_lock(queue_lock);
+	spin_lock_irqsave(queue_lock, flags);
 	list_add_tail(&resp->list_entry, pending_queue);
-	mutex_unlock(queue_lock);
+	spin_unlock_irqrestore(queue_lock, flags);
 
 	awaiter = gcip_mailbox_put_cmd(etikv->mbx_protocol, cmd, &resp->resp, resp);
 	if (IS_ERR(awaiter)) {

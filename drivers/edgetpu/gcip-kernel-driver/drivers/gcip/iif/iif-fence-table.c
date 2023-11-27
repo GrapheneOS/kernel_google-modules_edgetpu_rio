@@ -5,6 +5,8 @@
  * Copyright (C) 2023 Google LLC
  */
 
+#define pr_fmt(fmt) "iif: " fmt
+
 #include <linux/io.h>
 #include <linux/of_address.h>
 #include <linux/of.h>

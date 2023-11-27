@@ -378,14 +378,6 @@ long edgetpu_soc_pm_get_rate(struct edgetpu_dev *etdev, int flags)
 	return curr_state;
 }
 
-int edgetpu_soc_pm_set_rate(unsigned long rate)
-{
-	if (IS_ENABLED(CONFIG_EDGETPU_TEST))
-		edgetpu_pm_rate = rate;
-
-	return -EOPNOTSUPP;
-}
-
 static int edgetpu_core_rate_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
@@ -398,16 +390,6 @@ static int edgetpu_core_rate_get(void *data, u64 *val)
 	}
 
 	return 0;
-}
-
-static int edgetpu_core_rate_set(void *data, u64 val)
-{
-	unsigned long dbg_rate_req;
-
-	dbg_rate_req = TPU_DEBUG_REQ | TPU_CLK_CORE_DEBUG;
-	dbg_rate_req |= val;
-
-	return edgetpu_soc_pm_set_rate(dbg_rate_req);
 }
 
 static int edgetpu_ctl_rate_get(void *data, u64 *val)
@@ -424,16 +406,6 @@ static int edgetpu_ctl_rate_get(void *data, u64 *val)
 	return 0;
 }
 
-static int edgetpu_ctl_rate_set(void *data, u64 val)
-{
-	unsigned long dbg_rate_req;
-
-	dbg_rate_req = TPU_DEBUG_REQ | TPU_CLK_CTL_DEBUG;
-	dbg_rate_req |= 1000;
-
-	return edgetpu_soc_pm_set_rate(dbg_rate_req);
-}
-
 static int edgetpu_axi_rate_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
@@ -446,16 +418,6 @@ static int edgetpu_axi_rate_get(void *data, u64 *val)
 	}
 
 	return 0;
-}
-
-static int edgetpu_axi_rate_set(void *data, u64 val)
-{
-	unsigned long dbg_rate_req;
-
-	dbg_rate_req = TPU_DEBUG_REQ | TPU_CLK_AXI_DEBUG;
-	dbg_rate_req |= 1000;
-
-	return edgetpu_soc_pm_set_rate(dbg_rate_req);
 }
 
 static int edgetpu_apb_rate_get(void *data, u64 *val)
@@ -486,22 +448,6 @@ static int edgetpu_uart_rate_get(void *data, u64 *val)
 	return 0;
 }
 
-static int edgetpu_vdd_int_m_set(void *data, u64 val)
-{
-	struct edgetpu_dev *etdev = (typeof(etdev))data;
-	unsigned long dbg_rate_req;
-
-	if (val > MAX_VOLTAGE_VAL) {
-		etdev_err(etdev, "Preventing INT_M voltage > %duV", MAX_VOLTAGE_VAL);
-		return -EINVAL;
-	}
-
-	dbg_rate_req = TPU_DEBUG_REQ | TPU_VDD_INT_M_DEBUG;
-	dbg_rate_req |= val;
-
-	return edgetpu_soc_pm_set_rate(dbg_rate_req);
-}
-
 static int edgetpu_vdd_int_m_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
@@ -514,24 +460,6 @@ static int edgetpu_vdd_int_m_get(void *data, u64 *val)
 	}
 
 	return 0;
-}
-
-static int edgetpu_vdd_tpu_set(void *data, u64 val)
-{
-	int ret;
-	struct edgetpu_dev *etdev = (typeof(etdev))data;
-	unsigned long dbg_rate_req;
-
-	if (val > MAX_VOLTAGE_VAL) {
-		etdev_err(etdev, "Preventing VDD_TPU voltage > %duV", MAX_VOLTAGE_VAL);
-		return -EINVAL;
-	}
-
-	dbg_rate_req = TPU_DEBUG_REQ | TPU_VDD_TPU_DEBUG;
-	dbg_rate_req |= val;
-
-	ret = edgetpu_soc_pm_set_rate(dbg_rate_req);
-	return ret;
 }
 
 static int edgetpu_vdd_tpu_get(void *data, u64 *val)
@@ -548,24 +476,6 @@ static int edgetpu_vdd_tpu_get(void *data, u64 *val)
 	return 0;
 }
 
-static int edgetpu_vdd_tpu_m_set(void *data, u64 val)
-{
-	int ret;
-	struct edgetpu_dev *etdev = (typeof(etdev))data;
-	unsigned long dbg_rate_req;
-
-	if (val > MAX_VOLTAGE_VAL) {
-		etdev_err(etdev, "Preventing VDD_TPU voltage > %duV", MAX_VOLTAGE_VAL);
-		return -EINVAL;
-	}
-
-	dbg_rate_req = TPU_DEBUG_REQ | TPU_VDD_TPU_M_DEBUG;
-	dbg_rate_req |= val;
-
-	ret = edgetpu_soc_pm_set_rate(dbg_rate_req);
-	return ret;
-}
-
 static int edgetpu_vdd_tpu_m_get(void *data, u64 *val)
 {
 	struct edgetpu_dev *etdev = (typeof(etdev))data;
@@ -580,17 +490,14 @@ static int edgetpu_vdd_tpu_m_get(void *data, u64 *val)
 	return 0;
 }
 
-DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_core_rate, edgetpu_core_rate_get, edgetpu_core_rate_set,
-			 "%llu\n");
-DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_ctl_rate, edgetpu_ctl_rate_get, edgetpu_ctl_rate_set, "%llu\n");
-DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_axi_rate, edgetpu_axi_rate_get, edgetpu_axi_rate_set, "%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_core_rate, edgetpu_core_rate_get, NULL, "%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_ctl_rate, edgetpu_ctl_rate_get, NULL, "%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_axi_rate, edgetpu_axi_rate_get, NULL, "%llu\n");
 DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_apb_rate, edgetpu_apb_rate_get, NULL, "%llu\n");
 DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_uart_rate, edgetpu_uart_rate_get, NULL, "%llu\n");
-DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_vdd_int_m, edgetpu_vdd_int_m_get, edgetpu_vdd_int_m_set,
-			 "%llu\n");
-DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_vdd_tpu, edgetpu_vdd_tpu_get, edgetpu_vdd_tpu_set, "%llu\n");
-DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_vdd_tpu_m, edgetpu_vdd_tpu_m_get, edgetpu_vdd_tpu_m_set,
-			 "%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_vdd_int_m, edgetpu_vdd_int_m_get, NULL, "%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_vdd_tpu, edgetpu_vdd_tpu_get, NULL, "%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(fops_tpu_vdd_tpu_m, edgetpu_vdd_tpu_m_get, NULL, "%llu\n");
 
 void edgetpu_soc_pm_power_down(struct edgetpu_dev *etdev)
 {

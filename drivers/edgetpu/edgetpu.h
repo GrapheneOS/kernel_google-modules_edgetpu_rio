@@ -576,6 +576,8 @@ struct edgetpu_ext_mailbox_ioctl {
 #define EDGETPU_ERROR_HW_FAIL		0x10
 /* Firmware-reported timeout on runtime processing of workload */
 #define EDGETPU_ERROR_RUNTIME_TIMEOUT	0x20
+/* Context-specific crash that caused only the given client to abort */
+#define EDGETPU_ERROR_CLIENT_CONTEXT_CRASH 0x40
 
 /*
  * Return fatal errors raised for the client's device group, as a bitmask of

@@ -115,7 +115,7 @@ struct edgetpu_device_group {
 	 * Protects access to @ready_ikv_resps, @pending_ikv_resps, and the "processed" field of any
 	 * responses currently enqueued in @pending_ikv_resps.
 	 */
-	struct mutex ikv_resp_lock;
+	spinlock_t ikv_resp_lock;
 
 	/* TPU IOVA mapped to host DRAM space */
 	struct edgetpu_mapping_root host_mappings;

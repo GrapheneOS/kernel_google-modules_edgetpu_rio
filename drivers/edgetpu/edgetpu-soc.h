@@ -31,9 +31,6 @@ int edgetpu_soc_prepare_firmware(struct edgetpu_dev *etdev);
  */
 long edgetpu_soc_pm_get_rate(struct edgetpu_dev *etdev, int flags);
 
-/* Power management set TPU clock rate */
-int edgetpu_soc_pm_set_rate(unsigned long rate);
-
 /* Power down */
 void edgetpu_soc_pm_power_down(struct edgetpu_dev *etdev);
 

@@ -373,8 +373,7 @@ int edgetpu_mailbox_init_vii(struct edgetpu_vii *vii,
 					  GCIP_MAILBOX_RESP_QUEUE, &vii->resp_queue_mem);
 
 	if (ret) {
-		edgetpu_mailbox_free_queue(group->etdev, mailbox,
-					   &vii->cmd_queue_mem);
+		edgetpu_mailbox_free_queue(group->etdev, mailbox, &vii->cmd_queue_mem);
 		edgetpu_mailbox_remove(mgr, mailbox);
 		return ret;
 	}
@@ -410,18 +409,27 @@ void edgetpu_mailbox_remove_vii(struct edgetpu_vii *vii)
 }
 
 static int edgetpu_mailbox_do_alloc_queue(struct edgetpu_dev *etdev,
-					  struct edgetpu_mailbox *mailbox, u32 queue_size,
+					  struct edgetpu_iommu_domain *domain, u32 queue_size,
 					  u32 unit, edgetpu_queue_mem *mem)
 {
 	u32 size = unit * queue_size;
 
-	if (!mailbox)
+	if (!domain)
 		return -ENODEV;
 
 	/* Align queue size to page size for TPU MMU map. */
 	size = __ALIGN_KERNEL(size, PAGE_SIZE);
-	return edgetpu_iremap_alloc(etdev, size, mem,
-				    edgetpu_mmu_domain_for_pasid(etdev, mailbox->mailbox_id));
+	return edgetpu_iremap_alloc(etdev, size, mem, domain);
+}
+
+static void edgetpu_mailbox_do_free_queue(struct edgetpu_dev *etdev,
+					  struct edgetpu_iommu_domain *domain,
+					  edgetpu_queue_mem *mem)
+{
+	if (!mem->vaddr || !domain)
+		return;
+
+	edgetpu_iremap_free(etdev, mem, domain);
 }
 
 /*
@@ -437,14 +445,21 @@ int edgetpu_mailbox_alloc_queue(struct edgetpu_dev *etdev, struct edgetpu_mailbo
 				u32 queue_size, u32 unit, enum gcip_mailbox_queue_type type,
 				edgetpu_queue_mem *mem)
 {
-	int ret = edgetpu_mailbox_do_alloc_queue(etdev, mailbox, queue_size, unit, mem);
+	struct edgetpu_iommu_domain *mailbox_domain;
+	int ret;
+
+	if (!mailbox)
+		return -ENODEV;
+
+	mailbox_domain = edgetpu_mmu_domain_for_pasid(etdev, mailbox->mailbox_id);
+	ret = edgetpu_mailbox_do_alloc_queue(etdev, mailbox_domain, queue_size, unit, mem);
 	if (ret)
 		return ret;
 
 	ret = edgetpu_mailbox_set_queue(mailbox, type, mem->tpu_addr,
 					queue_size);
 	if (ret) {
-		edgetpu_mailbox_free_queue(etdev, mailbox, mem);
+		edgetpu_mailbox_do_free_queue(etdev, mailbox_domain, mem);
 		return ret;
 	}
 	return 0;
@@ -456,14 +471,16 @@ int edgetpu_mailbox_alloc_queue(struct edgetpu_dev *etdev, struct edgetpu_mailbo
  *
  * Does nothing if @mem->vaddr is NULL.
  */
-void edgetpu_mailbox_free_queue(struct edgetpu_dev *etdev,
-				struct edgetpu_mailbox *mailbox,
+void edgetpu_mailbox_free_queue(struct edgetpu_dev *etdev, struct edgetpu_mailbox *mailbox,
 				edgetpu_queue_mem *mem)
 {
-	if (!mem->vaddr || !mailbox)
+	struct edgetpu_iommu_domain *mailbox_domain;
+
+	if (!mailbox)
 		return;
 
-	edgetpu_iremap_free(etdev, mem, edgetpu_mmu_domain_for_pasid(etdev, mailbox->mailbox_id));
+	mailbox_domain = edgetpu_mmu_domain_for_pasid(etdev, mailbox->mailbox_id);
+	edgetpu_mailbox_do_free_queue(etdev, mailbox_domain, mem);
 }
 
 /*
@@ -827,26 +844,25 @@ void edgetpu_handshake_clear_fw_state(struct edgetpu_handshake *eh)
 static int edgetpu_mailbox_external_alloc_queue_batch(struct edgetpu_external_mailbox *ext_mailbox)
 {
 	int ret, i;
-	struct edgetpu_mailbox *mailbox;
 	struct edgetpu_mailbox_attr attr;
 	struct edgetpu_mailbox_descriptor *desc;
 	struct edgetpu_dev *etdev = ext_mailbox->etdev;
+	/* Default domain is always attached, so no need to check result */
+	struct edgetpu_iommu_domain *default_domain = edgetpu_mmu_default_domain(etdev);
 
 	attr = ext_mailbox->attr;
 
 	for (i = 0; i < ext_mailbox->count; i++) {
 		desc = &ext_mailbox->descriptors[i];
-		mailbox = desc->mailbox;
-		ret = edgetpu_mailbox_do_alloc_queue(etdev, mailbox, attr.cmd_queue_size,
+		ret = edgetpu_mailbox_do_alloc_queue(etdev, default_domain, attr.cmd_queue_size,
 						     attr.sizeof_cmd, &desc->cmd_queue_mem);
 		if (ret)
 			goto undo;
 
-		ret = edgetpu_mailbox_do_alloc_queue(etdev, mailbox, attr.resp_queue_size,
+		ret = edgetpu_mailbox_do_alloc_queue(etdev, default_domain, attr.resp_queue_size,
 						     attr.sizeof_resp, &desc->resp_queue_mem);
 		if (ret) {
-			edgetpu_mailbox_free_queue(etdev, mailbox,
-						   &desc->cmd_queue_mem);
+			edgetpu_mailbox_do_free_queue(etdev, default_domain, &desc->cmd_queue_mem);
 			goto undo;
 		}
 	}
@@ -854,9 +870,8 @@ static int edgetpu_mailbox_external_alloc_queue_batch(struct edgetpu_external_ma
 undo:
 	while (i--) {
 		desc = &ext_mailbox->descriptors[i];
-		mailbox = desc->mailbox;
-		edgetpu_mailbox_free_queue(etdev, mailbox, &desc->cmd_queue_mem);
-		edgetpu_mailbox_free_queue(etdev, mailbox, &desc->resp_queue_mem);
+		edgetpu_mailbox_do_free_queue(etdev, default_domain, &desc->cmd_queue_mem);
+		edgetpu_mailbox_do_free_queue(etdev, default_domain, &desc->resp_queue_mem);
 	}
 	return ret;
 }
@@ -864,15 +879,15 @@ undo:
 static void edgetpu_mailbox_external_free_queue_batch(struct edgetpu_external_mailbox *ext_mailbox)
 {
 	u32 i;
-	struct edgetpu_mailbox *mailbox;
 	struct edgetpu_mailbox_descriptor *desc;
 	struct edgetpu_dev *etdev = ext_mailbox->etdev;
+	/* Default domain is always attached, so no need to check result */
+	struct edgetpu_iommu_domain *default_domain = edgetpu_mmu_default_domain(etdev);
 
 	for (i = 0; i < ext_mailbox->count; i++) {
 		desc = &ext_mailbox->descriptors[i];
-		mailbox = desc->mailbox;
-		edgetpu_mailbox_free_queue(etdev, mailbox, &desc->cmd_queue_mem);
-		edgetpu_mailbox_free_queue(etdev, mailbox, &desc->resp_queue_mem);
+		edgetpu_mailbox_do_free_queue(etdev, default_domain, &desc->cmd_queue_mem);
+		edgetpu_mailbox_do_free_queue(etdev, default_domain, &desc->resp_queue_mem);
 	}
 }
 

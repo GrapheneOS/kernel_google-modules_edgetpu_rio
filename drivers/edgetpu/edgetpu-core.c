@@ -506,7 +506,7 @@ int edgetpu_device_add(struct edgetpu_dev *etdev,
 	}
 
 	/* Init PM in case the platform needs power up actions before MMU setup and such. */
-	ret = edgetpu_chip_pm_create(etdev);
+	ret = edgetpu_pm_create(etdev);
 	if (ret) {
 		etdev_err(etdev, "Failed to initialize PM interface: %d", ret);
 		goto remove_mboxes;
@@ -716,7 +716,9 @@ int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size,
 			   struct edgetpu_coherent_mem *mem,
 			   struct edgetpu_iommu_domain *etdomain)
 {
-	const u32 flags = EDGETPU_MMU_CC_ACCESS | EDGETPU_MMU_HOST | EDGETPU_MMU_COHERENT;
+	const u32 flags = EDGETPU_MAP_DMA_BIDIRECTIONAL | EDGETPU_MMU_CC_ACCESS | EDGETPU_MMU_HOST |
+			  EDGETPU_MMU_COHERENT;
+	u64 gcip_map_flags = edgetpu_mappings_encode_gcip_map_flags(flags, 0, false);
 	int ret;
 
 	mem->vaddr = dma_alloc_coherent(etdev->dev, size, &mem->dma_addr,
@@ -751,13 +753,18 @@ int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size,
 	mem->client_sgt->orig_nents = 1;
 	sg_set_page(mem->client_sgt->sgl, virt_to_page(mem->vaddr), PAGE_ALIGN(size), 0);
 
-	ret = edgetpu_mmu_map_sgt(etdev, mem->client_sgt, etdomain, DMA_BIDIRECTIONAL, 0, flags);
+	/* TODO(b/312636534): Remove this when unit test create edgetpu_dev from dt. */
+	if (IS_ENABLED(CONFIG_EDGETPU_TEST) && !etdomain)
+		goto out;
+
+	ret = gcip_iommu_mapping_map_sgt(etdomain->gdomain, mem->client_sgt, &gcip_map_flags);
 	if (!ret) {
 		etdev_err(etdev, "Failed to map coherent buffer to requested domain\n");
 		ret = -EIO;
 		goto err_free_sgl;
 	}
 
+out:
 	mem->tpu_addr = sg_dma_address(mem->client_sgt->sgl);
 	mem->size = size;
 	return 0;
@@ -777,9 +784,15 @@ void edgetpu_free_coherent(struct edgetpu_dev *etdev,
 			   struct edgetpu_coherent_mem *mem,
 			   struct edgetpu_iommu_domain *etdomain)
 {
+	const u64 gcip_map_flags =
+		edgetpu_mappings_encode_gcip_map_flags(EDGETPU_MAP_DMA_BIDIRECTIONAL, 0, false);
+
 	if (!edgetpu_mmu_is_domain_default_domain(etdev, etdomain)) {
-		edgetpu_mmu_unmap_sgt(etdev, mem->client_sgt, etdomain, DMA_BIDIRECTIONAL,
-				      /*dma_attrs=*/0, /*mmu_flags=*/0);
+		/* TODO(b/312636534): Remove this check when unittest create edgetpu_dev from dt. */
+		if (!IS_ENABLED(CONFIG_EDGETPU_TEST) || etdomain)
+			gcip_iommu_mapping_unmap_sgt(etdomain->gdomain, mem->client_sgt,
+						     gcip_map_flags);
+
 		kfree(mem->client_sgt->sgl);
 		kfree(mem->client_sgt);
 		mem->client_sgt = NULL;

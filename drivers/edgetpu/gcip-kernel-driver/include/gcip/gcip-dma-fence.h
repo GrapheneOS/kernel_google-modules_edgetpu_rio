@@ -133,6 +133,14 @@ void gcip_dma_fence_exit(struct gcip_dma_fence *gfence);
  */
 int gcip_dma_fence_status(int fence, int *status);
 
+/**
+ * gcip_signal_dma_fence_with_status() - Signals the given fence with error code.
+ * @fence: The target fence to be signaled.
+ * @error: The error code to set in the dma fence. Pass 0 for the success cases.
+ * @ignore_signaled: Set to true to ignore the double-signaled error.
+ */
+int gcip_signal_dma_fence_with_status(struct dma_fence *fence, int error, bool ignore_signaled);
+
 /*
  * Signals the fence error of DMA fence FD @fence.
  *

@@ -83,6 +83,8 @@ struct gcip_image_config_parser {
 	const struct gcip_image_config_ops *ops;
 	/* The last image config being successfully parsed. */
 	struct gcip_image_config last_config;
+	/* true == last_config is valid, false == never parsed a valid image config or cleared. */
+	bool last_config_valid;
 };
 
 #define GCIP_IMG_CFG_ADDR_SHIFT 12

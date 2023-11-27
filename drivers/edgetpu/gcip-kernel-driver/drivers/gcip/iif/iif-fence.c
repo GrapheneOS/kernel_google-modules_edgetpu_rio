@@ -42,13 +42,101 @@ static int iif_fence_unsubmitted_signalers_locked(struct iif_fence *fence)
 /*
  * Checks whether all signalers have signaled @fence or not.
  *
- * Caller must hold @fence->outstanding_waiters_lock.
+ * Caller must hold @fence->signaled_signalers_lock.
  */
 static bool iif_fence_is_signaled_locked(struct iif_fence *fence)
 {
-	lockdep_assert_held(&fence->outstanding_waiters_lock);
+	lockdep_assert_held(&fence->signaled_signalers_lock);
 
 	return fence->signaled_signalers == fence->total_signalers;
+}
+
+/*
+ * Submits a signaler to @fence.
+ *
+ * If @complete is true, it will make @fence have finished the signaler submission. This must be
+ * used only when @fence is going to be released before the signaler submission is being finished
+ * and let the IP driver side notice that there was some problem by triggering registered callbacks.
+ *
+ * Caller must hold @fence->submitted_signalers_lock.
+ */
+static int iif_fence_submit_signaler_locked(struct iif_fence *fence, bool complete)
+{
+	struct iif_fence_all_signaler_submitted_cb *cur, *tmp;
+
+	lockdep_assert_held(&fence->submitted_signalers_lock);
+
+	/* Already all signalers are submitted. No more submission is allowed. */
+	if (fence->submitted_signalers >= fence->total_signalers)
+		return -EPERM;
+
+	if (!complete)
+		fence->submitted_signalers++;
+	else
+		fence->submitted_signalers = fence->total_signalers;
+
+	/* The last signaler has been submitted. */
+	if (fence->submitted_signalers == fence->total_signalers) {
+		list_for_each_entry_safe(cur, tmp, &fence->all_signaler_submitted_cb_list, node) {
+			list_del_init(&cur->node);
+			cur->func(fence, cur);
+		}
+	}
+
+	return 0;
+}
+
+/*
+ * Signals @fence.
+ *
+ * If @complete is true, it will make @fence have been signaled by all signalers. This must be used
+ * only when @fence is going to be released before all signalers signal the fence and let the drive
+ * side notice that there was some problem by triggering registered callbacks.
+ *
+ * Caller must hold @fence->signaled_signalers_lock.
+ */
+static void iif_fence_signal_locked(struct iif_fence *fence, bool complete)
+{
+	struct iif_fence_poll_cb *cur, *tmp;
+
+	lockdep_assert_held(&fence->signaled_signalers_lock);
+
+	if (iif_fence_is_signaled_locked(fence)) {
+		pr_warn("The fence is already signaled, id=%u", fence->id);
+		return;
+	}
+
+	if (!complete)
+		fence->signaled_signalers++;
+	else
+		fence->signaled_signalers = fence->total_signalers;
+
+	/* All signalers have signaled the fence. */
+	if (iif_fence_is_signaled_locked(fence)) {
+		list_for_each_entry_safe(cur, tmp, &fence->poll_cb_list, node) {
+			list_del_init(&cur->node);
+			cur->func(fence, cur);
+		}
+	}
+}
+
+/*
+ * Sets @fence->signal_error.
+ *
+ * Caller must hold @fence->signaled_signalers_lock.
+ */
+static void iif_fence_set_signal_error_locked(struct iif_fence *fence, int error)
+{
+	lockdep_assert_held(&fence->signaled_signalers_lock);
+
+	if (iif_fence_is_signaled_locked(fence))
+		pr_warn("The fence signal error is set after the fence is signaled");
+
+	if (fence->signal_error)
+		pr_warn("The fence signal error has been overwritten: %d -> %d",
+			fence->signal_error, error);
+
+	fence->signal_error = error;
 }
 
 static inline bool iif_fence_has_retired(struct iif_fence *fence)
@@ -84,6 +172,28 @@ static void iif_fence_retire_if_possible_locked(struct iif_fence *fence)
 static void iif_fence_destroy(struct kref *kref)
 {
 	struct iif_fence *fence = container_of(kref, struct iif_fence, kref);
+	unsigned long flags;
+
+	/* Checks whether there is remaining poll callback. */
+	spin_lock_irqsave(&fence->signaled_signalers_lock, flags);
+
+	if (!list_empty(&fence->poll_cb_list) && !iif_fence_is_signaled_locked(fence)) {
+		iif_fence_set_signal_error_locked(fence, -EDEADLK);
+		iif_fence_signal_locked(fence, true);
+	}
+
+	spin_unlock_irqrestore(&fence->signaled_signalers_lock, flags);
+
+	/* Checks whether there is remaining all_signaler_submitted callback. */
+	spin_lock_irqsave(&fence->submitted_signalers_lock, flags);
+
+	if (!list_empty(&fence->all_signaler_submitted_cb_list) &&
+	    fence->submitted_signalers < fence->total_signalers) {
+		fence->all_signaler_submitted_error = -EDEADLK;
+		iif_fence_submit_signaler_locked(fence, true);
+	}
+
+	spin_unlock_irqrestore(&fence->submitted_signalers_lock, flags);
 
 	/*
 	 * It is supposed to be retired when the file is closed and there are no more outstanding
@@ -101,8 +211,8 @@ int iif_fence_init(struct iif_manager *mgr, struct iif_fence *fence,
 		   const struct iif_fence_ops *ops, enum iif_ip_type signaler_ip,
 		   uint16_t total_signalers)
 {
-	unsigned int id_min = signaler_ip * IIF_NUM_FENCES_PER_IP,
-		     id_max = id_min + IIF_NUM_FENCES_PER_IP - 1;
+	unsigned int id_min = signaler_ip * IIF_NUM_FENCES_PER_IP;
+	unsigned int id_max = id_min + IIF_NUM_FENCES_PER_IP - 1;
 
 	fence->id = ida_alloc_range(&mgr->idp, id_min, id_max, GFP_KERNEL);
 	if (fence->id < 0)
@@ -217,27 +327,10 @@ void iif_fence_put(struct iif_fence *fence)
 
 int iif_fence_submit_signaler(struct iif_fence *fence)
 {
-	struct iif_fence_all_signaler_submitted_cb *cur, *tmp;
 	int ret = 0;
 
 	spin_lock(&fence->submitted_signalers_lock);
-
-	/* Already all signalers are submitted. No more submission is allowed. */
-	if (fence->submitted_signalers >= fence->total_signalers) {
-		ret = -EPERM;
-		goto out;
-	}
-
-	fence->submitted_signalers++;
-
-	/* The last signaler has been submitted. */
-	if (fence->submitted_signalers == fence->total_signalers) {
-		list_for_each_entry_safe (cur, tmp, &fence->all_signaler_submitted_cb_list, node) {
-			list_del_init(&cur->node);
-			cur->func(fence, cur);
-		}
-	}
-out:
+	ret = iif_fence_submit_signaler_locked(fence, false);
 	spin_unlock(&fence->submitted_signalers_lock);
 
 	return ret;
@@ -274,27 +367,35 @@ int iif_fence_submit_waiter(struct iif_fence *fence, enum iif_ip_type ip)
 
 void iif_fence_signal(struct iif_fence *fence)
 {
-	struct iif_fence_poll_cb *cur, *tmp;
 	unsigned long flags;
 
 	spin_lock_irqsave(&fence->signaled_signalers_lock, flags);
-
-	if (fence->signaled_signalers >= fence->total_signalers) {
-		pr_warn("The fence is already signaled, id=%u", fence->id);
-		goto out;
-	}
-
-	fence->signaled_signalers++;
-
-	/* All signalers have signaled the fence. */
-	if (iif_fence_is_signaled_locked(fence)) {
-		list_for_each_entry_safe (cur, tmp, &fence->poll_cb_list, node) {
-			list_del_init(&cur->node);
-			cur->func(fence, cur);
-		}
-	}
-out:
+	iif_fence_signal_locked(fence, false);
 	spin_unlock_irqrestore(&fence->signaled_signalers_lock, flags);
+}
+
+void iif_fence_set_signal_error(struct iif_fence *fence, int error)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&fence->signaled_signalers_lock, flags);
+	iif_fence_set_signal_error_locked(fence, error);
+	spin_unlock_irqrestore(&fence->signaled_signalers_lock, flags);
+}
+
+int iif_fence_get_signal_status(struct iif_fence *fence)
+{
+	unsigned long flags;
+	int status = 0;
+
+	spin_lock_irqsave(&fence->signaled_signalers_lock, flags);
+
+	if (iif_fence_is_signaled_locked(fence))
+		status = fence->signal_error ?: 1;
+
+	spin_unlock_irqrestore(&fence->signaled_signalers_lock, flags);
+
+	return status;
 }
 
 bool iif_fence_is_signaled(struct iif_fence *fence)
@@ -302,9 +403,9 @@ bool iif_fence_is_signaled(struct iif_fence *fence)
 	unsigned long flags;
 	bool signaled;
 
-	spin_lock_irqsave(&fence->outstanding_waiters_lock, flags);
+	spin_lock_irqsave(&fence->signaled_signalers_lock, flags);
 	signaled = iif_fence_is_signaled_locked(fence);
-	spin_unlock_irqrestore(&fence->outstanding_waiters_lock, flags);
+	spin_unlock_irqrestore(&fence->signaled_signalers_lock, flags);
 
 	return signaled;
 }

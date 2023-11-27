@@ -7,7 +7,6 @@
 #ifndef __EDGETPU_IKV_H__
 #define __EDGETPU_IKV_H__
 
-#include <linux/kthread.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
@@ -40,7 +39,7 @@ struct edgetpu_ikv_response {
 	 *
 	 * Protects `dest_queue` and `processed`.
 	 */
-	struct mutex *dest_queue_lock;
+	spinlock_t *dest_queue_lock;
 	/*
 	 * Mailbox awaiter this response was delivered in.
 	 * Must be released with `gcip_mailbox_release_awaiter()` after this response has been
@@ -74,11 +73,7 @@ struct edgetpu_ikv {
 	struct mutex cmd_queue_lock;
 	struct edgetpu_coherent_mem resp_queue_mem;
 	spinlock_t resp_queue_lock;
-
-	/* Worker for processing incoming responses */
-	struct kthread_worker response_worker;
-	struct kthread_work response_work;
-	struct task_struct *response_thread;
+	unsigned long resp_queue_lock_flags;
 
 	/*
 	 * Wait queue used by gcip-mailbox for storing pending commands, should the command queue
@@ -91,7 +86,7 @@ struct edgetpu_ikv {
 	 * The protected list is part of `struct gcip_mailbox`. GCIP code acquires and releases
 	 * this lock via the `acquire_wait_list_lock` and `release_wait_list_lock` mailbox ops.
 	 */
-	struct mutex wait_list_lock;
+	spinlock_t wait_list_lock;
 
 	/* Whether in-kernel VII is supported. If false, VII is routed through user-space. */
 	bool enabled;
@@ -141,6 +136,6 @@ void edgetpu_ikv_release(struct edgetpu_dev *etdev, struct edgetpu_ikv *etikv);
  */
 int edgetpu_ikv_send_cmd(struct edgetpu_ikv *etikv, struct edgetpu_vii_command *cmd,
 			 struct list_head *pending_queue, struct list_head *ready_queue,
-			 struct mutex *queue_lock, struct edgetpu_device_group *group_to_notify);
+			 spinlock_t *queue_lock, struct edgetpu_device_group *group_to_notify);
 
 #endif /* __EDGETPU_IKV_H__*/

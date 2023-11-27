@@ -27,6 +27,7 @@
 #include <linux/seq_file.h>
 #include <linux/version.h>
 
+#include <gcip/gcip-config.h>
 #include <gcip/gcip-domain-pool.h>
 #include <gcip/gcip-mem-pool.h>
 
@@ -39,12 +40,7 @@
 	(LINUX_VERSION_CODE < KERNEL_VERSION(5, 16, 0) &&                                          \
 	 (IS_ENABLED(CONFIG_GCIP_TEST) || IS_ENABLED(CONFIG_ANDROID)))
 
-/* This feature was actually added in Linux 6.2, but backported to the 6.1 Android Common Kernel.*/
-#define HAS_IOMMU_PASID (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0))
-
-#define HAS_AUX_DOMAINS (LINUX_VERSION_CODE <= KERNEL_VERSION(5, 17, 0))
-
-#if HAS_IOMMU_PASID
+#if GCIP_HAS_IOMMU_PASID
 #include <linux/idr.h>
 #endif
 
@@ -173,9 +169,9 @@ struct gcip_iommu_domain_pool {
 	enum gcip_iommu_domain_type domain_type;
 	ioasid_t min_pasid;
 	ioasid_t max_pasid;
-#if HAS_IOMMU_PASID
+#if GCIP_HAS_IOMMU_PASID
 	struct ida pasid_pool;
-#elif HAS_AUX_DOMAINS
+#elif GCIP_HAS_AUX_DOMAINS
 	bool aux_enabled;
 #endif
 };
@@ -343,6 +339,33 @@ unsigned int gcip_iommu_domain_map_sg(struct gcip_iommu_domain *domain, struct s
 void gcip_iommu_domain_unmap_sg(struct gcip_iommu_domain *domain, struct scatterlist *sgl,
 				int nents);
 
+/**
+ * gcip_iommu_mapping_map_sgt(): Maps the scatter-gather table to the target IOMMU domain.
+ * @domain: The domain that the sgt will be mapped to.
+ * @sgt: The sg_table to be mapped.
+ * @gcip_map_flags: The gcip flags used to map the @sgt.
+ *
+ * This function will map the scatter-gather table to the target IOMMU domain.
+ * sgt->nents will be updated to the number of mapped chunks.
+ * The mapping information will be stored in the mapping instance.
+ * The sg_table will be synced for device.
+ *
+ * Return: The number of the entries that are mapped successfully.
+ */
+unsigned int gcip_iommu_mapping_map_sgt(struct gcip_iommu_domain *domain, struct sg_table *sgt,
+					u64 *gcip_map_flags);
+
+/**
+ * gcip_iommu_mapping_unmap_sgt() - Unmaps the sgt from the given domain.
+ * @domain: The domain that the sgt will be unmapped from.
+ * @sgt: The sg_table to be unmapped.
+ * @gcip_map_flags: The gcip flags used to unmap the @sgt.
+ *
+ * The sg_table will be unmapped and synced for cpu.
+ */
+void gcip_iommu_mapping_unmap_sgt(struct gcip_iommu_domain *domain, struct sg_table *sgt,
+				  u64 gcip_map_flags);
+
 /*
  * Returns a default GCIP IOMMU domain.
  *
@@ -420,5 +443,24 @@ struct gcip_iommu_mapping *gcip_iommu_domain_map_buffer(struct gcip_iommu_domain
  * direction, coherent, and iova_restrict.
  */
 void gcip_iommu_mapping_unmap(struct gcip_iommu_mapping *mapping);
+
+/**
+ * gcip_iommu_alloc_iova() - Allocates IOVA with size @size.
+ * @domain: The GCIP domain to allocate IOVA.
+ * @size: Size in bytes.
+ * @gcip_map_flags: Flags indicating mapping attributes, which can be encoded with
+ *                  gcip_iommu_encode_gcip_map_flags() or `GCIP_MAP_FLAGS_DMA_*_TO_FLAGS` macros.
+ *
+ * Return: The allocated IOVA. Returns 0 on failure.
+ */
+dma_addr_t gcip_iommu_alloc_iova(struct gcip_iommu_domain *domain, size_t size, u64 gcip_map_flags);
+
+/**
+ * gcip_iommu_free_iova() - Frees IOVA allocated by gcip_iommu_alloc_iova().
+ * @domain: The GCIP domain @iova allocated from.
+ * @iova: The IOVA returned by gcip_iommu_alloc_iova().
+ * @size: Size in bytes.
+ */
+void gcip_iommu_free_iova(struct gcip_iommu_domain *domain, dma_addr_t iova, size_t size);
 
 #endif /* __GCIP_IOMMU_H__ */

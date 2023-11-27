@@ -17,4 +17,8 @@ void edgetpu_debug_dump_exit(struct edgetpu_dev *etdev)
 {
 }
 
+void edgetpu_debug_dump_cpu_regs(struct edgetpu_dev *etdev)
+{
+}
+
 #endif /* IS_ENABLED(CONFIG_SUBSYSTEM_COREDUMP) || IS_ENABLED(CONFIG_EDGETPU_TEST) */

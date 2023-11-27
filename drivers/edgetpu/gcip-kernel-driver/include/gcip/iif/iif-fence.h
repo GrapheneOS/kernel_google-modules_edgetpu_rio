@@ -20,10 +20,20 @@ struct iif_fence_ops;
 struct iif_fence_poll_cb;
 struct iif_fence_all_signaler_submitted_cb;
 
-/* The callback which will be called when all signalers have signaled @fence. */
+/*
+ * The callback which will be called when all signalers have signaled @fence.
+ *
+ * It will be called while @fence->signaled_signalers_lock is held and it is safe to read
+ * @fence->signal_error inside.
+ */
 typedef void (*iif_fence_poll_cb_t)(struct iif_fence *fence, struct iif_fence_poll_cb *cb);
 
-/* The callback which will be called when all signalers have been submitted to @fence. */
+/*
+ * The callback which will be called when all signalers have been submitted to @fence.
+ *
+ * It will be called while @fence->submitted_signalers_lock is held and it is safe to read
+ * @fence->all_signaler_submitted_error inside.
+ */
 typedef void (*iif_fence_all_signaler_submitted_cb_t)(
 	struct iif_fence *fence, struct iif_fence_all_signaler_submitted_cb *cb);
 
@@ -54,11 +64,14 @@ struct iif_fence {
 	uint16_t total_signalers;
 	/* The number of submitted signalers. */
 	uint16_t submitted_signalers;
-	/* Protects @submitted_signalers. */
+	/*
+	 * Protects @submitted_signalers, @all_signaler_submitted_cb_list and
+	 * @all_signaler_submitted_error.
+	 */
 	spinlock_t submitted_signalers_lock;
 	/* The number of signaled signalers. */
 	uint16_t signaled_signalers;
-	/* Protects @signaled_signalers and @poll_cb_list. */
+	/* Protects @signaled_signalers, @poll_cb_list and @signal_error. */
 	spinlock_t signaled_signalers_lock;
 	/* The number of outstanding waiters. */
 	uint16_t outstanding_waiters;
@@ -74,6 +87,10 @@ struct iif_fence {
 	struct list_head poll_cb_list;
 	/* List of callbacks which will be called when all signalers have been submitted. */
 	struct list_head all_signaler_submitted_cb_list;
+	/* Will be set to a negative errno if the fence is signaled with an error. */
+	int signal_error;
+	/* Will be set to a negative errno if waiting the signaler submission fails. */
+	int all_signaler_submitted_error;
 };
 
 /* Operators of `struct iif_fence`. */
@@ -181,6 +198,22 @@ int iif_fence_submit_waiter(struct iif_fence *fence, enum iif_ip_type ip);
 
 /* Signals @fence. If all signalers have signaled, it will notify polling FDs. */
 void iif_fence_signal(struct iif_fence *fence);
+
+/*
+ * Sets @fence->signal_error to let the user know that @fence has been signaled with an error.
+ *
+ * Drivers can supply an optional error status before they signal @fence to indicate that @fence
+ * was signaled due to an error rather than success.
+ */
+void iif_fence_set_signal_error(struct iif_fence *fence, int error);
+
+/*
+ * Returns the signal status of @fence.
+ *
+ * Returns 0 if the fence hasn't been signaled yet, 1 if the fence has been signaled without any
+ * error, or a negative errno if the fence has been completed with an error.
+ */
+int iif_fence_get_signal_status(struct iif_fence *fence);
 
 /*
  * Returns whether all signalers have signaled @fence.

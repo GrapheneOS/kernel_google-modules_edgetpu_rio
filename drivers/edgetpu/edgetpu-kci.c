@@ -151,12 +151,20 @@ static void edgetpu_reverse_kci_handle_response(struct gcip_kci *kci,
 	struct edgetpu_mailbox *mailbox = gcip_kci_get_data(kci);
 	struct edgetpu_dev *etdev = mailbox->etdev;
 
-	if (resp->code <= GCIP_RKCI_CHIP_CODE_LAST) {
+	/*
+	 * GCIP_RKCI_CLIENT_FATAL_ERROR_NOTIFY does not have chip-specific behavior, despite
+	 * being labeled as non-generic.
+	 */
+	if (resp->code <= GCIP_RKCI_CHIP_CODE_LAST &&
+	    resp->code != GCIP_RKCI_CLIENT_FATAL_ERROR_NOTIFY) {
 		edgetpu_soc_handle_reverse_kci(etdev, resp);
 		return;
 	}
 
 	switch (resp->code) {
+	case GCIP_RKCI_CLIENT_FATAL_ERROR_NOTIFY:
+		edgetpu_handle_client_fatal_error_notify(etdev, resp->retval);
+		break;
 	case GCIP_RKCI_FIRMWARE_CRASH:
 		edgetpu_handle_firmware_crash(etdev, (enum edgetpu_fw_crash_type)resp->retval);
 		break;
@@ -739,6 +747,19 @@ out:
 	return ret;
 }
 
+int edgetpu_kci_set_power_limits(struct edgetpu_kci *etkci, u32 min_freq, u32 max_freq)
+{
+	struct gcip_kci_command_element cmd = {
+		.code = GCIP_KCI_CODE_SET_POWER_LIMITS,
+		.dma = {
+			.size = min_freq,
+			.flags = max_freq,
+		},
+	};
+
+	return gcip_kci_send_cmd(etkci->kci, &cmd);
+}
+
 int edgetpu_kci_resp_rkci_ack(struct edgetpu_dev *etdev, struct gcip_kci_response_element *rkci_cmd)
 {
 	struct gcip_kci_command_element cmd = {
@@ -747,6 +768,11 @@ int edgetpu_kci_resp_rkci_ack(struct edgetpu_dev *etdev, struct gcip_kci_respons
 	};
 
 	return gcip_kci_send_cmd(etdev->etkci->kci, &cmd);
+}
+
+bool edgetpu_kci_flush_rkci(struct edgetpu_dev *etdev)
+{
+	return flush_work(&etdev->etkci->kci->rkci.work);
 }
 
 int edgetpu_kci_fault_injection(struct gcip_fault_inject *injection)

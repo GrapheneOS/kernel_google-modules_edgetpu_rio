@@ -216,8 +216,9 @@ static void edgetpu_group_clear_events(struct edgetpu_device_group *group)
 static void edgetpu_group_clear_responses(struct edgetpu_device_group *group)
 {
 	struct edgetpu_ikv_response *cur, *nxt;
+	unsigned long flags;
 
-	mutex_lock(&group->ikv_resp_lock);
+	spin_lock_irqsave(&group->ikv_resp_lock, flags);
 
 	/*
 	 * Setting all pending responses as `processed` indicates that any processing or timeout
@@ -233,7 +234,7 @@ static void edgetpu_group_clear_responses(struct edgetpu_device_group *group)
 	 * It's necessary to release the group's ikv_resp_lock, so that any pending timeouts can
 	 * proceed during calls to `gcip_mailbox_cancel_awaiter()` below.
 	 */
-	mutex_unlock(&group->ikv_resp_lock);
+	spin_unlock_irqrestore(&group->ikv_resp_lock, flags);
 
 	/*
 	 * Free all responses that were still pending.
@@ -246,7 +247,7 @@ static void edgetpu_group_clear_responses(struct edgetpu_device_group *group)
 		gcip_mailbox_release_awaiter(cur->awaiter);
 	}
 
-	mutex_lock(&group->ikv_resp_lock);
+	spin_lock_irqsave(&group->ikv_resp_lock, flags);
 
 	/*
 	 * Free all responses that were ready for consumption.
@@ -264,7 +265,7 @@ static void edgetpu_group_clear_responses(struct edgetpu_device_group *group)
 		gcip_mailbox_release_awaiter(cur->awaiter);
 	}
 
-	mutex_unlock(&group->ikv_resp_lock);
+	spin_unlock_irqrestore(&group->ikv_resp_lock, flags);
 }
 
 void edgetpu_group_notify(struct edgetpu_device_group *group, uint event_id)
@@ -480,7 +481,7 @@ edgetpu_device_group_alloc(struct edgetpu_client *client,
 	group->vii.etdev = client->etdev;
 	INIT_LIST_HEAD(&group->ready_ikv_resps);
 	INIT_LIST_HEAD(&group->pending_ikv_resps);
-	mutex_init(&group->ikv_resp_lock);
+	spin_lock_init(&group->ikv_resp_lock);
 	mutex_init(&group->lock);
 	rwlock_init(&group->events.lock);
 	INIT_LIST_HEAD(&group->dma_fence_list);
@@ -611,6 +612,7 @@ static void buffer_mapping_destroy(struct edgetpu_mapping *map)
 		edgetpu_mappings_encode_gcip_map_flags(map->flags, map->dma_attrs, false);
 	gcip_iommu_mapping_unmap(map->gcip_mapping);
 
+	edgetpu_device_group_put(group);
 	kfree(map);
 }
 
@@ -767,6 +769,7 @@ static struct edgetpu_mapping *buffer_mapping_create(struct edgetpu_device_group
 
 err_free_map:
 	kfree(map);
+	edgetpu_device_group_put(group);
 err_ret:
 	return ERR_PTR(ret);
 }
@@ -957,6 +960,7 @@ int edgetpu_device_group_get_vii_response(struct edgetpu_device_group *group,
 					  struct edgetpu_vii_response *resp)
 {
 	struct edgetpu_ikv_response *ikv_resp;
+	unsigned long flags;
 	int ret = 0;
 
 	mutex_lock(&group->lock);
@@ -965,11 +969,11 @@ int edgetpu_device_group_get_vii_response(struct edgetpu_device_group *group,
 		goto unlock_group;
 	}
 
-	mutex_lock(&group->ikv_resp_lock);
+	spin_lock_irqsave(&group->ikv_resp_lock, flags);
 
 	if (list_empty(&group->ready_ikv_resps)) {
 		ret = -ENOENT;
-		mutex_unlock(&group->ikv_resp_lock);
+		spin_unlock_irqrestore(&group->ikv_resp_lock, flags);
 		goto unlock_group;
 	}
 
@@ -977,7 +981,7 @@ int edgetpu_device_group_get_vii_response(struct edgetpu_device_group *group,
 				    list_entry);
 	list_del(&ikv_resp->list_entry);
 
-	mutex_unlock(&group->ikv_resp_lock);
+	spin_unlock_irqrestore(&group->ikv_resp_lock, flags);
 
 	memcpy(resp, &ikv_resp->resp, sizeof(*resp));
 	/* This will also free `ikv_resp` */
@@ -1170,6 +1174,19 @@ void edgetpu_group_close_and_detach_mailbox(struct edgetpu_device_group *group)
 	 */
 	if (is_finalized_or_errored(group)) {
 		edgetpu_group_deactivate(group);
+		/*
+		 * TODO(b/312575591) Flush pending reverse KCI traffic before detaching the mailbox.
+		 * This is necessary since detaching the mailbox may change the group's domain's
+		 * PASID, which some rKCI commands use to identify a client.
+		 *
+		 * The group must be unlocked in case the rKCI handlers need the lock. This is safe
+		 * because this thread continues to hold the owning `client`'s lock, preventing any
+		 * other threads from trying to reattach the mailbox via either the
+		 * EDGETPU_FINALIZE_GROUP or EDGETPU_ACQUIRE_WAKE_LOCK ioctls.
+		 */
+		mutex_unlock(&group->lock);
+		edgetpu_kci_flush_rkci(group->etdev);
+		mutex_lock(&group->lock);
 		edgetpu_group_detach_mailbox_locked(group);
 		edgetpu_group_deactivate_external_mailbox(group);
 	}
@@ -1230,21 +1247,38 @@ out_unlock:
 	return ret;
 }
 
+/* TODO(b/312575591) Simplify this function when the JOB_LOCKUP rKCI switches to client_id. */
 /*
- * Return the group with id @vcid for device @etdev, with a reference held
- * on the group (must call edgetpu_device_group_put when done), or NULL if
- * no group with that VCID is found.
+ * Return the group with @id of the given @type for device @etdev, with a reference held on the
+ * group (must call edgetpu_device_group_put when done), or NULL if no group with that @id is found.
  */
-static struct edgetpu_device_group *get_group_by_vcid(
-	struct edgetpu_dev *etdev, u16 vcid)
+enum id_type {
+	EDGETPU_ID_TYPE_CLIENT_ID,
+	EDGETPU_ID_TYPE_VCID,
+};
+static struct edgetpu_device_group *get_group_by_id(struct edgetpu_dev *etdev, u32 id,
+						    enum id_type type)
 {
 	struct edgetpu_device_group *group = NULL;
 	struct edgetpu_device_group *tgroup;
 	struct edgetpu_list_group *g;
+	u32 tgroup_id;
+	struct edgetpu_iommu_domain *etdomain __maybe_unused;
 
 	mutex_lock(&etdev->groups_lock);
 	etdev_for_each_group(etdev, g, tgroup) {
-		if (tgroup->vcid == vcid) {
+		switch (type) {
+		case EDGETPU_ID_TYPE_CLIENT_ID:
+			mutex_lock(&tgroup->lock);
+			etdomain = edgetpu_group_domain_locked(tgroup);
+			tgroup_id = etdomain->pasid;
+			mutex_unlock(&tgroup->lock);
+			break;
+		case EDGETPU_ID_TYPE_VCID:
+			tgroup_id = tgroup->vcid;
+			break;
+		}
+		if (tgroup_id == id) {
 			group = edgetpu_device_group_get(tgroup);
 			break;
 		}
@@ -1253,13 +1287,26 @@ static struct edgetpu_device_group *get_group_by_vcid(
 	return group;
 }
 
+void edgetpu_handle_client_fatal_error_notify(struct edgetpu_dev *etdev, u32 client_id)
+{
+	struct edgetpu_device_group *group;
+
+	etdev_err(etdev, "firmware reported fatal error for client_id %u", client_id);
+	group = get_group_by_id(etdev, client_id, EDGETPU_ID_TYPE_CLIENT_ID);
+	if (!group) {
+		etdev_warn(etdev, "Client ID %u group not found", client_id);
+		return;
+	}
+	edgetpu_group_fatal_error_notify(group, EDGETPU_ERROR_CLIENT_CONTEXT_CRASH);
+	edgetpu_device_group_put(group);
+}
+
 void edgetpu_handle_job_lockup(struct edgetpu_dev *etdev, u16 vcid)
 {
 	struct edgetpu_device_group *group;
 
-	etdev_err(etdev, "firmware-detected job lockup on VCID %u",
-		  vcid);
-	group = get_group_by_vcid(etdev, vcid);
+	etdev_err(etdev, "firmware-detected job lockup on VCID %u", vcid);
+	group = get_group_by_id(etdev, vcid, EDGETPU_ID_TYPE_VCID);
 	if (!group) {
 		etdev_warn(etdev, "VCID %u group not found", vcid);
 		return;

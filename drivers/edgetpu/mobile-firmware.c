@@ -174,7 +174,7 @@ static struct gcip_image_config *mobile_firmware_get_image_config(struct edgetpu
 {
 	struct gcip_image_config_parser *cfg_parser = edgetpu_firmware_get_data(etdev->firmware);
 
-	return &cfg_parser->last_config;
+	return cfg_parser->last_config_valid ? &cfg_parser->last_config : NULL;
 }
 
 static int mobile_firmware_gsa_authenticate(struct edgetpu_mobile_platform_dev *etmdev,
@@ -237,17 +237,21 @@ static int mobile_firmware_update_remapped_data_region(struct edgetpu_dev *etdev
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	struct gcip_image_config *config = mobile_firmware_get_image_config(etdev);
 	tpu_addr_t remapped_data_addr = EDGETPU_INSTRUCTION_REMAP_BASE + etmdev->fw_region_size;
-	size_t remapped_data_size = config->remapped_data_size ? config->remapped_data_size :
-								 EDGETPU_DEFAULT_REMAPPED_DATA_SIZE;
+	size_t remapped_data_size = (config && config->remapped_data_size) ?
+		config->remapped_data_size : EDGETPU_DEFAULT_REMAPPED_DATA_SIZE;
+	size_t firmware_size = (config && config->firmware_size) ? config->firmware_size : 0;
+	u32 firmware_base = (config && config->firmware_base) ? config->firmware_base : 0;
+	u32 remapped_region_start = (config && config->remapped_region_start) ?
+		config->remapped_region_start : 0;
 	int ret;
 
 	if (etmdev->remapped_data_addr == remapped_data_addr &&
 	    etmdev->remapped_data_size == remapped_data_size)
 		return 0;
 
-	if (remapped_data_addr < EDGETPU_INSTRUCTION_REMAP_BASE + config->firmware_size ||
-	    config->firmware_base + etmdev->fw_region_size + remapped_data_size >
-		    config->remapped_region_start)
+	if (remapped_data_addr < EDGETPU_INSTRUCTION_REMAP_BASE + firmware_size ||
+	    firmware_base + etmdev->fw_region_size + remapped_data_size >
+		    remapped_region_start)
 		return -EINVAL;
 
 	etdev_dbg(etdev, "Moving remapped data from %pad to %pad\n", &etmdev->remapped_data_addr,
@@ -480,6 +484,9 @@ int edgetpu_mobile_firmware_reset_cpu(struct edgetpu_dev *etdev, bool assert_res
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	struct gcip_image_config *image_config = mobile_firmware_get_image_config(etdev);
 	int ret = 0;
+
+	if (!image_config)
+		return 0;
 
 	if (gcip_image_config_is_ns(image_config)) {
 		int i;

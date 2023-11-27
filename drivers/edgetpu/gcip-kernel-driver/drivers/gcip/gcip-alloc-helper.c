@@ -70,10 +70,8 @@ struct sg_table *gcip_alloc_noncontiguous(struct device *dev, size_t size, gfp_t
 		pages = vmalloc(pages_bytes);
 		pages_use_vfree = true;
 	}
-	if (!pages) {
-		dev_err(dev, "GCIP alloc pages array count=%zu failed", count);
+	if (!pages)
 		goto err_free_mem;
-	}
 
 	if (gcip_vmalloc_to_pages(mem, count, pages)) {
 		dev_err(dev, "convert memory to pages failed");

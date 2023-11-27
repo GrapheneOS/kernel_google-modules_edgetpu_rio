@@ -22,8 +22,9 @@
 
 #define to_gfence(fence) container_of(fence, struct gcip_dma_fence, fence)
 
-static int _gcip_dma_fence_signal(struct dma_fence *fence, int error, bool ignore_signaled)
+int gcip_signal_dma_fence_with_status(struct dma_fence *fence, int error, bool ignore_signaled)
 {
+	unsigned long flags;
 	int ret;
 
 	if (error > 0)
@@ -31,7 +32,7 @@ static int _gcip_dma_fence_signal(struct dma_fence *fence, int error, bool ignor
 	if (unlikely(error < -MAX_ERRNO))
 		return -EINVAL;
 
-	spin_lock_irq(fence->lock);
+	spin_lock_irqsave(fence->lock, flags);
 	/* don't signal fence twice */
 	if (unlikely(test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags))) {
 		ret = ignore_signaled ? 0 : -EBUSY;
@@ -42,7 +43,7 @@ static int _gcip_dma_fence_signal(struct dma_fence *fence, int error, bool ignor
 	ret = dma_fence_signal_locked(fence);
 
 out_unlock:
-	spin_unlock_irq(fence->lock);
+	spin_unlock_irqrestore(fence->lock, flags);
 	return ret;
 }
 
@@ -163,14 +164,14 @@ int gcip_dma_fence_signal(int fence, int error, bool ignore_signaled)
 	fencep = sync_file_get_fence(fence);
 	if (!fencep)
 		return -EBADF;
-	ret = _gcip_dma_fence_signal(fencep, error, ignore_signaled);
+	ret = gcip_signal_dma_fence_with_status(fencep, error, ignore_signaled);
 	dma_fence_put(fencep);
 	return ret;
 }
 
 int gcip_dma_fenceptr_signal(struct gcip_dma_fence *gfence, int error, bool ignore_signaled)
 {
-	return _gcip_dma_fence_signal(&gfence->fence, error, ignore_signaled);
+	return gcip_signal_dma_fence_with_status(&gfence->fence, error, ignore_signaled);
 }
 
 void gcip_dma_fence_show(struct gcip_dma_fence *gfence, struct seq_file *s)

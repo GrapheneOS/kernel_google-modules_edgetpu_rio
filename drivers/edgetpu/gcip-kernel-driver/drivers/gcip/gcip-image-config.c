@@ -164,6 +164,7 @@ int gcip_image_config_parser_init(struct gcip_image_config_parser *parser,
 	parser->data = data;
 	parser->ops = ops;
 	memset(&parser->last_config, 0, sizeof(parser->last_config));
+	parser->last_config_valid = false;
 	return 0;
 }
 
@@ -188,6 +189,7 @@ int gcip_image_config_parse(struct gcip_image_config_parser *parser,
 		return ret;
 	}
 	memcpy(&parser->last_config, config, sizeof(parser->last_config));
+	parser->last_config_valid = true;
 	return 0;
 }
 
@@ -195,4 +197,5 @@ void gcip_image_config_clear(struct gcip_image_config_parser *parser)
 {
 	unmap_image_config(parser, &parser->last_config);
 	memset(&parser->last_config, 0, sizeof(parser->last_config));
+	parser->last_config_valid = false;
 }

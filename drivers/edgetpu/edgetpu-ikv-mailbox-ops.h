@@ -113,9 +113,9 @@ static int edgetpu_ikv_acquire_resp_queue_lock(struct gcip_mailbox *mailbox, boo
 	*atomic = true;
 
 	if (try)
-		return spin_trylock(&ikv->resp_queue_lock);
+		return spin_trylock_irqsave(&ikv->resp_queue_lock, ikv->resp_queue_lock_flags);
 
-	spin_lock(&ikv->resp_queue_lock);
+	spin_lock_irqsave(&ikv->resp_queue_lock, ikv->resp_queue_lock_flags);
 	return 1;
 }
 
@@ -123,7 +123,7 @@ static void edgetpu_ikv_release_resp_queue_lock(struct gcip_mailbox *mailbox)
 {
 	struct edgetpu_ikv *ikv = gcip_mailbox_get_data(mailbox);
 
-	spin_unlock(&ikv->resp_queue_lock);
+	spin_unlock_irqrestore(&ikv->resp_queue_lock, ikv->resp_queue_lock_flags);
 }
 
 static u64 edgetpu_ikv_get_resp_elem_seq(struct gcip_mailbox *mailbox, void *resp)
@@ -140,22 +140,20 @@ static void edgetpu_ikv_set_resp_elem_seq(struct gcip_mailbox *mailbox, void *re
 	vii_resp->seq = seq;
 }
 
-/* @irqsave and @flags are unused since the in-kernel VII wait_list_lock is a mutex. */
 static void edgetpu_ikv_acquire_wait_list_lock(struct gcip_mailbox *mailbox, bool irqsave,
 					       unsigned long *flags)
 {
 	struct edgetpu_ikv *ikv = gcip_mailbox_get_data(mailbox);
 
-	mutex_lock(&ikv->wait_list_lock);
+	spin_lock_irqsave(&ikv->wait_list_lock, *flags);
 }
 
-/* @irqrestore and @flags are unused since the in-kernel VII wait_list_lock is a mutex. */
 static void edgetpu_ikv_release_wait_list_lock(struct gcip_mailbox *mailbox, bool irqrestore,
 					       unsigned long flags)
 {
 	struct edgetpu_ikv *ikv = gcip_mailbox_get_data(mailbox);
 
-	mutex_unlock(&ikv->wait_list_lock);
+	spin_unlock_irqrestore(&ikv->wait_list_lock, flags);
 }
 
 static int edgetpu_ikv_wait_for_cmd_queue_not_full(struct gcip_mailbox *mailbox)
@@ -223,8 +221,9 @@ static void edgetpu_ikv_handle_awaiter_arrived(struct gcip_mailbox *mailbox,
 					       struct gcip_mailbox_resp_awaiter *awaiter)
 {
 	struct edgetpu_ikv_response *resp = awaiter->data;
+	unsigned long flags;
 
-	mutex_lock(resp->dest_queue_lock);
+	spin_lock_irqsave(resp->dest_queue_lock, flags);
 
 	/*
 	 * Return immediately if either of the following caused the response to be "processed":
@@ -250,7 +249,7 @@ static void edgetpu_ikv_handle_awaiter_arrived(struct gcip_mailbox *mailbox,
 		edgetpu_group_notify(resp->group_to_notify, EDGETPU_EVENT_RESPDATA);
 
 out:
-	mutex_unlock(resp->dest_queue_lock);
+	spin_unlock_irqrestore(resp->dest_queue_lock, flags);
 }
 
 static void edgetpu_ikv_handle_awaiter_timedout(struct gcip_mailbox *mailbox,
@@ -258,9 +257,10 @@ static void edgetpu_ikv_handle_awaiter_timedout(struct gcip_mailbox *mailbox,
 {
 	struct edgetpu_ikv_response *resp = awaiter->data;
 	/* Store an independent pointer to `dest_queue_lock`, since `resp` may be released. */
-	struct mutex *dest_queue_lock = resp->dest_queue_lock;
+	spinlock_t *dest_queue_lock = resp->dest_queue_lock;
+	unsigned long flags;
 
-	mutex_lock(dest_queue_lock);
+	spin_lock_irqsave(dest_queue_lock, flags);
 
 	/*
 	 * Return immediately if either of the following caused the response to be "processed":
@@ -281,7 +281,7 @@ static void edgetpu_ikv_handle_awaiter_timedout(struct gcip_mailbox *mailbox,
 		edgetpu_group_notify(resp->group_to_notify, EDGETPU_EVENT_RESPDATA);
 
 out:
-	mutex_unlock(dest_queue_lock);
+	spin_unlock_irqrestore(dest_queue_lock, flags);
 }
 
 static void edgetpu_ikv_flush_awaiter(struct gcip_mailbox *mailbox,
@@ -289,9 +289,10 @@ static void edgetpu_ikv_flush_awaiter(struct gcip_mailbox *mailbox,
 {
 	struct edgetpu_ikv_response *resp = awaiter->data;
 	/* Store an independent pointer to `dest_queue_lock`, since `resp` may be released. */
-	struct mutex *dest_queue_lock = resp->dest_queue_lock;
+	spinlock_t *dest_queue_lock = resp->dest_queue_lock;
+	unsigned long flags;
 
-	mutex_lock(dest_queue_lock);
+	spin_lock_irqsave(dest_queue_lock, flags);
 
 	if (resp->processed)
 		goto out;
@@ -300,7 +301,7 @@ static void edgetpu_ikv_flush_awaiter(struct gcip_mailbox *mailbox,
 	gcip_mailbox_release_awaiter(awaiter);
 
 out:
-	mutex_unlock(dest_queue_lock);
+	spin_unlock_irqrestore(dest_queue_lock, flags);
 }
 
 static void edgetpu_ikv_release_awaiter_data(void *data)

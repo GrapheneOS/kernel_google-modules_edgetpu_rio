@@ -33,6 +33,7 @@
 #include <gcip/gcip-firmware.h>
 #include <gcip/gcip-pm.h>
 #include <gcip/gcip-thermal.h>
+#include <gcip/iif/iif-manager.h>
 
 #include "edgetpu.h"
 
@@ -228,6 +229,9 @@ struct edgetpu_dev {
 	/* debug dump handlers */
 	edgetpu_debug_dump_handlers *debug_dump_handlers;
 	struct work_struct debug_dump_work;
+
+	/* Inter-IP fence manager. */
+	struct iif_manager *iif_mgr;
 };
 
 struct edgetpu_dev_iface {
@@ -352,6 +356,9 @@ void edgetpu_handle_firmware_crash(struct edgetpu_dev *etdev,
 
 /* Handle notification of job lockup from firmware */
 void edgetpu_handle_job_lockup(struct edgetpu_dev *etdev, u16 vcid);
+
+/* Handle an individual client entering an unrecoverable state in firmware */
+void edgetpu_handle_client_fatal_error_notify(struct edgetpu_dev *etdev, u32 client_id);
 
 /* Bus (Platform/PCI) <-> Core API */
 
