@@ -104,7 +104,6 @@ int edgetpu_ikv_init(struct edgetpu_mailbox_manager *mgr, struct edgetpu_ikv *et
 		.timeout = IKV_TIMEOUT,
 		.ops = &ikv_mailbox_ops,
 		.data = etikv,
-		.ignore_seq_order = true,
 	};
 	int ret;
 

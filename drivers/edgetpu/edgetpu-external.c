@@ -6,10 +6,13 @@
  */
 
 #include <linux/device.h>
-#include <linux/file.h>
 #include <linux/err.h>
+#include <linux/file.h>
+#include <linux/platform_device.h>
 
 #include <soc/google/tpu-ext.h>
+
+#include <gcip/iif/iif-manager.h>
 
 #include "edgetpu-config.h"
 #include "edgetpu-device-group.h"
@@ -223,6 +226,20 @@ out:
 	return ret;
 }
 
+static int edgetpu_external_get_iif_manager(struct device *edgetpu_dev,
+					    struct iif_manager **iif_manager_ptr)
+{
+	struct platform_device *pdev = to_platform_device(edgetpu_dev);
+	struct edgetpu_dev *etdev = platform_get_drvdata(pdev);
+
+	if (!etdev->iif_mgr)
+		return -ENODEV;
+
+	*iif_manager_ptr = iif_manager_get(etdev->iif_mgr);
+
+	return 0;
+}
+
 int edgetpu_ext_driver_cmd(struct device *edgetpu_dev, enum edgetpu_ext_client_type client_type,
 			   enum edgetpu_ext_commands cmd_id, void *in_data, void *out_data)
 {
@@ -233,6 +250,8 @@ int edgetpu_ext_driver_cmd(struct device *edgetpu_dev, enum edgetpu_ext_client_t
 		return edgetpu_external_mailbox_free(edgetpu_dev, in_data);
 	case START_OFFLOAD:
 		return edgetpu_external_start_offload(edgetpu_dev, in_data, out_data);
+	case GET_IIF_MANAGER:
+		return edgetpu_external_get_iif_manager(edgetpu_dev, out_data);
 	default:
 		return -ENOENT;
 	}

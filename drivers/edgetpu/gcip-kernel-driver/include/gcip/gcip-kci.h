@@ -89,10 +89,12 @@ enum gcip_kci_code {
 	GCIP_KCI_CODE_GET_USAGE_V2 = 21,
 	GCIP_KCI_CODE_SET_DEVICE_PROPERTIES = 22,
 	GCIP_KCI_CODE_FAULT_INJECTION = 23,
-	GCIP_KCI_CODE_SET_POWER_LIMITS = 24,
+	GCIP_KCI_CODE_SET_FREQ_LIMITS = 24,
 
 	GCIP_KCI_CODE_RKCI_ACK = 256,
 };
+/* TODO(308903519) Remove once clients have adopted the new name. */
+#define GCIP_KCI_CODE_SET_POWER_LIMITS GCIP_KCI_CODE_SET_FREQ_LIMITS
 
 /*
  * Definition of reverse KCI request code ranges.
@@ -251,6 +253,8 @@ struct gcip_kci {
 	struct mutex cmd_queue_lock;
 	/* Protects resp_queue. */
 	spinlock_t resp_queue_lock;
+	/* Context flags when locks resp_queue_lock. */
+	unsigned long resp_queue_lock_flags;
 	/* Queue for waiting for the response doorbell to be rung. */
 	wait_queue_head_t resp_doorbell_waitq;
 	/* Protects wait_list. */

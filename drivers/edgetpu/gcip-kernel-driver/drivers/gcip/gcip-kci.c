@@ -108,9 +108,9 @@ static int gcip_kci_acquire_resp_queue_lock(struct gcip_mailbox *mailbox, bool t
 	*atomic = true;
 
 	if (try)
-		return spin_trylock(&kci->resp_queue_lock);
+		return spin_trylock_irqsave(&kci->resp_queue_lock, kci->resp_queue_lock_flags);
 
-	spin_lock(&kci->resp_queue_lock);
+	spin_lock_irqsave(&kci->resp_queue_lock, kci->resp_queue_lock_flags);
 	return 1;
 }
 
@@ -118,7 +118,7 @@ static void gcip_kci_release_resp_queue_lock(struct gcip_mailbox *mailbox)
 {
 	struct gcip_kci *kci = gcip_mailbox_get_data(mailbox);
 
-	spin_unlock(&kci->resp_queue_lock);
+	spin_unlock_irqrestore(&kci->resp_queue_lock, kci->resp_queue_lock_flags);
 }
 
 static u64 gcip_kci_get_resp_elem_seq(struct gcip_mailbox *mailbox, void *resp)
@@ -472,7 +472,6 @@ int gcip_kci_init(struct gcip_kci *kci, const struct gcip_kci_args *args)
 	mailbox_args.timeout = args->timeout;
 	mailbox_args.ops = &gcip_mailbox_ops;
 	mailbox_args.data = kci;
-	mailbox_args.ignore_seq_order = true;
 
 	ret = gcip_mailbox_init(&kci->mailbox, &mailbox_args);
 	if (ret)

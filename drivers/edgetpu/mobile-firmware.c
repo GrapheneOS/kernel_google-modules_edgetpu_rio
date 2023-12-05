@@ -239,10 +239,9 @@ static int mobile_firmware_update_remapped_data_region(struct edgetpu_dev *etdev
 	tpu_addr_t remapped_data_addr = EDGETPU_INSTRUCTION_REMAP_BASE + etmdev->fw_region_size;
 	size_t remapped_data_size = (config && config->remapped_data_size) ?
 		config->remapped_data_size : EDGETPU_DEFAULT_REMAPPED_DATA_SIZE;
-	size_t firmware_size = (config && config->firmware_size) ? config->firmware_size : 0;
-	u32 firmware_base = (config && config->firmware_base) ? config->firmware_base : 0;
-	u32 remapped_region_start = (config && config->remapped_region_start) ?
-		config->remapped_region_start : 0;
+	size_t firmware_size = (config) ? config->firmware_size : 0;
+	u32 firmware_base = (config) ? config->firmware_base : 0;
+	u32 remapped_region_start = (config) ? config->remapped_region_start : 0;
 	int ret;
 
 	if (etmdev->remapped_data_addr == remapped_data_addr &&

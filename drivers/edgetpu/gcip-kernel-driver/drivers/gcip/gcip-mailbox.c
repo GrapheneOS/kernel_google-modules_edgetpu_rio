@@ -85,8 +85,6 @@ static void gcip_mailbox_del_wait_resp(struct gcip_mailbox *mailbox,
 
 	list_for_each_entry (cur, &mailbox->wait_list, list) {
 		cur_seq = GET_RESP_ELEM_SEQ(cur->async_resp->resp);
-		if (cur_seq > seq)
-			break;
 		if (cur_seq == seq) {
 			list_del(&cur->list);
 			if (cur->awaiter) {
@@ -235,19 +233,6 @@ out:
  * Handler of a response.
  * Pops the wait_list until the sequence number of @resp is found, and copies @resp to the found
  * entry.
- *
- * Both entry in wait_list and response handling should have sequence number in increasing order.
- * Comparing the #seq of head of wait_list with @resp->seq, we have three cases:
- * 1. #seq > @resp->seq:
- *   - Nothing to do, @resp is not needed and we're done.
- * 2. #seq == @resp->seq:
- *   - Copy @resp, pop the head and we're done.
- * 3. #seq < @resp->seq:
- *   - If @mailbox->ignore_seq_order is specified, this is a normal case and the entry is skipped.
- *   - Otherwise, it *should* not happen, this implies the sequence number of either entries in
- *     wait_list or responses are out-of-order, or remote didn't respond to a command. In this
- *     case, the status of response will be set to GCIP_MAILBOX_STATUS_NO_RESPONSE. Then pop until
- *     case 1. or 2.
  */
 static void gcip_mailbox_handle_response(struct gcip_mailbox *mailbox, void *resp)
 {
@@ -264,58 +249,40 @@ static void gcip_mailbox_handle_response(struct gcip_mailbox *mailbox, void *res
 
 	list_for_each_entry_safe (cur, nxt, &mailbox->wait_list, list) {
 		cur_seq = GET_RESP_ELEM_SEQ(cur->async_resp->resp);
-		if (cur_seq > seq) {
+		if (cur_seq != seq)
+			continue;
+		cur->async_resp->status = GCIP_MAILBOX_STATUS_OK;
+		memcpy(cur->async_resp->resp, resp, mailbox->resp_elem_size);
+		list_del(&cur->list);
+		if (cur->awaiter) {
+			awaiter = cur->awaiter;
+
 			/*
-			 * This response has already timed out and been removed
-			 * from the wait list (or this is an invalid response).
-			 * Drop it.
+			 * The timedout handler will be fired, but pended by waiting for acquiring
+			 * the wait_list_lock.
 			 */
-			break;
-		}
-		if (cur_seq == seq) {
-			cur->async_resp->status = GCIP_MAILBOX_STATUS_OK;
-			memcpy(cur->async_resp->resp, resp, mailbox->resp_elem_size);
-			list_del(&cur->list);
-			if (cur->awaiter) {
-				awaiter = cur->awaiter;
+			TEST_TRIGGER_TIMEOUT_RACE(awaiter);
 
-				/*
-				 * The timedout handler will be fired, but pended by waiting for
-				 * acquiring the wait_list_lock.
-				 */
-				TEST_TRIGGER_TIMEOUT_RACE(awaiter);
-
-				/*
-				 * If canceling timeout_work succeeded, we have to decrease the
-				 * reference count here because the timeout handler will not be
-				 * called. Otherwise, the timeout handler is already canceled or
-				 * pending by race. If it is canceled, the count must be decreased
-				 * already, and if it is pending, the timeout handler will decrease
-				 * the awaiter reference.
-				 */
-				if (cancel_delayed_work(&awaiter->timeout_work))
-					gcip_mailbox_awaiter_dec_refs(awaiter);
-				/*
-				 * If `handle_awaiter_arrived` callback is defined, @awaiter
-				 * will be released from the implementation side. Otherwise, it
-				 * should be freed from here.
-				 */
-				if (mailbox->ops->handle_awaiter_arrived)
-					mailbox->ops->handle_awaiter_arrived(mailbox, awaiter);
+			/*
+			 * If canceling timeout_work succeeded, we have to decrease the reference
+			 * count here because the timeout handler will not be* called. Otherwise,
+			 * the timeout handler is already canceled or pending by race. If it is
+			 * canceled, the count must be decreased already, and if it is pending, the
+			 * timeout handler will decrease the awaiter reference.
+			 */
+			if (cancel_delayed_work(&awaiter->timeout_work))
 				gcip_mailbox_awaiter_dec_refs(awaiter);
-			}
-			kfree(cur);
-			break;
+			/*
+			 * If `handle_awaiter_arrived` callback is defined, @awaiter will be
+			 * released from the implementation side. Otherwise, it should be freed from
+			 * here.
+			 */
+			if (mailbox->ops->handle_awaiter_arrived)
+				mailbox->ops->handle_awaiter_arrived(mailbox, awaiter);
+			gcip_mailbox_awaiter_dec_refs(awaiter);
 		}
-		if (!mailbox->ignore_seq_order && cur_seq < seq) {
-			cur->async_resp->status = GCIP_MAILBOX_STATUS_NO_RESPONSE;
-			list_del(&cur->list);
-			if (cur->awaiter) {
-				/* Remove the reference of the arrived handler. */
-				gcip_mailbox_awaiter_dec_refs(cur->awaiter);
-			}
-			kfree(cur);
-		}
+		kfree(cur);
+		break;
 	}
 
 	RELEASE_WAIT_LIST_LOCK(true, flags);
@@ -570,7 +537,6 @@ int gcip_mailbox_init(struct gcip_mailbox *mailbox, const struct gcip_mailbox_ar
 	mailbox->resp_elem_size = args->resp_elem_size;
 	mailbox->timeout = args->timeout;
 	mailbox->cur_seq = 0;
-	mailbox->ignore_seq_order = args->ignore_seq_order;
 	gcip_mailbox_set_data(mailbox, args->data);
 
 	ret = gcip_mailbox_set_ops(mailbox, args->ops);
