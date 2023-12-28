@@ -81,14 +81,20 @@ static struct edgetpu_mapping *dmabuf_mapping_create(struct edgetpu_device_group
 {
 	struct edgetpu_mapping *mapping;
 	struct edgetpu_iommu_domain *etdomain;
+	struct dma_buf *dmabuf;
 	int ret;
 	u64 gcip_map_flags = edgetpu_mappings_encode_gcip_map_flags(flags, 0, false);
+
+	dmabuf = dma_buf_get(fd);
+	if (IS_ERR(dmabuf))
+		return ERR_CAST(dmabuf);
 
 	mapping = kzalloc(sizeof(*mapping), GFP_KERNEL);
 	if (!mapping) {
 		ret = -ENOMEM;
-		goto err_ret;
+		goto err_dma_buf_put;
 	}
+
 	mapping->flags = flags;
 	mapping->mmu_flags = map_to_mmu_flags(flags) | EDGETPU_MMU_DMABUF;
 	mapping->priv = edgetpu_device_group_get(group);
@@ -102,25 +108,29 @@ static struct edgetpu_mapping *dmabuf_mapping_create(struct edgetpu_device_group
 			  "%s: edgetpu_device_group_is_finalized returns %d\n",
 			  __func__, ret);
 		mutex_unlock(&group->lock);
-		goto err_free_mapping;
+		goto err_device_group_put;
 	}
 	etdomain = edgetpu_group_domain_locked(group);
 
 	mapping->gcip_mapping =
-		gcip_iommu_domain_map_dma_buf(etdomain->gdomain, fd, gcip_map_flags);
+		gcip_iommu_domain_map_dma_buf(etdomain->gdomain, dmabuf, gcip_map_flags);
 	mutex_unlock(&group->lock);
 	if (IS_ERR(mapping->gcip_mapping)) {
 		ret = PTR_ERR(mapping->gcip_mapping);
 		etdev_dbg(group->etdev, "%s: gcip_iommu_domain_map_dma_buf returns %d\n", __func__,
 			  ret);
-		goto err_free_mapping;
+		goto err_device_group_put;
 	}
+
+	dma_buf_put(dmabuf);
 
 	return mapping;
 
-err_free_mapping:
+err_device_group_put:
+	edgetpu_device_group_put(group);
 	kfree(mapping);
-err_ret:
+err_dma_buf_put:
+	dma_buf_put(dmabuf);
 	return ERR_PTR(ret);
 }
 

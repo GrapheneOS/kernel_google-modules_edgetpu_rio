@@ -64,8 +64,8 @@
  */
 #define EDGETPU_DEBUG_DUMP_MEM_SIZE 0x4E0000
 
-/* A special client ID for secure workloads pre-agreed with firmware (kTzContextId). */
-#define EDGETPU_EXT_TZ_CONTEXT_ID (3 << 3)
+/* A special client ID for secure workloads pre-agreed with firmware (kTzRealmId). */
+#define EDGETPU_EXT_TZ_CONTEXT_ID 0x40000000
 
 #include "config-mailbox.h"
 #include "config-pwr-state.h"

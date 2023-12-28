@@ -66,14 +66,14 @@ static int edgetpu_kci_alloc_queue(struct edgetpu_dev *etdev, struct edgetpu_mai
 	u32 size = queue_size * gcip_kci_queue_element_size(type);
 	int ret;
 
-	ret = edgetpu_iremap_alloc(etdev, size, mem, edgetpu_mmu_default_domain(etdev));
+	ret = edgetpu_iremap_alloc(etdev, size, mem);
 	if (ret)
 		return ret;
 
 	ret = edgetpu_mailbox_set_queue(mailbox, type, mem->tpu_addr, queue_size);
 	if (ret) {
 		etdev_err(etdev, "failed to set mailbox queue: %d", ret);
-		edgetpu_iremap_free(etdev, mem, edgetpu_mmu_default_domain(etdev));
+		edgetpu_iremap_free(etdev, mem);
 		return ret;
 	}
 
@@ -82,7 +82,7 @@ static int edgetpu_kci_alloc_queue(struct edgetpu_dev *etdev, struct edgetpu_mai
 
 static void edgetpu_kci_free_queue(struct edgetpu_dev *etdev, struct edgetpu_coherent_mem *mem)
 {
-	edgetpu_iremap_free(etdev, mem, edgetpu_mmu_default_domain(etdev));
+	edgetpu_iremap_free(etdev, mem);
 }
 
 /* IRQ handler of KCI mailbox. */
@@ -353,7 +353,7 @@ static int edgetpu_kci_send_cmd_with_data(struct edgetpu_kci *etkci,
 	struct edgetpu_coherent_mem mem;
 	int ret;
 
-	ret = edgetpu_iremap_alloc(etdev, size, &mem, edgetpu_mmu_default_domain(etdev));
+	ret = edgetpu_iremap_alloc(etdev, size, &mem);
 	if (ret)
 		return ret;
 	memcpy(mem.vaddr, data, size);
@@ -364,7 +364,7 @@ static int edgetpu_kci_send_cmd_with_data(struct edgetpu_kci *etkci,
 	cmd->dma.address = mem.tpu_addr;
 	cmd->dma.size = size;
 	ret = gcip_kci_send_cmd(etkci->kci, cmd);
-	edgetpu_iremap_free(etdev, &mem, edgetpu_mmu_default_domain(etdev));
+	edgetpu_iremap_free(etdev, &mem);
 	etdev_dbg(etdev, "%s: unmap kva=%pK iova=%pad dma=%pad", __func__, mem.vaddr, &mem.tpu_addr,
 		  &mem.dma_addr);
 
@@ -413,8 +413,7 @@ enum gcip_fw_flavor edgetpu_kci_fw_info(struct edgetpu_kci *etkci, struct gcip_f
 	enum gcip_fw_flavor flavor = GCIP_FW_FLAVOR_UNKNOWN;
 	int ret;
 
-	ret = edgetpu_iremap_alloc(etdev, sizeof(*fw_info), &mem,
-				   edgetpu_mmu_default_domain(etdev));
+	ret = edgetpu_iremap_alloc(etdev, sizeof(*fw_info), &mem);
 
 	/* If allocation failed still try handshake without full fw_info */
 	if (ret) {
@@ -429,7 +428,7 @@ enum gcip_fw_flavor edgetpu_kci_fw_info(struct edgetpu_kci *etkci, struct gcip_f
 	ret = gcip_kci_send_cmd_return_resp(etkci->kci, &cmd, &resp);
 	if (cmd.dma.address) {
 		memcpy(fw_info, mem.vaddr, sizeof(*fw_info));
-		edgetpu_iremap_free(etdev, &mem, edgetpu_mmu_default_domain(etdev));
+		edgetpu_iremap_free(etdev, &mem);
 	}
 
 	if (ret == GCIP_KCI_ERROR_OK) {
@@ -516,8 +515,7 @@ int edgetpu_kci_update_usage_locked(struct edgetpu_dev *etdev)
 	struct gcip_kci_response_element resp;
 	int ret;
 
-	ret = edgetpu_iremap_alloc(etdev, EDGETPU_USAGE_BUFFER_SIZE, &mem,
-				   edgetpu_mmu_default_domain(etdev));
+	ret = edgetpu_iremap_alloc(etdev, EDGETPU_USAGE_BUFFER_SIZE, &mem);
 
 	if (ret) {
 		etdev_warn_once(etdev, "failed to allocate usage buffer");
@@ -546,7 +544,7 @@ retry_v1:
 		etdev_warn_once(etdev, "error %d", ret);
 	}
 
-	edgetpu_iremap_free(etdev, &mem, edgetpu_mmu_default_domain(etdev));
+	edgetpu_iremap_free(etdev, &mem);
 
 	return ret;
 }
@@ -747,10 +745,10 @@ out:
 	return ret;
 }
 
-int edgetpu_kci_set_power_limits(struct edgetpu_kci *etkci, u32 min_freq, u32 max_freq)
+int edgetpu_kci_set_freq_limits(struct edgetpu_kci *etkci, u32 min_freq, u32 max_freq)
 {
 	struct gcip_kci_command_element cmd = {
-		.code = GCIP_KCI_CODE_SET_POWER_LIMITS,
+		.code = GCIP_KCI_CODE_SET_FREQ_LIMITS,
 		.dma = {
 			.size = min_freq,
 			.flags = max_freq,

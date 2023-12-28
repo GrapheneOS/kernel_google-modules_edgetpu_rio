@@ -274,7 +274,7 @@ int edgetpu_kci_set_device_properties(struct edgetpu_kci *etkci,
  *
  * Returns 0 on success or < 0 on error.
  */
-int edgetpu_kci_set_power_limits(struct edgetpu_kci *etkci, u32 min_freq, u32 max_freq);
+int edgetpu_kci_set_freq_limits(struct edgetpu_kci *etkci, u32 min_freq, u32 max_freq);
 
 /*
  * Send an ack to the FW after handling a reverse KCI request.

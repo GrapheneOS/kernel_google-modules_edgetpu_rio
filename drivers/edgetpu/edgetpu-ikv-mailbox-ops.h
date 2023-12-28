@@ -243,10 +243,10 @@ static void edgetpu_ikv_handle_awaiter_arrived(struct gcip_mailbox *mailbox,
 	/* Set the response sequence number to the value expected by the client. */
 	resp->resp.seq = resp->client_seq;
 
-	/* TODO(johnscheible) refund credit */
-
-	if (resp->group_to_notify)
+	if (resp->group_to_notify) {
+		resp->group_to_notify->available_vii_credits++;
 		edgetpu_group_notify(resp->group_to_notify, EDGETPU_EVENT_RESPDATA);
+	}
 
 out:
 	spin_unlock_irqrestore(resp->dest_queue_lock, flags);
@@ -275,10 +275,10 @@ static void edgetpu_ikv_handle_awaiter_timedout(struct gcip_mailbox *mailbox,
 	list_del(&resp->list_entry);
 	gcip_mailbox_release_awaiter(awaiter);
 
-	/* TODO(johnscheible) refund credit */
-
-	if (resp->group_to_notify)
+	if (resp->group_to_notify) {
+		resp->group_to_notify->available_vii_credits++;
 		edgetpu_group_notify(resp->group_to_notify, EDGETPU_EVENT_RESPDATA);
+	}
 
 out:
 	spin_unlock_irqrestore(dest_queue_lock, flags);
@@ -297,6 +297,13 @@ static void edgetpu_ikv_flush_awaiter(struct gcip_mailbox *mailbox,
 	if (resp->processed)
 		goto out;
 	resp->processed = true;
+
+	/*
+	 * If the IKV mailbox is being released, the device_groups should be getting released too.
+	 * Just to be thorough, refund the credit.
+	 */
+	if (resp->group_to_notify)
+		resp->group_to_notify->available_vii_credits++;
 
 	gcip_mailbox_release_awaiter(awaiter);
 

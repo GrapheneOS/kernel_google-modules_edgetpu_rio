@@ -237,7 +237,7 @@ out:
 static void gcip_mailbox_handle_response(struct gcip_mailbox *mailbox, void *resp)
 {
 	struct gcip_mailbox_wait_list_elem *cur, *nxt;
-	struct gcip_mailbox_resp_awaiter *awaiter;
+	struct gcip_mailbox_resp_awaiter *awaiter = NULL;
 	unsigned long flags;
 	u64 cur_seq, seq = GET_RESP_ELEM_SEQ(resp);
 
@@ -254,38 +254,34 @@ static void gcip_mailbox_handle_response(struct gcip_mailbox *mailbox, void *res
 		cur->async_resp->status = GCIP_MAILBOX_STATUS_OK;
 		memcpy(cur->async_resp->resp, resp, mailbox->resp_elem_size);
 		list_del(&cur->list);
-		if (cur->awaiter) {
-			awaiter = cur->awaiter;
-
+		awaiter = cur->awaiter;
+		if (awaiter)
 			/*
 			 * The timedout handler will be fired, but pended by waiting for acquiring
 			 * the wait_list_lock.
 			 */
 			TEST_TRIGGER_TIMEOUT_RACE(awaiter);
-
-			/*
-			 * If canceling timeout_work succeeded, we have to decrease the reference
-			 * count here because the timeout handler will not be* called. Otherwise,
-			 * the timeout handler is already canceled or pending by race. If it is
-			 * canceled, the count must be decreased already, and if it is pending, the
-			 * timeout handler will decrease the awaiter reference.
-			 */
-			if (cancel_delayed_work(&awaiter->timeout_work))
-				gcip_mailbox_awaiter_dec_refs(awaiter);
-			/*
-			 * If `handle_awaiter_arrived` callback is defined, @awaiter will be
-			 * released from the implementation side. Otherwise, it should be freed from
-			 * here.
-			 */
-			if (mailbox->ops->handle_awaiter_arrived)
-				mailbox->ops->handle_awaiter_arrived(mailbox, awaiter);
-			gcip_mailbox_awaiter_dec_refs(awaiter);
-		}
 		kfree(cur);
 		break;
 	}
 
 	RELEASE_WAIT_LIST_LOCK(true, flags);
+
+	if (!awaiter)
+		return;
+
+	/*
+	 * If canceling timeout_work succeeded, we have to decrease the reference count here because
+	 * the timeout handler will not be called. Otherwise, the timeout handler is already
+	 * canceled or pending by race. If it is canceled, the count must be decreased already, and
+	 * if it is pending, the timeout handler will decrease the awaiter reference.
+	 */
+	if (cancel_delayed_work(&awaiter->timeout_work))
+		gcip_mailbox_awaiter_dec_refs(awaiter);
+	if (mailbox->ops->handle_awaiter_arrived)
+		mailbox->ops->handle_awaiter_arrived(mailbox, awaiter);
+	/* Remove the reference of the arrived handler. */
+	gcip_mailbox_awaiter_dec_refs(awaiter);
 }
 
 /*

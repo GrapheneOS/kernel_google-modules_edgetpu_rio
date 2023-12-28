@@ -60,6 +60,8 @@ struct iif_fence {
 	struct iif_manager *mgr;
 	/* Fence ID. */
 	int id;
+	/* Signaler IP type. */
+	enum iif_ip_type signaler_ip;
 	/* The number of total signalers to be submitted. */
 	uint16_t total_signalers;
 	/* The number of submitted signalers. */
@@ -177,16 +179,6 @@ void iif_fence_put(struct iif_fence *fence);
 int iif_fence_submit_signaler(struct iif_fence *fence);
 
 /*
- * Returns the number of remaining signalers to be submitted. Returns 0 if all signalers are
- * submitted.
- *
- * Note that this function holds @fence->submitted_signalers_lock internally and read the value.
- * Therefore, the number of remaining signalers can be changed after the function returns. The one
- * must use this function only for the debugging purpose.
- */
-int iif_fence_unsubmitted_signalers(struct iif_fence *fence);
-
-/*
  * Submits a waiter of @ip IP. @fence->outstanding_waiters will be incremented by 1.
  * Note that the waiter submission will not be done when not all signalers have been submitted.
  * (i.e., @fence->submitted_signalers < @fence->total_signalers)
@@ -259,5 +251,19 @@ int iif_fence_add_all_signaler_submitted_callback(struct iif_fence *fence,
  */
 bool iif_fence_remove_all_signaler_submitted_callback(
 	struct iif_fence *fence, struct iif_fence_all_signaler_submitted_cb *cb);
+
+/*
+ * Returns the number of signalers or waiters information accordingly.
+ *
+ * Note that these functions hold required locks internally and read the value. Therefore, the value
+ * of them can be changed after the function returns. The one must use these functions only for the
+ * debugging purpose.
+ *
+ * These functions can be called in the IRQ context.
+ */
+int iif_fence_unsubmitted_signalers(struct iif_fence *fence);
+int iif_fence_submitted_signalers(struct iif_fence *fence);
+int iif_fence_signaled_signalers(struct iif_fence *fence);
+int iif_fence_outstanding_waiters(struct iif_fence *fence);
 
 #endif /* __IIF_IIF_FENCE_H__ */

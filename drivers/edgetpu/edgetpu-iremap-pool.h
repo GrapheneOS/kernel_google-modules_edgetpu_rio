@@ -35,19 +35,14 @@ int edgetpu_iremap_pool_create(struct edgetpu_dev *etdev, void *base_vaddr,
 void edgetpu_iremap_pool_destroy(struct edgetpu_dev *etdev);
 
 /*
- * Attempt to allocate memory in the instruction remap pool if the device
- * has one.
- * Fall back to dma_alloc_coherent and edgetpu_mmu_map_sgt otherwise.
+ * Allocate memory from the instruction remap pool.
  */
-int edgetpu_iremap_alloc(struct edgetpu_dev *etdev, size_t size, struct edgetpu_coherent_mem *mem,
-			 struct edgetpu_iommu_domain *etdomain);
+int edgetpu_iremap_alloc(struct edgetpu_dev *etdev, size_t size, struct edgetpu_coherent_mem *mem);
 
 /*
- * Free memory allocated by the function above, either from the instruction
- * remap pool or from dma coherent memory.
+ * Free memory allocated by the function above.
  */
-void edgetpu_iremap_free(struct edgetpu_dev *etdev, struct edgetpu_coherent_mem *mem,
-			 struct edgetpu_iommu_domain *etdomain);
+void edgetpu_iremap_free(struct edgetpu_dev *etdev, struct edgetpu_coherent_mem *mem);
 
 /*
  * Map memory in the pool to user space. Falls back to dma_mmap_coherent when

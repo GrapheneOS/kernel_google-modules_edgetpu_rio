@@ -23,8 +23,8 @@
 /* fake-firmware could respond in a short time */
 #define IKV_TIMEOUT	(200)
 #else
-/* Wait for up to 1 second for FW to respond. */
-#define IKV_TIMEOUT	(1000)
+/* Wait for up to 20 second for FW to respond. */
+#define IKV_TIMEOUT	(20000)
 #endif
 
 static void edgetpu_ikv_handle_irq(struct edgetpu_mailbox *mailbox)
@@ -63,14 +63,14 @@ static int edgetpu_ikv_alloc_queue(struct edgetpu_ikv *etikv, enum gcip_mailbox_
 	 * in-kernel VII is kernel-to-firmware communication, so its queues are allocated in the
 	 * same context as KCI, despite being a separate protocol.
 	 */
-	ret = edgetpu_iremap_alloc(etdev, size,  mem, edgetpu_mmu_default_domain(etdev));
+	ret = edgetpu_iremap_alloc(etdev, size,  mem);
 	if (ret)
 		return ret;
 
 	ret = edgetpu_mailbox_set_queue(etikv->mbx_hardware, type, mem->tpu_addr, QUEUE_SIZE);
 	if (ret) {
 		etdev_err(etikv->etdev, "failed to set mailbox queue: %d", ret);
-		edgetpu_iremap_free(etdev, mem, edgetpu_mmu_default_domain(etdev));
+		edgetpu_iremap_free(etdev, mem);
 		return ret;
 	}
 
@@ -83,12 +83,10 @@ static void edgetpu_ikv_free_queue(struct edgetpu_ikv *etikv, enum gcip_mailbox_
 
 	switch (type) {
 	case GCIP_MAILBOX_CMD_QUEUE:
-		edgetpu_iremap_free(etdev, &etikv->cmd_queue_mem,
-				    edgetpu_mmu_default_domain(etdev));
+		edgetpu_iremap_free(etdev, &etikv->cmd_queue_mem);
 		break;
 	case GCIP_MAILBOX_RESP_QUEUE:
-		edgetpu_iremap_free(etdev, &etikv->resp_queue_mem,
-				    edgetpu_mmu_default_domain(etdev));
+		edgetpu_iremap_free(etdev, &etikv->resp_queue_mem);
 		break;
 	}
 }

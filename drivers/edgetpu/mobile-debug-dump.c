@@ -200,7 +200,7 @@ static int mobile_sscd_collect_mappings_info(struct edgetpu_mapping_root *root, 
 		SET_FIELD(info, map, host_address);
 		SET_FIELD(info, map->gcip_mapping, device_address);
 		SET_FIELD(info, map, flags);
-		SET_FIELD(info, map->gcip_mapping, dir);
+		info->dir = map->gcip_mapping->orig_dir;
 		info->size = (u64)map->gcip_mapping->size;
 		info++;
 	}
@@ -648,8 +648,7 @@ int edgetpu_debug_dump_init(struct edgetpu_dev *etdev)
 	/*
 	 * Allocate a buffer for various dump segments
 	 */
-	ret = edgetpu_alloc_coherent(etdev, size, &etdev->debug_dump_mem,
-				     edgetpu_mmu_default_domain(etdev));
+	ret = edgetpu_alloc_coherent(etdev, size, &etdev->debug_dump_mem);
 	if (ret) {
 		etdev_err(etdev, "Debug dump seg alloc failed");
 		etdev->debug_dump_mem.vaddr = NULL;
@@ -691,7 +690,7 @@ void edgetpu_debug_dump_exit(struct edgetpu_dev *etdev)
 	/*
 	 * Free the memory assigned for debug dump
 	 */
-	edgetpu_free_coherent(etdev, &etdev->debug_dump_mem, edgetpu_mmu_default_domain(etdev));
+	edgetpu_free_coherent(etdev, &etdev->debug_dump_mem);
 	kfree(etdev->debug_dump_handlers);
 	platform_device_unregister(&sscd_dev);
 }

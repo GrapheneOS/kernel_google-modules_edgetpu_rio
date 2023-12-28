@@ -18,17 +18,19 @@ static struct iif_signaler_submission_waiter *
 iif_signaler_submission_waiter_alloc(unsigned int eventfd, int pending_fences)
 {
 	struct iif_signaler_submission_waiter *waiter;
+	struct eventfd_ctx *ctx;
 
 	waiter = kzalloc(sizeof(*waiter), GFP_KERNEL);
 	if (!waiter)
 		return ERR_PTR(-ENOMEM);
 
-	waiter->ctx = eventfd_ctx_fdget((int)eventfd);
-	if (IS_ERR(waiter->ctx)) {
+	ctx = eventfd_ctx_fdget((int)eventfd);
+	if (IS_ERR(ctx)) {
 		kfree(waiter);
-		return ERR_CAST(waiter->ctx);
+		return ERR_CAST(ctx);
 	}
 
+	waiter->ctx = ctx;
 	waiter->pending_fences = pending_fences;
 
 	INIT_LIST_HEAD(&waiter->cb_list);

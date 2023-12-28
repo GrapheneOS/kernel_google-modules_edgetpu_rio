@@ -8,6 +8,8 @@
 #ifndef __GCIP_CONFIG_H__
 #define __GCIP_CONFIG_H__
 
+#include <linux/version.h>
+
 #define GCIP_IS_GKI (IS_ENABLED(CONFIG_ANDROID) || IS_ENABLED(CONFIG_ANDROID_VENDOR_HOOKS))
 
 /* Macros to check the availability of features and APIs */

@@ -320,7 +320,7 @@ struct gcip_mailbox_ops {
 	 * Handles the asynchronous response which arrives well. How to handle it depends on the
 	 * chip implementation. However, @awaiter should be released by calling the
 	 * `gcip_mailbox_release_awaiter` function when the kernel driver doesn't need
-	 * @awaiter anymore. This is called with the `wait_list_lock` being held.
+	 * @awaiter anymore.
 	 * Context: normal and in_interrupt().
 	 */
 	void (*handle_awaiter_arrived)(struct gcip_mailbox *mailbox,

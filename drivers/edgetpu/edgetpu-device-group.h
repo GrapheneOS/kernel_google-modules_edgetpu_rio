@@ -116,6 +116,7 @@ struct edgetpu_device_group {
 	 * responses currently enqueued in @pending_ikv_resps.
 	 */
 	spinlock_t ikv_resp_lock;
+	uint available_vii_credits;
 
 	/* TPU IOVA mapped to host DRAM space */
 	struct edgetpu_mapping_root host_mappings;

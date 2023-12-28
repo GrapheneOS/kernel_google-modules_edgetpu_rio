@@ -12,6 +12,7 @@
 #include <linux/poll.h>
 #include <linux/slab.h>
 #include <linux/types.h>
+#include <linux/uaccess.h>
 
 #include <gcip/iif/iif-fence.h>
 #include <gcip/iif/iif-sync-file.h>
@@ -55,9 +56,41 @@ static __poll_t iif_sync_file_poll(struct file *file, poll_table *wait)
 	return iif_fence_is_signaled(sync_file->fence) ? EPOLLIN : 0;
 }
 
+static int iif_sync_file_ioctl_get_information(struct iif_sync_file *sync_file,
+					       struct iif_fence_get_information_ioctl __user *argp)
+{
+	struct iif_fence *fence = sync_file->fence;
+	const struct iif_fence_get_information_ioctl ibuf = {
+		.signaler_ip = fence->signaler_ip,
+		.total_signalers = fence->total_signalers,
+		.submitted_signalers = iif_fence_submitted_signalers(fence),
+		.signaled_signalers = iif_fence_signaled_signalers(fence),
+		.outstanding_waiters = iif_fence_outstanding_waiters(fence),
+	};
+
+	if (copy_to_user(argp, &ibuf, sizeof(ibuf)))
+		return -EFAULT;
+
+	return 0;
+}
+
+static long iif_sync_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	struct iif_sync_file *sync_file = file->private_data;
+	void __user *argp = (void __user *)arg;
+
+	switch (cmd) {
+	case IIF_FENCE_GET_INFORMATION:
+		return iif_sync_file_ioctl_get_information(sync_file, argp);
+	default:
+		return -ENOTTY;
+	}
+}
+
 static const struct file_operations iif_sync_file_fops = {
 	.release = iif_sync_file_release,
 	.poll = iif_sync_file_poll,
+	.unlocked_ioctl = iif_sync_file_ioctl,
 };
 
 struct iif_sync_file *iif_sync_file_create(struct iif_fence *fence)

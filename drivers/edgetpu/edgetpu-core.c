@@ -712,92 +712,20 @@ void edgetpu_client_remove(struct edgetpu_client *client)
 		gcip_pm_put(etdev->pm);
 }
 
-int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size,
-			   struct edgetpu_coherent_mem *mem,
-			   struct edgetpu_iommu_domain *etdomain)
+int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size, struct edgetpu_coherent_mem *mem)
 {
-	const u32 flags = EDGETPU_MAP_DMA_BIDIRECTIONAL | EDGETPU_MMU_CC_ACCESS | EDGETPU_MMU_HOST |
-			  EDGETPU_MMU_COHERENT;
-	u64 gcip_map_flags = edgetpu_mappings_encode_gcip_map_flags(flags, 0, false);
-	int ret;
-
-	mem->vaddr = dma_alloc_coherent(etdev->dev, size, &mem->dma_addr,
-					GFP_KERNEL);
+	mem->vaddr = dma_alloc_coherent(etdev->dev, size, &mem->dma_addr, GFP_KERNEL);
 	if (!mem->vaddr)
 		return -ENOMEM;
 
-	edgetpu_x86_coherent_mem_init(mem);
-
 	/* dma_alloc_coherent creates mappings in the default domain */
-	if (edgetpu_mmu_is_domain_default_domain(etdev, etdomain)) {
-		mem->tpu_addr = mem->dma_addr;
-		mem->size = size;
-		return 0;
-	}
-
-	/*
-	 * dma_get_sgtable may not always be available, and coherent buffers are always physically
-	 * contiguous, so create a 1-entry sgt by hand.
-	 */
-	mem->client_sgt = kzalloc(sizeof(*mem->client_sgt), GFP_KERNEL);
-	if (!mem->client_sgt) {
-		ret = -ENOMEM;
-		goto err_free_coherent;
-	}
-	mem->client_sgt->sgl = kzalloc(sizeof(*mem->client_sgt->sgl), GFP_KERNEL);
-	if (!mem->client_sgt->sgl) {
-		ret = -ENOMEM;
-		goto err_free_sgt;
-	}
-	mem->client_sgt->nents = 1;
-	mem->client_sgt->orig_nents = 1;
-	sg_set_page(mem->client_sgt->sgl, virt_to_page(mem->vaddr), PAGE_ALIGN(size), 0);
-
-	/* TODO(b/312636534): Remove this when unit test create edgetpu_dev from dt. */
-	if (IS_ENABLED(CONFIG_EDGETPU_TEST) && !etdomain)
-		goto out;
-
-	ret = gcip_iommu_mapping_map_sgt(etdomain->gdomain, mem->client_sgt, &gcip_map_flags);
-	if (!ret) {
-		etdev_err(etdev, "Failed to map coherent buffer to requested domain\n");
-		ret = -EIO;
-		goto err_free_sgl;
-	}
-
-out:
-	mem->tpu_addr = sg_dma_address(mem->client_sgt->sgl);
+	mem->tpu_addr = mem->dma_addr;
 	mem->size = size;
 	return 0;
-
-err_free_sgl:
-	kfree(mem->client_sgt->sgl);
-err_free_sgt:
-	kfree(mem->client_sgt);
-	mem->client_sgt = NULL;
-err_free_coherent:
-	dma_free_coherent(etdev->dev, size, mem->vaddr, mem->dma_addr);
-	mem->vaddr = NULL;
-	return ret;
 }
 
-void edgetpu_free_coherent(struct edgetpu_dev *etdev,
-			   struct edgetpu_coherent_mem *mem,
-			   struct edgetpu_iommu_domain *etdomain)
+void edgetpu_free_coherent(struct edgetpu_dev *etdev, struct edgetpu_coherent_mem *mem)
 {
-	const u64 gcip_map_flags =
-		edgetpu_mappings_encode_gcip_map_flags(EDGETPU_MAP_DMA_BIDIRECTIONAL, 0, false);
-
-	if (!edgetpu_mmu_is_domain_default_domain(etdev, etdomain)) {
-		/* TODO(b/312636534): Remove this check when unittest create edgetpu_dev from dt. */
-		if (!IS_ENABLED(CONFIG_EDGETPU_TEST) || etdomain)
-			gcip_iommu_mapping_unmap_sgt(etdomain->gdomain, mem->client_sgt,
-						     gcip_map_flags);
-
-		kfree(mem->client_sgt->sgl);
-		kfree(mem->client_sgt);
-		mem->client_sgt = NULL;
-	}
-	edgetpu_x86_coherent_mem_set_wb(mem);
 	dma_free_coherent(etdev->dev, mem->size, mem->vaddr, mem->dma_addr);
 	mem->vaddr = NULL;
 }

@@ -482,6 +482,7 @@ edgetpu_device_group_alloc(struct edgetpu_client *client,
 	INIT_LIST_HEAD(&group->ready_ikv_resps);
 	INIT_LIST_HEAD(&group->pending_ikv_resps);
 	spin_lock_init(&group->ikv_resp_lock);
+	group->available_vii_credits = EDGETPU_NUM_VII_CREDITS;
 	mutex_init(&group->lock);
 	rwlock_init(&group->events.lock);
 	INIT_LIST_HEAD(&group->dma_fence_list);
@@ -630,7 +631,7 @@ static void edgetpu_host_map_show(struct edgetpu_mapping *map,
 
 		seq_printf(s, "  %pad %lu %s %#llx %pap\n", &dma_addr,
 			   DIV_ROUND_UP(sg_dma_len(sg), PAGE_SIZE),
-			   edgetpu_dma_dir_rw_s(map->gcip_mapping->dir),
+			   edgetpu_dma_dir_rw_s(map->gcip_mapping->orig_dir),
 			   map->host_address + cur_offset, &phys_addr);
 		cur_offset += sg_dma_len(sg);
 	}
@@ -931,6 +932,7 @@ int edgetpu_device_group_send_vii_command(struct edgetpu_device_group *group,
 	struct edgetpu_dev *etdev = group->etdev;
 	struct edgetpu_iommu_domain *etdomain;
 	int ret = 0;
+	unsigned long flags;
 
 	mutex_lock(&group->lock);
 	if (!edgetpu_device_group_is_finalized(group) || edgetpu_device_group_is_errored(group)) {
@@ -946,6 +948,15 @@ int edgetpu_device_group_send_vii_command(struct edgetpu_device_group *group,
 		ret = -EINVAL;
 		goto unlock_group;
 	}
+
+	spin_lock_irqsave(&group->ikv_resp_lock, flags);
+	if (!group->available_vii_credits) {
+		spin_unlock_irqrestore(&group->ikv_resp_lock, flags);
+		ret = -EBUSY;
+		goto unlock_group;
+	}
+	group->available_vii_credits--;
+	spin_unlock_irqrestore(&group->ikv_resp_lock, flags);
 
 	cmd->client_id = etdomain->pasid;
 	ret = edgetpu_ikv_send_cmd(etdev->etikv, cmd, &group->pending_ikv_resps,

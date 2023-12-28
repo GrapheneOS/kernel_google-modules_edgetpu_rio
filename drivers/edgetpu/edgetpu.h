@@ -606,7 +606,7 @@ struct edgetpu_set_device_properties_ioctl {
  *
  * Credits are consumed when a command is enqueued and refunded when the response arrives at the
  * Kernel level or times out. If a client attempts to send a command when out of credits,
- * EDGETPU_VII_COMMAND will fail.
+ * EDGETPU_VII_COMMAND will fail, returning -EBUSY.
  */
 #define EDGETPU_NUM_VII_CREDITS 8
 

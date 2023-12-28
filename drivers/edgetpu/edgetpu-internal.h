@@ -299,49 +299,16 @@ static inline void edgetpu_dev_write_64(struct edgetpu_dev *etdev,
 	writeq_relaxed(value, etdev->regs.mem + reg_offset);
 }
 
-static inline void
-edgetpu_x86_coherent_mem_init(struct edgetpu_coherent_mem *mem)
-{
-#ifdef CONFIG_X86
-	mem->is_set_uc = false;
-#endif
-}
-
-static inline void
-edgetpu_x86_coherent_mem_set_uc(struct edgetpu_coherent_mem *mem)
-{
-#ifdef CONFIG_X86
-	if (!mem->is_set_uc) {
-		set_memory_uc((unsigned long)mem->vaddr, mem->size >>
-			      PAGE_SHIFT);
-		mem->is_set_uc = true;
-	}
-#endif
-}
-
-static inline void
-edgetpu_x86_coherent_mem_set_wb(struct edgetpu_coherent_mem *mem)
-{
-#ifdef CONFIG_X86
-	if (mem->is_set_uc) {
-		set_memory_wb((unsigned long)mem->vaddr, mem->size >>
-			      PAGE_SHIFT);
-		mem->is_set_uc = false;
-	}
-#endif
-}
-
 /*
  * Attempt to allocate memory from the dma coherent memory using dma_alloc.
  * Use this to allocate memory outside the instruction remap pool.
  */
-int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size, struct edgetpu_coherent_mem *mem,
-			   struct edgetpu_iommu_domain *etdomain);
+int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size,
+			   struct edgetpu_coherent_mem *mem);
 /*
  * Free memory allocated by the function above from the dma coherent memory.
  */
-void edgetpu_free_coherent(struct edgetpu_dev *etdev, struct edgetpu_coherent_mem *mem,
-			   struct edgetpu_iommu_domain *etdomain);
+void edgetpu_free_coherent(struct edgetpu_dev *etdev, struct edgetpu_coherent_mem *mem);
 
 /* Checks if @file belongs to edgetpu driver */
 bool is_edgetpu_file(struct file *file);

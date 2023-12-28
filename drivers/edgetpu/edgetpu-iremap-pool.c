@@ -65,15 +65,11 @@ void edgetpu_iremap_pool_destroy(struct edgetpu_dev *etdev)
 	etdev->iremap_pool = NULL;
 }
 
-int edgetpu_iremap_alloc(struct edgetpu_dev *etdev, size_t size, struct edgetpu_coherent_mem *mem,
-			 struct edgetpu_iommu_domain *etdomain)
+int edgetpu_iremap_alloc(struct edgetpu_dev *etdev, size_t size, struct edgetpu_coherent_mem *mem)
 {
 	struct edgetpu_mempool *etmempool = etdev->iremap_pool;
 	unsigned long addr;
 	size_t offset;
-
-	if (!etmempool)
-		return edgetpu_alloc_coherent(etdev, size, mem, etdomain);
 
 	size = __ALIGN_KERNEL(size, etmempool->granule);
 	addr = gen_pool_alloc(etmempool->gen_pool, size);
@@ -92,15 +88,9 @@ int edgetpu_iremap_alloc(struct edgetpu_dev *etdev, size_t size, struct edgetpu_
 	return 0;
 }
 
-void edgetpu_iremap_free(struct edgetpu_dev *etdev, struct edgetpu_coherent_mem *mem,
-			 struct edgetpu_iommu_domain *etdomain)
+void edgetpu_iremap_free(struct edgetpu_dev *etdev, struct edgetpu_coherent_mem *mem)
 {
 	struct edgetpu_mempool *etmempool = etdev->iremap_pool;
-
-	if (!etmempool) {
-		edgetpu_free_coherent(etdev, mem, etdomain);
-		return;
-	}
 
 	etdev_dbg(etdev, "%s @ %pK IOVA = %pad size = %zu", __func__, mem->vaddr, &mem->dma_addr,
 		  mem->size);
@@ -130,14 +120,6 @@ int edgetpu_iremap_mmap(struct edgetpu_dev *etdev, struct vm_area_struct *vma,
 #endif
 
 	vma->vm_pgoff = 0;
-	if (!etmempool) {
-		edgetpu_x86_coherent_mem_set_uc(mem);
-		ret = dma_mmap_coherent(etdev->dev, vma, mem->vaddr,
-					mem->dma_addr, mem->size);
-		vma->vm_pgoff = orig_pgoff;
-		return ret;
-	}
-
 	offset = mem->vaddr - etmempool->base_vaddr;
 	phys = etmempool->base_phys_addr + offset;
 	etdev_dbg(etdev, "%s: virt = %pK phys = %pap\n", __func__, mem->vaddr, &phys);

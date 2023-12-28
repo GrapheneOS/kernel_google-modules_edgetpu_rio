@@ -219,6 +219,7 @@ int iif_fence_init(struct iif_manager *mgr, struct iif_fence *fence,
 		return fence->id;
 
 	fence->mgr = mgr;
+	fence->signaler_ip = signaler_ip;
 	fence->total_signalers = total_signalers;
 	fence->submitted_signalers = 0;
 	fence->signaled_signalers = 0;
@@ -334,18 +335,6 @@ int iif_fence_submit_signaler(struct iif_fence *fence)
 	spin_unlock(&fence->submitted_signalers_lock);
 
 	return ret;
-}
-
-int iif_fence_unsubmitted_signalers(struct iif_fence *fence)
-{
-	unsigned long flags;
-	int unsubmitted;
-
-	spin_lock_irqsave(&fence->submitted_signalers_lock, flags);
-	unsubmitted = iif_fence_unsubmitted_signalers_locked(fence);
-	spin_unlock_irqrestore(&fence->submitted_signalers_lock, flags);
-
-	return unsubmitted;
 }
 
 int iif_fence_submit_waiter(struct iif_fence *fence, enum iif_ip_type ip)
@@ -498,4 +487,45 @@ bool iif_fence_remove_all_signaler_submitted_callback(
 	spin_unlock_irqrestore(&fence->submitted_signalers_lock, flags);
 
 	return removed;
+}
+
+int iif_fence_unsubmitted_signalers(struct iif_fence *fence)
+{
+	unsigned long flags;
+	int unsubmitted;
+
+	spin_lock_irqsave(&fence->submitted_signalers_lock, flags);
+	unsubmitted = iif_fence_unsubmitted_signalers_locked(fence);
+	spin_unlock_irqrestore(&fence->submitted_signalers_lock, flags);
+
+	return unsubmitted;
+}
+
+int iif_fence_submitted_signalers(struct iif_fence *fence)
+{
+	return fence->total_signalers - iif_fence_unsubmitted_signalers(fence);
+}
+
+int iif_fence_signaled_signalers(struct iif_fence *fence)
+{
+	unsigned long flags;
+	int signaled;
+
+	spin_lock_irqsave(&fence->signaled_signalers_lock, flags);
+	signaled = fence->signaled_signalers;
+	spin_unlock_irqrestore(&fence->signaled_signalers_lock, flags);
+
+	return signaled;
+}
+
+int iif_fence_outstanding_waiters(struct iif_fence *fence)
+{
+	unsigned long flags;
+	int outstanding;
+
+	spin_lock_irqsave(&fence->outstanding_waiters_lock, flags);
+	outstanding = fence->outstanding_waiters;
+	spin_unlock_irqrestore(&fence->outstanding_waiters_lock, flags);
+
+	return outstanding;
 }

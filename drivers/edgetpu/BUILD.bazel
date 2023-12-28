@@ -1,12 +1,14 @@
-# NOTE: THIS FILE IS EXPERIMENTAL FOR THE BAZEL MIGRATION AND NOT USED FOR
-# YOUR BUILDS CURRENTLY.
-#
-# It is not yet the source of truth for your build. If you're looking to modify
-# the build file, modify the Android.bp file instead. Do *not* modify this file
-# unless you have coordinated with the team managing the Soong to Bazel
-# migration.
-
 load("//build/kernel/kleaf:kernel.bzl", "kernel_module")
+
+filegroup(
+    name = "edgetpu.kconfig",
+    srcs = [
+        "Kconfig",
+    ],
+    visibility = [
+        "//private/devices/google:__subpackages__",
+    ],
+)
 
 kernel_module(
     name = "edgetpu.rio",

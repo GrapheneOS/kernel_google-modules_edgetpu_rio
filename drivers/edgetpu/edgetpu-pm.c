@@ -48,10 +48,7 @@ uint32_t *edgetpu_states_display = edgetpu_active_states;
 
 static bool edgetpu_always_on(void)
 {
-#if defined(EDGETPU_FEATURE_ALWAYS_ON) || IS_ENABLED(CONFIG_EDGETPU_TEST)
-	return true;
-#endif
-	return false;
+	return IS_ENABLED(CONFIG_EDGETPU_TEST) || EDGETPU_FEATURE_ALWAYS_ON;
 }
 
 static bool edgetpu_poll_block_off(struct edgetpu_dev *etdev)
