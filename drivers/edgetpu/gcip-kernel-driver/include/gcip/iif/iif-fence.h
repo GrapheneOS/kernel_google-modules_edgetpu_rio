@@ -230,8 +230,12 @@ void iif_fence_waited(struct iif_fence *fence);
 int iif_fence_add_poll_callback(struct iif_fence *fence, struct iif_fence_poll_cb *poll_cb,
 				iif_fence_poll_cb_t func);
 
-/* Unregisters the callback from @fence. */
-void iif_fence_remove_poll_callback(struct iif_fence *fence, struct iif_fence_poll_cb *poll_cb);
+/*
+ * Unregisters the callback from @fence.
+ *
+ * Returns true if the callback is removed before @fence is signaled.
+ */
+bool iif_fence_remove_poll_callback(struct iif_fence *fence, struct iif_fence_poll_cb *poll_cb);
 
 /*
  * Registers a callback which will be called when all signalers are submitted for @fence and

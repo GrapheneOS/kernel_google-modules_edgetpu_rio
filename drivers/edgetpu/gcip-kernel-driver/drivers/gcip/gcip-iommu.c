@@ -503,7 +503,7 @@ static void gcip_iommu_mapping_unmap_dma_buf(struct gcip_iommu_mapping *mapping)
 	}
 
 	dma_buf_unmap_attachment(dmabuf_mapping->dma_buf_attachment, dmabuf_mapping->sgt_default,
-				 mapping->orig_dir);
+				 mapping->dir);
 	dma_buf_detach(dmabuf_mapping->dma_buf, dmabuf_mapping->dma_buf_attachment);
 	dma_buf_put(dmabuf_mapping->dma_buf);
 	kfree(dmabuf_mapping);
@@ -1045,7 +1045,6 @@ err_pin_read_only:
  *                                      target IOMMU domain.
  * @domain: The desired IOMMU domain where the sgt should be mapped.
  * @sgt: The scatter-gather table to map to the target IOMMU domain.
- * @size: The size of the buffer.
  * @orig_dir: The original DMA direction that user try to map.
  * @offset: The offset of the start address.
  * @iova: The target IOVA to map @sgt. If it is 0, this function allocates an IOVA space.
@@ -1055,12 +1054,15 @@ err_pin_read_only:
  * Return: The mapping of the desired DMA buffer with type GCIP_IOMMU_MAPPING_BUFFER
  *         or an error pointer on failure.
  */
-static struct gcip_iommu_mapping *
-gcip_iommu_domain_map_buffer_sgt(struct gcip_iommu_domain *domain, struct sg_table *sgt,
-				 size_t size, enum dma_data_direction orig_dir, ulong offset,
-				 dma_addr_t iova, u64 gcip_map_flags)
+static struct gcip_iommu_mapping *gcip_iommu_domain_map_buffer_sgt(struct gcip_iommu_domain *domain,
+								   struct sg_table *sgt,
+								   enum dma_data_direction orig_dir,
+								   ulong offset, dma_addr_t iova,
+								   u64 gcip_map_flags)
 {
 	struct gcip_iommu_mapping *mapping;
+	struct scatterlist *sl;
+	int i;
 	int ret;
 
 	mapping = kzalloc(sizeof(*mapping), GFP_KERNEL);
@@ -1070,7 +1072,6 @@ gcip_iommu_domain_map_buffer_sgt(struct gcip_iommu_domain *domain, struct sg_tab
 	mapping->domain = domain;
 	mapping->sgt = sgt;
 	mapping->type = GCIP_IOMMU_MAPPING_BUFFER;
-	mapping->size = size;
 	mapping->orig_dir = orig_dir;
 	mapping->user_specified_daddr = iova;
 
@@ -1086,6 +1087,9 @@ gcip_iommu_domain_map_buffer_sgt(struct gcip_iommu_domain *domain, struct sg_tab
 	mapping->device_address = sg_dma_address(sgt->sgl) + offset;
 	mapping->gcip_map_flags = gcip_map_flags;
 	mapping->dir = GCIP_MAP_FLAGS_GET_DMA_DIRECTION(gcip_map_flags);
+	mapping->size = 0;
+	for_each_sg(sgt->sgl, sl, sgt->nents, i)
+		mapping->size += sg_dma_len(sl);
 
 	return mapping;
 
@@ -1229,7 +1233,7 @@ struct gcip_iommu_mapping *gcip_iommu_domain_map_buffer_to_iova(struct gcip_iomm
 		goto err_free_table;
 	}
 
-	mapping = gcip_iommu_domain_map_buffer_sgt(domain, sgt, size, orig_dir, offset, iova,
+	mapping = gcip_iommu_domain_map_buffer_sgt(domain, sgt, orig_dir, offset, iova,
 						   gcip_map_flags);
 	if (IS_ERR(mapping)) {
 		ret = PTR_ERR(mapping);

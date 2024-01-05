@@ -365,6 +365,11 @@ struct gcip_mailbox_ops {
 	 * Context: normal.
 	 */
 	u32 (*get_cmd_timeout)(struct gcip_mailbox *mailbox, void *cmd, void *resp, void *data);
+	/*
+	 * Called when a command fails to be sent.
+	 * Context: normal.
+	 */
+	void (*on_error)(struct gcip_mailbox *mailbox, int err);
 };
 
 struct gcip_mailbox {

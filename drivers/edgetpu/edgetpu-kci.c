@@ -20,6 +20,7 @@
 #include <gcip/gcip-telemetry.h>
 #include <gcip/gcip-usage-stats.h>
 
+#include "edgetpu-debug-dump.h"
 #include "edgetpu-firmware.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-iremap-pool.h"
@@ -201,6 +202,14 @@ static inline bool edgetpu_kci_is_block_off(struct gcip_kci *kci)
 	return edgetpu_soc_pm_is_block_off(mailbox->etdev);
 }
 
+static void edgetpu_kci_on_error(struct gcip_kci *kci, int err)
+{
+	struct edgetpu_mailbox *mailbox = gcip_kci_get_data(kci);
+
+	if (err == -ETIMEDOUT)
+		edgetpu_debug_dump_cpu_regs(mailbox->etdev);
+}
+
 static const struct gcip_kci_ops kci_ops = {
 	.get_cmd_queue_head = edgetpu_kci_get_cmd_queue_head,
 	.get_cmd_queue_tail = edgetpu_kci_get_cmd_queue_tail,
@@ -213,6 +222,7 @@ static const struct gcip_kci_ops kci_ops = {
 	.reverse_kci_handle_response = edgetpu_reverse_kci_handle_response,
 	.update_usage = edgetpu_kci_update_usage_wrapper,
 	.is_block_off = edgetpu_kci_is_block_off,
+	.on_error = edgetpu_kci_on_error,
 };
 
 int edgetpu_kci_init(struct edgetpu_mailbox_manager *mgr, struct edgetpu_kci *etkci)

@@ -422,6 +422,7 @@ int iif_fence_add_poll_callback(struct iif_fence *fence, struct iif_fence_poll_c
 	spin_lock_irqsave(&fence->signaled_signalers_lock, flags);
 
 	if (iif_fence_is_signaled_locked(fence)) {
+		INIT_LIST_HEAD(&poll_cb->node);
 		ret = -EPERM;
 		goto out;
 	}
@@ -434,16 +435,21 @@ out:
 	return ret;
 }
 
-void iif_fence_remove_poll_callback(struct iif_fence *fence, struct iif_fence_poll_cb *poll_cb)
+bool iif_fence_remove_poll_callback(struct iif_fence *fence, struct iif_fence_poll_cb *poll_cb)
 {
 	unsigned long flags;
+	bool removed = false;
 
 	spin_lock_irqsave(&fence->signaled_signalers_lock, flags);
 
-	if (!list_empty(&poll_cb->node))
+	if (!list_empty(&poll_cb->node)) {
 		list_del_init(&poll_cb->node);
+		removed = true;
+	}
 
 	spin_unlock_irqrestore(&fence->signaled_signalers_lock, flags);
+
+	return removed;
 }
 
 int iif_fence_add_all_signaler_submitted_callback(struct iif_fence *fence,

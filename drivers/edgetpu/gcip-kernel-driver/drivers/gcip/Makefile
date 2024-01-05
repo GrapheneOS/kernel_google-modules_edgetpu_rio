@@ -10,8 +10,11 @@ gcip-objs		:= gcip-alloc-helper.o \
 			   gcip-dma-fence.o \
 			   gcip-domain-pool.o \
 			   gcip-fault-injection.o \
+			   gcip-fence-array.o \
+			   gcip-fence.o \
 			   gcip-firmware.o \
 			   gcip-image-config.o \
+			   gcip-iommu-reserve.o \
 			   gcip-iommu.o \
 			   gcip-kci.o \
 			   gcip-mailbox.o \

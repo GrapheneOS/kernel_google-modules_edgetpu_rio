@@ -246,6 +246,14 @@ static inline bool gcip_kci_is_block_off(struct gcip_mailbox *mailbox)
 	return kci->ops->is_block_off ? kci->ops->is_block_off(kci) : false;
 }
 
+static void gcip_kci_on_error(struct gcip_mailbox *mailbox, int err)
+{
+	struct gcip_kci *kci = gcip_mailbox_get_data(mailbox);
+
+	if (kci->ops->on_error)
+		kci->ops->on_error(kci, err);
+}
+
 static const struct gcip_mailbox_ops gcip_mailbox_ops = {
 	.get_cmd_queue_head = gcip_kci_get_cmd_queue_head,
 	.get_cmd_queue_tail = gcip_kci_get_cmd_queue_tail,
@@ -270,6 +278,7 @@ static const struct gcip_mailbox_ops gcip_mailbox_ops = {
 	.after_fetch_resps = gcip_kci_after_fetch_resps,
 	.before_handle_resp = gcip_kci_before_handle_resp,
 	.is_block_off = gcip_kci_is_block_off,
+	.on_error = gcip_kci_on_error,
 };
 
 /*

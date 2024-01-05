@@ -292,6 +292,10 @@ int edgetpu_mmap(struct edgetpu_client *client, struct vm_area_struct *vma)
 	type = VMA_TYPE(flag);
 	if (type == VMA_INVALID)
 		return -EINVAL;
+	if (client->etdev->mailbox_manager->use_ikv && type != VMA_LOG && type != VMA_TRACE) {
+		etdev_err(client->etdev, "Invalid mmap pgoff (%#lX) for IKV\n", vma->vm_pgoff);
+		return -EINVAL;
+	}
 	pvt = edgetpu_vma_private_alloc(client, flag);
 	if (!pvt)
 		return -ENOMEM;

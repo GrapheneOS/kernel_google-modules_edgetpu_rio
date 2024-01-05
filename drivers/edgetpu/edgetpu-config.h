@@ -38,10 +38,4 @@
 #define EDGETPU_FEATURE_ALWAYS_ON 0
 #endif
 
-/* Uses a smaller size for unittests to avoid DMA warnings. */
-#if IS_ENABLED(CONFIG_EDGETPU_TEST)
-#undef EDGETPU_DEBUG_DUMP_MEM_SIZE
-#define EDGETPU_DEBUG_DUMP_MEM_SIZE 0x20000
-#endif
-
 #endif /* __EDGETPU_CONFIG_H__ */

@@ -304,13 +304,25 @@ struct gcip_iommu_domain *gcip_iommu_domain_pool_alloc_domain(struct gcip_iommu_
 void gcip_iommu_domain_pool_free_domain(struct gcip_iommu_domain_pool *pool,
 					struct gcip_iommu_domain *domain);
 
-/* Sets the range of valid PASIDs to be used when attaching a domain
+/*
+ * Sets the range of valid PASIDs to be used when attaching a domain
  *
  * @min: The smallest acceptable value to be assigned to an attached domain
  * @max: The largest acceptable value to be assigned to an attached domain
  */
 void gcip_iommu_domain_pool_set_pasid_range(struct gcip_iommu_domain_pool *pool, ioasid_t min,
 					    ioasid_t max);
+
+/*
+ * Returns the number of PASIDs can be used previously set by
+ * gcip_iommu_domain_pool_set_pasid_range().
+ *
+ * @pool: IOMMU domain pool.
+ */
+static inline int gcip_iommu_domain_pool_get_num_pasid(struct gcip_iommu_domain_pool *pool)
+{
+	return pool->max_pasid - pool->min_pasid + 1;
+}
 
 /*
  * Attaches a GCIP IOMMU domain and sets the obtained PASID

@@ -590,7 +590,7 @@ int gcip_mailbox_send_cmd(struct gcip_mailbox *mailbox, void *cmd, void *resp,
 
 	ret = gcip_mailbox_enqueue_cmd(mailbox, cmd, &async_resp, NULL, flags);
 	if (ret)
-		return ret;
+		goto err;
 
 	/*
 	 * If @resp is NULL, it will not enqueue the response into the waiting list. Therefore, it
@@ -605,15 +605,23 @@ int gcip_mailbox_send_cmd(struct gcip_mailbox *mailbox, void *cmd, void *resp,
 	if (!ret) {
 		dev_dbg(mailbox->dev, "event wait timeout");
 		gcip_mailbox_del_wait_resp(mailbox, &async_resp);
-		return -ETIMEDOUT;
+		ret = -ETIMEDOUT;
+		goto err;
 	}
 	if (async_resp.status != GCIP_MAILBOX_STATUS_OK) {
 		dev_err(mailbox->dev, "Mailbox cmd %u response status %u", GET_CMD_ELEM_CODE(cmd),
 			async_resp.status);
-		return -ENOMSG;
+		ret = -ENOMSG;
+		goto err;
 	}
 
 	return 0;
+
+err:
+	if (mailbox->ops->on_error)
+		mailbox->ops->on_error(mailbox, ret);
+
+	return ret;
 }
 
 struct gcip_mailbox_resp_awaiter *gcip_mailbox_put_cmd_flags(struct gcip_mailbox *mailbox,

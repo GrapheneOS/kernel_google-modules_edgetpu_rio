@@ -609,8 +609,6 @@ static void buffer_mapping_destroy(struct edgetpu_mapping *map)
 	etdev_dbg(group->etdev, "%s: %u: iova=%pad", __func__, group->workload_id,
 		  &map->gcip_mapping->device_address);
 
-	map->gcip_mapping->gcip_map_flags =
-		edgetpu_mappings_encode_gcip_map_flags(map->flags, map->dma_attrs, false);
 	gcip_iommu_mapping_unmap(map->gcip_mapping);
 
 	edgetpu_device_group_put(group);
@@ -733,6 +731,7 @@ static struct edgetpu_mapping *buffer_mapping_create(struct edgetpu_device_group
 	int ret = -EINVAL;
 	struct edgetpu_mapping *map = NULL;
 	struct edgetpu_iommu_domain *etdomain;
+	unsigned long dma_attrs = map_to_dma_attr(flags, true);
 	u64 gcip_map_flags;
 
 	map = kzalloc(sizeof(*map), GFP_KERNEL);
@@ -746,7 +745,6 @@ static struct edgetpu_mapping *buffer_mapping_create(struct edgetpu_device_group
 	map->release = buffer_mapping_destroy;
 	map->show = edgetpu_host_map_show;
 	map->flags = flags;
-	map->dma_attrs = map_to_dma_attr(flags, true);
 
 	mutex_lock(&group->lock);
 	etdomain = edgetpu_group_domain_locked(group);
@@ -755,7 +753,7 @@ static struct edgetpu_mapping *buffer_mapping_create(struct edgetpu_device_group
 		mutex_unlock(&group->lock);
 		goto err_free_map;
 	}
-	gcip_map_flags = edgetpu_mappings_encode_gcip_map_flags(flags, map->dma_attrs, true);
+	gcip_map_flags = edgetpu_mappings_encode_gcip_map_flags(flags, dma_attrs, true);
 	map->gcip_mapping = gcip_iommu_domain_map_buffer(etdomain->gdomain, host_addr, size,
 							 gcip_map_flags, NULL);
 	mutex_unlock(&group->lock);
@@ -827,7 +825,8 @@ int edgetpu_device_group_unmap(struct edgetpu_device_group *group,
 	edgetpu_mapping_unlink(&group->host_mappings, map);
 
 	if (flags & EDGETPU_MAP_SKIP_CPU_SYNC)
-		map->dma_attrs |= DMA_ATTR_SKIP_CPU_SYNC;
+		map->gcip_mapping->gcip_map_flags |=
+			edgetpu_mappings_encode_gcip_map_flags(0, DMA_ATTR_SKIP_CPU_SYNC, false);
 
 	buffer_mapping_destroy(map);
 	edgetpu_mapping_unlock(&group->host_mappings);

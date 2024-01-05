@@ -15,10 +15,10 @@ kernel_module(
     srcs = glob([
         "**/*.c",
         "**/*.h",
-        "Kbuild",
-        "Makefille",
-        "gcip-kernel-driver/drivers/gcip/Makefile",
     ]) + [
+        "Kbuild",
+        "Makefile",
+        "gcip-kernel-driver/drivers/gcip/Makefile",
         "//private/google-modules/power/mitigation:headers",
         "//private/google-modules/soc/gs:gs_soc_headers",
     ],

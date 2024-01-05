@@ -242,6 +242,11 @@ struct gcip_kci_ops {
 	 * Context: in_interrupt().
 	 */
 	bool (*is_block_off)(struct gcip_kci *kci);
+	/*
+	 * Called when a command fails to be sent.
+	 * Context: normal.
+	 */
+	void (*on_error)(struct gcip_kci *kci, int err);
 };
 
 struct gcip_kci {
