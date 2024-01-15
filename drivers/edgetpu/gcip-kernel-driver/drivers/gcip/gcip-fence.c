@@ -175,6 +175,8 @@ void gcip_fence_signal(struct gcip_fence *fence, int errno)
 {
 	switch (fence->type) {
 	case GCIP_INTER_IP_FENCE:
+		if (errno)
+			iif_fence_set_signal_error(fence->fence.iif, errno);
 		iif_fence_signal(fence->fence.iif);
 		break;
 	case GCIP_IN_KERNEL_FENCE:

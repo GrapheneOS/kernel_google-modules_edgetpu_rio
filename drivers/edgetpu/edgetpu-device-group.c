@@ -930,8 +930,13 @@ int edgetpu_device_group_send_vii_command(struct edgetpu_device_group *group,
 {
 	struct edgetpu_dev *etdev = group->etdev;
 	struct edgetpu_iommu_domain *etdomain;
-	int ret = 0;
 	unsigned long flags;
+	int ret = gcip_pm_get_if_powered(etdev->pm, true);
+
+	if (ret) {
+		etdev_err(etdev, "Unable to send VII command, TPU block is off");
+		return ret;
+	}
 
 	mutex_lock(&group->lock);
 	if (!edgetpu_device_group_is_finalized(group) || edgetpu_device_group_is_errored(group)) {
@@ -963,6 +968,7 @@ int edgetpu_device_group_send_vii_command(struct edgetpu_device_group *group,
 
 unlock_group:
 	mutex_unlock(&group->lock);
+	gcip_pm_put(etdev->pm);
 	return ret;
 }
 

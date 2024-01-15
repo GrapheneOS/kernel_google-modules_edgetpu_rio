@@ -93,8 +93,14 @@ static void all_signaler_submitted(struct iif_fence *fence,
 	 *
 	 * - If there is no more fence to register the callback and all fences have finished the
 	 *   signaler submission, we can signal the eventfd.
+	 *
+	 * Note that this callback will be called even when @fence is going to be destroyed before
+	 * all signalers have been submitted to clean up the callback data, @cb. We can distinguish
+	 * the case by checking whether @fence->all_signaler_submitted_error is zero or not and we
+	 * should not notify the eventfd if that is non-zero.
 	 */
-	if (!waiter->pending_fences && list_empty(&waiter->cb_list))
+	if (!waiter->pending_fences && list_empty(&waiter->cb_list) &&
+	    !fence->all_signaler_submitted_error)
 		eventfd_signal(waiter->ctx, 1);
 
 	spin_unlock_irqrestore(&waiter->lock, flags);

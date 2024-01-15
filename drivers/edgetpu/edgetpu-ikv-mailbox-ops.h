@@ -255,11 +255,13 @@ out:
 static void edgetpu_ikv_handle_awaiter_timedout(struct gcip_mailbox *mailbox,
 						struct gcip_mailbox_resp_awaiter *awaiter)
 {
+	struct edgetpu_ikv *ikv = gcip_mailbox_get_data(mailbox);
 	struct edgetpu_ikv_response *resp = awaiter->data;
 	/* Store an independent pointer to `dest_queue_lock`, since `resp` may be released. */
 	spinlock_t *dest_queue_lock = resp->dest_queue_lock;
 	unsigned long flags;
 
+	etdev_warn(ikv->etdev, "IKV seq %llu timed out", resp->client_seq);
 	spin_lock_irqsave(dest_queue_lock, flags);
 
 	/*

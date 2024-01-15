@@ -23,8 +23,8 @@
 /* fake-firmware could respond in a short time */
 #define IKV_TIMEOUT	(200)
 #else
-/* Wait for up to 20 second for FW to respond. */
-#define IKV_TIMEOUT	(20000)
+/* Wait for up to 2 minutes for FW to respond. */
+#define IKV_TIMEOUT	(120000)
 #endif
 
 static void edgetpu_ikv_handle_irq(struct edgetpu_mailbox *mailbox)
