@@ -153,10 +153,45 @@ int gcip_signal_dma_fence_with_status(struct dma_fence *fence, int error, bool i
  * Returns 0 on success. Otherwise a negative errno.
  */
 int gcip_dma_fence_signal(int fence, int error, bool ignore_signaled);
+
 /* Identical to gcip_dma_fence_signal except this function accepts gcip_dma_fence as the input. */
 int gcip_dma_fenceptr_signal(struct gcip_dma_fence *gfence, int error, bool ignore_signaled);
 
 /* Prints data of @gfence to the sequence file @s. For debug purpose only. */
 void gcip_dma_fence_show(struct gcip_dma_fence *gfence, struct seq_file *s);
+
+/**
+ * Gets and merges an array of DMA fences from their FDs.
+ *
+ * Creates a dma_fence_array from all of the provided fences and returns a dma_fence representing
+ * that array. If any of the provided fences are also arrays, the resulting array will include
+ * their component fences as well.
+ *   - Signaling with `gcip_signal_dma_fence_with_status` will signal all component fences.
+ *   - Waiting with `dma_fence_wait` will wait until all component fences have been signaled.
+ *
+ * The returned fence must be released with `dma_fence_put()`.
+ *
+ * It is OK if @fence_fds do not refer to gcip_dma_fences.
+ *
+ * Returns a pointer to the fence on success. Otherwise a negative errno as an ERR_PTR.
+ *  - If unable to allocate sufficient memory, returns ERR_PTR(-ENOMEM)
+ *  - If any of @fence_fds are invalid, returns ERR_PTR(-ENOENT)
+ *  - If unable to merge the fences, returns NULL
+ */
+struct dma_fence *gcip_dma_fence_merge_fds(int num_fences, int *fence_fds);
+
+/**
+ * gcip_dma_fence_array_disable_signaling() - Reverts dma_fence_array_enable_signaling() to make
+ *                                            @fence don't wait for the signal of underlying fences.
+ * @fence: The base fence of dma_fence_array.
+ *
+ * This function should be called when @fence is going to be destroyed before signaled.
+ * @fence must be a dma_fence_array created and enabled by the caller itself, otherwise, the fence
+ * array created by other IP may be affected.
+ *
+ * The callback functions will be removed from the underlying fences and their reference will be
+ * put if removed successfully.
+ */
+void gcip_dma_fence_array_disable_signaling(struct dma_fence *fence);
 
 #endif /* __GCIP_DMA_FENCE_H__ */

@@ -8,12 +8,14 @@
 #include <linux/atomic.h>
 #include <linux/bitops.h>
 #include <linux/cred.h>
+#include <linux/delay.h>
 #include <linux/dma-direction.h>
 #include <linux/dma-mapping.h>
 #include <linux/eventfd.h>
 #include <linux/iommu.h>
 #include <linux/kconfig.h>
 #include <linux/kernel.h>
+#include <linux/kthread.h>
 #include <linux/list.h>
 #include <linux/mm.h>
 #include <linux/refcount.h>
@@ -213,6 +215,42 @@ static void edgetpu_group_clear_events(struct edgetpu_device_group *group)
 	write_unlock_irqrestore(&group->events.lock, flags);
 }
 
+struct pending_command_task {
+	struct list_head list_entry;
+	struct task_struct *task;
+};
+
+static void edgetpu_group_clear_pending_commands(struct edgetpu_device_group *group)
+{
+	struct list_head *cur, *nxt;
+	struct pending_command_task *pending_task;
+	unsigned long flags;
+
+	spin_lock_irqsave(&group->pending_cmd_tasks_lock, flags);
+	group->is_clearing_pending_commands = true;
+	spin_unlock_irqrestore(&group->pending_cmd_tasks_lock, flags);
+
+	/*
+	 * With @group->lock held and @group->is_clearing_pending_commands set, there will be no
+	 * more additions or deletions from @group->pending_cmd_tasks respectively so it can be
+	 * iterated over without holding @group->pending_cmd_tasks.
+	 */
+	list_for_each_safe(cur, nxt, &group->pending_cmd_tasks) {
+		pending_task = container_of(cur, struct pending_command_task, list_entry);
+		/*
+		 * kthread_stop() will wake the task and wait for it to exit.
+		 * If the task is already waiting on a dma_fence, this will interrupt the wait
+		 * and cause the task to exit immediately.
+		 *
+		 * If the task has not started waiting on its fence by the time this call occurs,
+		 * then this call will have to wait for the fence to timeout before it returns.
+		 */
+		kthread_stop(pending_task->task);
+		list_del(&pending_task->list_entry);
+		kfree(pending_task);
+	}
+}
+
 static void edgetpu_group_clear_responses(struct edgetpu_device_group *group)
 {
 	struct edgetpu_ikv_response *cur, *nxt;
@@ -293,6 +331,7 @@ static void edgetpu_device_group_release(struct edgetpu_device_group *group)
 	lockdep_assert_held(&group->lock);
 
 	edgetpu_group_clear_events(group);
+	edgetpu_group_clear_pending_commands(group);
 	edgetpu_group_clear_responses(group);
 	if (is_finalized_or_errored(group)) {
 		edgetpu_device_group_kci_leave(group);
@@ -335,12 +374,13 @@ static int edgetpu_dev_add_group(struct edgetpu_dev *etdev,
 	if (group->etdev == etdev) {
 		u32 vcid_pool = etdev->vcid_pool;
 
-#ifdef EDGETPU_VCID_EXTRA_PARTITION
-		if (group->mbox_attr.partition_type != EDGETPU_PARTITION_EXTRA)
-			vcid_pool &= ~BIT(EDGETPU_VCID_EXTRA_PARTITION);
-		else
+		if (group->mbox_attr.partition_type_high == EDGETPU_PARTITION_EXTRA)
+			vcid_pool &= BIT(EDGETPU_VCID_EXTRA_PARTITION_HIGH);
+		else if (group->mbox_attr.partition_type == EDGETPU_PARTITION_EXTRA)
 			vcid_pool &= BIT(EDGETPU_VCID_EXTRA_PARTITION);
-#endif
+		else
+			vcid_pool &= ~(BIT(EDGETPU_VCID_EXTRA_PARTITION) |
+				       BIT(EDGETPU_VCID_EXTRA_PARTITION_HIGH));
 		if (!vcid_pool) {
 			ret = -EBUSY;
 			goto error_unlock;
@@ -489,6 +529,9 @@ edgetpu_device_group_alloc(struct edgetpu_client *client,
 	edgetpu_mapping_init(&group->host_mappings);
 	edgetpu_mapping_init(&group->dmabuf_mappings);
 	group->mbox_attr = *attr;
+	INIT_LIST_HEAD(&group->pending_cmd_tasks);
+	spin_lock_init(&group->pending_cmd_tasks_lock);
+	group->is_clearing_pending_commands = false;
 #if HAS_DETACHABLE_IOMMU_DOMAINS
 	if (attr->priority & EDGETPU_PRIORITY_DETACHABLE)
 		group->mailbox_detachable = true;
@@ -926,7 +969,8 @@ void edgetpu_group_mappings_show(struct edgetpu_device_group *group,
 }
 
 int edgetpu_device_group_send_vii_command(struct edgetpu_device_group *group,
-					  struct edgetpu_vii_command *cmd)
+					  struct edgetpu_vii_command *cmd,
+					  struct dma_fence *in_fence, struct dma_fence *out_fence)
 {
 	struct edgetpu_dev *etdev = group->etdev;
 	struct edgetpu_iommu_domain *etdomain;
@@ -964,7 +1008,14 @@ int edgetpu_device_group_send_vii_command(struct edgetpu_device_group *group,
 
 	cmd->client_id = etdomain->pasid;
 	ret = edgetpu_ikv_send_cmd(etdev->etikv, cmd, &group->pending_ikv_resps,
-				   &group->ready_ikv_resps, &group->ikv_resp_lock, group);
+				   &group->ready_ikv_resps, &group->ikv_resp_lock, group, in_fence,
+				   out_fence);
+	if (ret) {
+		/* Refund credit if command failed to send. */
+		spin_lock_irqsave(&group->ikv_resp_lock, flags);
+		group->available_vii_credits++;
+		spin_unlock_irqrestore(&group->ikv_resp_lock, flags);
+	}
 
 unlock_group:
 	mutex_unlock(&group->lock);
@@ -1329,4 +1380,58 @@ void edgetpu_handle_job_lockup(struct edgetpu_dev *etdev, u16 vcid)
 	}
 	edgetpu_group_fatal_error_notify(group, EDGETPU_ERROR_RUNTIME_TIMEOUT);
 	edgetpu_device_group_put(group);
+}
+
+int edgetpu_device_group_track_fence_task(struct edgetpu_device_group *group,
+					  struct task_struct *task)
+{
+	struct pending_command_task *pending_task;
+	unsigned long flags;
+
+	pending_task = kzalloc(sizeof(*pending_task), GFP_KERNEL);
+	if (!pending_task)
+		return -ENOMEM;
+
+	pending_task->task = task;
+
+	spin_lock_irqsave(&group->pending_cmd_tasks_lock, flags);
+	list_add_tail(&pending_task->list_entry, &group->pending_cmd_tasks);
+	spin_unlock_irqrestore(&group->pending_cmd_tasks_lock, flags);
+
+	return 0;
+}
+
+void edgetpu_device_group_untrack_fence_task(struct edgetpu_device_group *group,
+					     struct task_struct *task)
+{
+	struct list_head *cur, *nxt;
+	struct pending_command_task *pending_task;
+	unsigned long flags;
+
+	spin_lock_irqsave(&group->pending_cmd_tasks_lock, flags);
+
+	if (group->is_clearing_pending_commands) {
+		spin_unlock_irqrestore(&group->pending_cmd_tasks_lock, flags);
+		/*
+		 * Wait until the release handler has requested this task stop so it doesn't
+		 * disappear out from under the release handler.
+		 */
+		while (!kthread_should_stop())
+			msleep(20);
+		return;
+	}
+
+	list_for_each_safe(cur, nxt, &group->pending_cmd_tasks) {
+		pending_task = container_of(cur, struct pending_command_task, list_entry);
+		if (pending_task->task == task) {
+			list_del(&pending_task->list_entry);
+			kfree(pending_task);
+			goto out;
+		}
+	}
+
+	etdev_err(group->etdev, "Attempt to untrack task which was not being tracked");
+
+out:
+	spin_unlock_irqrestore(&group->pending_cmd_tasks_lock, flags);
 }

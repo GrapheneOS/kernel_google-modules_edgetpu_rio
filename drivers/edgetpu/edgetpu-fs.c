@@ -604,10 +604,41 @@ edgetpu_ioctl_set_device_properties(struct edgetpu_dev *etdev,
 	return 0;
 }
 
+/*
+ * Helper to fetch an array of `dma_fence` file descriptors from user-space, merge them into a
+ * `dma_fence_array`, and return the merged `dma_fence_array`'s base `dma_fence`.
+ *
+ * If the array of file descriptors only contains a single entry, then the `dma_fence` associated
+ * with that FD will be returned directly, rather than creating a `dma_fence_array`.
+ */
+static struct dma_fence *get_merged_fence_from_user(u32 count, int __user  *user_addr)
+{
+	int *fence_fd_array;
+	struct dma_fence *merged_fence;
+
+	fence_fd_array = kcalloc(count, sizeof(*fence_fd_array), GFP_KERNEL);
+	if (!fence_fd_array)
+		return ERR_PTR(-ENOMEM);
+
+	if (copy_from_user(fence_fd_array, user_addr, count * sizeof(*fence_fd_array))) {
+		merged_fence = ERR_PTR(-EFAULT);
+		goto out;
+	}
+
+	merged_fence = gcip_dma_fence_merge_fds(count, fence_fd_array);
+	dma_fence_enable_sw_signaling(merged_fence);
+
+out:
+	kfree(fence_fd_array);
+	return merged_fence;
+}
+
 static int edgetpu_ioctl_vii_command(struct edgetpu_client *client,
 				     struct edgetpu_vii_command_ioctl __user *argp)
 {
 	struct edgetpu_vii_command_ioctl command;
+	struct dma_fence *in_fence = NULL;
+	struct dma_fence *out_fence = NULL;
 	int ret;
 
 	if (copy_from_user(&command, argp, sizeof(command)))
@@ -617,19 +648,50 @@ static int edgetpu_ioctl_vii_command(struct edgetpu_client *client,
 
 	if (!client->etdev->mailbox_manager->use_ikv) {
 		ret = -EOPNOTSUPP;
-		goto out;
+		goto err_ret;
 	}
 
 	if (!lock_check_group_member(client)) {
 		ret = -EINVAL;
-		goto out;
+		goto err_ret;
 	}
 
-	ret = edgetpu_device_group_send_vii_command(client->group, &command.command);
+	if (command.in_fence_count) {
+		in_fence = get_merged_fence_from_user(command.in_fence_count,
+						      (int __user *)command.in_fence_array);
+		if (IS_ERR(in_fence)) {
+			ret = PTR_ERR(in_fence);
+			goto err_unlock;
+		}
+	}
+
+	if (command.out_fence_count) {
+		out_fence = get_merged_fence_from_user(command.out_fence_count,
+						       (int __user *)command.out_fence_array);
+		if (IS_ERR(out_fence)) {
+			ret = PTR_ERR(out_fence);
+			goto err_free_in_fence;
+		}
+	}
+
+	ret = edgetpu_device_group_send_vii_command(client->group, &command.command, in_fence,
+						    out_fence);
+	if (ret)
+		goto err_free_out_fence;
 
 	UNLOCK(client);
+	trace_edgetpu_vii_command_end(client, &command, ret);
+	return 0;
 
-out:
+err_free_out_fence:
+	if (out_fence)
+		dma_fence_put(out_fence);
+err_free_in_fence:
+	if (in_fence)
+		dma_fence_put(in_fence);
+err_unlock:
+	UNLOCK(client);
+err_ret:
 	trace_edgetpu_vii_command_end(client, &command, ret);
 	return ret;
 }

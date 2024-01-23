@@ -76,17 +76,25 @@ void gcip_fence_put(struct gcip_fence *fence);
 /*
  * Submits a signaler.
  *
- * This function is only meaningful when the fence type is GCIP_INTER_IP_FENCE.
+ * This function is only meaningful when the fence type is GCIP_INTER_IP_FENCE and can be called in
+ * the IRQ context.
  *
  * Returns 0 if the submission succeeds. Otherwise, returns a negative errno.
  */
 int gcip_fence_submit_signaler(struct gcip_fence *fence);
 
 /*
+ * Its functionality is the same with the `gcip_fence_submit_signaler` function, but the caller
+ * is holding the submitted_signalers lock. (See `gcip_fence_submitted_signalers_lock`)
+ */
+int gcip_fence_submit_signaler_locked(struct gcip_fence *fence);
+
+/*
  * Submits a waiter.
  * Note that the waiter submission will not be done when not all signalers have been submitted.
  *
- * This function is only meaningful when the fence type is GCIP_INTER_IP_FENCE.
+ * This function is only meaningful when the fence type is GCIP_INTER_IP_FENCE and can be called in
+ * the IRQ context.
  *
  * Returns the number of remaining signalers to be submitted. (i.e., the submission actually
  * has been succeeded when the function returns 0.) Otherwise, returns a negative errno if it fails
@@ -158,5 +166,24 @@ int gcip_fence_wait_signaler_submission(struct gcip_fence **fences, int num_fenc
  * error condition, or a negative error code if the fence has been completed in err.
  */
 int gcip_fence_get_status(struct gcip_fence *fence);
+
+/*
+ * Returns true if a waiter or a signaler is submittable to @fence.
+ *
+ * These functions are only meaningful when the fence type is GCIP_INTER_IP_FENCE. For other type of
+ * fences, they will always return true.
+ *
+ * The caller must hold the submitted_signalers lock. (See `gcip_fence_submitted_signalers_lock`)
+ */
+bool gcip_fence_is_waiter_submittable_locked(struct gcip_fence *fence);
+bool gcip_fence_is_signaler_submittable_locked(struct gcip_fence *fence);
+
+/*
+ * Holds/releases the lock protecting the number of submitted signalers of @fence.
+ *
+ * These functions are only meaningful when the fence type is GCIP_INTER_IP_FENCE.
+ */
+void gcip_fence_submitted_signalers_lock(struct gcip_fence *fence);
+void gcip_fence_submitted_signalers_unlock(struct gcip_fence *fence);
 
 #endif /* __GCIP_FENCE_H__ */

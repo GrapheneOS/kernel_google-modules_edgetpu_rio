@@ -217,6 +217,34 @@ static void edgetpu_ikv_after_fetch_resps(struct gcip_mailbox *mailbox, u32 num_
 		EDGETPU_MAILBOX_CMD_QUEUE_WRITE(ikv->mbx_hardware, doorbell_set, 1);
 }
 
+/*
+ * Helper function with shared logic needed for both completed and timed-out responses.
+ * Caller must hold resp->dest_queue_lock.
+ */
+static inline void signal_response_waiters_locked(struct edgetpu_ikv_response *resp, int error,
+						  bool notify_group)
+{
+	/*
+	 * Signal dma_fences before notifying the group of the response.
+	 * It is likely the user-space client that owns the group will need any drivers waiting on
+	 * the command to finish their work before user-space can make use of the results.
+	 */
+	if (resp->out_fence) {
+		gcip_signal_dma_fence_with_status(resp->out_fence, error, true);
+		dma_fence_put(resp->out_fence);
+	}
+
+	if (resp->group_to_notify) {
+		/*
+		 * TODO(b/320344691) Once `dest_queue_lock` is released before signaling any fence,
+		 * refunding the credit must be moved so its still protected by the lock.
+		 */
+		resp->group_to_notify->available_vii_credits++;
+		if (notify_group)
+			edgetpu_group_notify(resp->group_to_notify, EDGETPU_EVENT_RESPDATA);
+	}
+}
+
 static void edgetpu_ikv_handle_awaiter_arrived(struct gcip_mailbox *mailbox,
 					       struct gcip_mailbox_resp_awaiter *awaiter)
 {
@@ -243,10 +271,7 @@ static void edgetpu_ikv_handle_awaiter_arrived(struct gcip_mailbox *mailbox,
 	/* Set the response sequence number to the value expected by the client. */
 	resp->resp.seq = resp->client_seq;
 
-	if (resp->group_to_notify) {
-		resp->group_to_notify->available_vii_credits++;
-		edgetpu_group_notify(resp->group_to_notify, EDGETPU_EVENT_RESPDATA);
-	}
+	signal_response_waiters_locked(resp, 0, true);
 
 out:
 	spin_unlock_irqrestore(resp->dest_queue_lock, flags);
@@ -277,10 +302,7 @@ static void edgetpu_ikv_handle_awaiter_timedout(struct gcip_mailbox *mailbox,
 	list_del(&resp->list_entry);
 	gcip_mailbox_release_awaiter(awaiter);
 
-	if (resp->group_to_notify) {
-		resp->group_to_notify->available_vii_credits++;
-		edgetpu_group_notify(resp->group_to_notify, EDGETPU_EVENT_RESPDATA);
-	}
+	signal_response_waiters_locked(resp, -ETIMEDOUT, true);
 
 out:
 	spin_unlock_irqrestore(dest_queue_lock, flags);
@@ -300,12 +322,8 @@ static void edgetpu_ikv_flush_awaiter(struct gcip_mailbox *mailbox,
 		goto out;
 	resp->processed = true;
 
-	/*
-	 * If the IKV mailbox is being released, the device_groups should be getting released too.
-	 * Just to be thorough, refund the credit.
-	 */
-	if (resp->group_to_notify)
-		resp->group_to_notify->available_vii_credits++;
+	/* Signal any out-fence, but skip the device group since it's being flushed. */
+	signal_response_waiters_locked(resp, -ECANCELED, false);
 
 	gcip_mailbox_release_awaiter(awaiter);
 
