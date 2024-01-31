@@ -8,11 +8,13 @@
 #include <linux/bitops.h>
 #include <linux/device.h>
 #include <linux/dma-fence.h>
+#include <linux/dma-fence-unwrap.h>
 #include <linux/err.h>
 #include <linux/file.h>
 #include <linux/ktime.h>
 #include <linux/list.h>
 #include <linux/seq_file.h>
+#include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>
 #include <linux/sync_file.h>
@@ -26,24 +28,33 @@ int gcip_signal_dma_fence_with_status(struct dma_fence *fence, int error, bool i
 {
 	unsigned long flags;
 	int ret;
+	struct dma_fence *cur;
+	struct dma_fence_unwrap iter;
 
 	if (error > 0)
 		error = -error;
 	if (unlikely(error < -MAX_ERRNO))
 		return -EINVAL;
 
-	spin_lock_irqsave(fence->lock, flags);
-	/* don't signal fence twice */
-	if (unlikely(test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags))) {
-		ret = ignore_signaled ? 0 : -EBUSY;
-		goto out_unlock;
-	}
-	if (error)
-		dma_fence_set_error(fence, error);
-	ret = dma_fence_signal_locked(fence);
+	/* If not ignoring signaled, only return busy if ALL fences are already signaled. */
+	ret = ignore_signaled ? 0 : -EBUSY;
 
-out_unlock:
-	spin_unlock_irqrestore(fence->lock, flags);
+	/*
+	 * If @fence is a dma_fence_array, iterate over each fence in the array and signal it.
+	 * This loop will be executed exactly once for cur == @fence, if @fence is not an array.
+	 */
+	dma_fence_unwrap_for_each(cur, &iter, fence) {
+		spin_lock_irqsave(cur->lock, flags);
+		/* don't signal fence twice */
+		if (unlikely(test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &cur->flags)))
+			goto cont_unlock;
+		if (error)
+			dma_fence_set_error(cur, error);
+		ret = dma_fence_signal_locked(cur);
+cont_unlock:
+		spin_unlock_irqrestore(cur->lock, flags);
+	}
+
 	return ret;
 }
 
@@ -194,4 +205,74 @@ void gcip_dma_fence_show(struct gcip_dma_fence *gfence, struct seq_file *s)
 		seq_printf(s, " err=%d", fence->error);
 
 	spin_unlock_irq(&gfence->lock);
+}
+
+struct dma_fence *gcip_dma_fence_merge_fds(int num_fences, int *fence_fds)
+{
+	struct dma_fence **fences;
+	struct dma_fence *tmp;
+	struct dma_fence *result;
+	int i = 0;
+
+	if (!num_fences)
+		return ERR_PTR(-EINVAL);
+
+	fences = kcalloc(num_fences, sizeof(*fences), GFP_KERNEL);
+	if (!fences)
+		return ERR_PTR(-ENOMEM);
+
+	for (i = 0; i < num_fences; i++) {
+		fences[i] = sync_file_get_fence(fence_fds[i]);
+		if (!fences[i]) {
+			result = ERR_PTR(-ENOENT);
+			goto out;
+		}
+	}
+
+	result = dma_fence_unwrap_merge(fences[0]);
+	if (!result) {
+		result = ERR_PTR(-ENOMEM);
+		goto out;
+	}
+	for (i = 1; i < num_fences; i++) {
+		tmp = result;
+		result = dma_fence_unwrap_merge(tmp, fences[i]);
+		dma_fence_put(tmp);
+		if (!result) {
+			result = ERR_PTR(-ENOMEM);
+			goto out;
+		}
+	}
+
+out:
+	for (i = 0; i < num_fences; i++)
+		dma_fence_put(fences[i]);
+	kfree(fences);
+	return result;
+}
+
+void gcip_dma_fence_array_disable_signaling(struct dma_fence *fence)
+{
+	struct dma_fence_array *array = container_of(fence, struct dma_fence_array, base);
+	struct dma_fence_array_cb *cb = (void *)(&array[1]);
+	unsigned long flags;
+	int i;
+
+	if (!dma_fence_is_array(fence))
+		return;
+
+	spin_lock_irqsave(fence->lock, flags);
+
+	if (!test_bit(DMA_FENCE_FLAG_ENABLE_SIGNAL_BIT, &fence->flags))
+		goto out;
+
+	for (i = 0; i < array->num_fences; ++i) {
+		if (dma_fence_remove_callback(array->fences[i], &cb[i].cb))
+			dma_fence_put(&array->base);
+	}
+
+	clear_bit(DMA_FENCE_FLAG_ENABLE_SIGNAL_BIT, &fence->flags);
+
+out:
+	spin_unlock_irqrestore(fence->lock, flags);
 }

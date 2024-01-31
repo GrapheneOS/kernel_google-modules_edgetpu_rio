@@ -22,6 +22,10 @@
 #include "edgetpu-mmu.h"
 #include "edgetpu.h"
 
+/* Reserved VCID that uses the extra partition. */
+#define EDGETPU_VCID_EXTRA_PARTITION 0
+#define EDGETPU_VCID_EXTRA_PARTITION_HIGH 1
+
 /* entry of edgetpu_device_group#clients */
 struct edgetpu_list_group_client {
 	struct list_head list;
@@ -125,6 +129,13 @@ struct edgetpu_device_group {
 	struct edgetpu_events events;
 	/* Mailbox attributes used to create this group */
 	struct edgetpu_mailbox_attr mbox_attr;
+
+	/* List of task_structs waiting on a dma_fence to send a command. */
+	struct list_head pending_cmd_tasks;
+	/* Indicates to threads not to modify pending_cmd_tasks anymore. */
+	bool is_clearing_pending_commands;
+	/* Protects `pending_cmd_tasks` and `is_clearing_pending_commands`. */
+	spinlock_t pending_cmd_tasks_lock;
 };
 
 /*
@@ -308,10 +319,14 @@ void edgetpu_group_mappings_show(struct edgetpu_device_group *group,
 /*
  * Sends a VII command on behalf of `group`.
  *
+ * If @out_fence is not NULL, then the fence will be signaled when the response for this command
+ * arrives. If the command is canceled or times out, then @out_fence will be errored.
+ *
  * Returns zero on success or a negative errno on error.
  */
 int edgetpu_device_group_send_vii_command(struct edgetpu_device_group *group,
-					  struct edgetpu_vii_command *cmd);
+					  struct edgetpu_vii_command *cmd,
+					  struct dma_fence *in_fence, struct dma_fence *out_fence);
 
 /*
  * Pops the oldest received VII response sent to `group`, and copies it to `resp`
@@ -419,5 +434,29 @@ edgetpu_group_finalized_and_attached(const struct edgetpu_device_group *group)
 	return edgetpu_device_group_is_finalized(group) &&
 	       !edgetpu_group_mailbox_detached_locked(group);
 }
+
+/*
+ * Add @task to @group's list of tasks that are blocking on a fence, running on @group's behalf.
+ * @group can then cancel @task if @group shuts down before @task completes.
+ *
+ * Any task added this way must call `edgetpu_device_group_untrack_fence_task()` after any
+ * potentially blocking work has completed but before the thread exits.
+ *
+ * If this function returns an error, the task must not be run.
+ *
+ * Returns 0 on success or a negative errno on error.
+ */
+int edgetpu_device_group_track_fence_task(struct edgetpu_device_group *group,
+					  struct task_struct *task);
+
+/*
+ * Remove @task, previously added with `edgetpu_device_group_track_fence_task()`, from @group's
+ * list of running tasks, so @group does not try to stop @task when @group releases.
+ *
+ * This function must be called inside the task itself, once it has completed all blocking work
+ * and no longer needs to reference any of @group's state.
+ */
+void edgetpu_device_group_untrack_fence_task(struct edgetpu_device_group *group,
+					     struct task_struct *task);
 
 #endif /* __EDGETPU_DEVICE_GROUP_H__ */

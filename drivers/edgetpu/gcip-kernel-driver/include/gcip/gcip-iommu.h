@@ -512,4 +512,20 @@ static inline void gcip_iommu_mapping_set_data(struct gcip_iommu_mapping *mappin
 	mapping->data = data;
 }
 
+/**
+ * gcip_iommu_map() - Maps the desired mappings to the domain.
+ * @domain: The GCIP domain to be mapped to.
+ * @iova: The device address.
+ * @paddr: The target address to be mapped to.
+ * @size: Map size in bytes.
+ * @gcip_map_flags: Flags indicating mapping attributes, which can be encoded with
+ *                  gcip_iommu_encode_gcip_map_flags() or `GCIP_MAP_FLAGS_DMA_*_TO_FLAGS` macros.
+ *
+ * Return: 0 on success, otherwise a negative errno.
+ */
+int gcip_iommu_map(struct gcip_iommu_domain *domain, dma_addr_t iova, phys_addr_t paddr,
+		   size_t size, u64 gcip_map_flags);
+/* Reverts gcip_iommu_map(). */
+void gcip_iommu_unmap(struct gcip_iommu_domain *domain, dma_addr_t iova, size_t size);
+
 #endif /* __GCIP_IOMMU_H__ */

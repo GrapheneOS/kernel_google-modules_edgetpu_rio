@@ -159,8 +159,19 @@ void gcip_fence_put(struct gcip_fence *fence)
 
 int gcip_fence_submit_signaler(struct gcip_fence *fence)
 {
+	int ret;
+
+	gcip_fence_submitted_signalers_lock(fence);
+	ret = gcip_fence_submit_signaler_locked(fence);
+	gcip_fence_submitted_signalers_unlock(fence);
+
+	return ret;
+}
+
+int gcip_fence_submit_signaler_locked(struct gcip_fence *fence)
+{
 	if (fence->type == GCIP_INTER_IP_FENCE)
-		return iif_fence_submit_signaler(fence->fence.iif);
+		return iif_fence_submit_signaler_locked(fence->fence.iif);
 	return -EOPNOTSUPP;
 }
 
@@ -274,4 +285,30 @@ int gcip_fence_get_status(struct gcip_fence *fence)
 	}
 
 	return -EOPNOTSUPP;
+}
+
+bool gcip_fence_is_waiter_submittable_locked(struct gcip_fence *fence)
+{
+	if (fence->type == GCIP_INTER_IP_FENCE)
+		return iif_fence_is_waiter_submittable_locked(fence->fence.iif);
+	return true;
+}
+
+bool gcip_fence_is_signaler_submittable_locked(struct gcip_fence *fence)
+{
+	if (fence->type == GCIP_INTER_IP_FENCE)
+		return iif_fence_is_signaler_submittable_locked(fence->fence.iif);
+	return true;
+}
+
+void gcip_fence_submitted_signalers_lock(struct gcip_fence *fence)
+{
+	if (fence->type == GCIP_INTER_IP_FENCE)
+		iif_fence_submitted_signalers_lock(fence->fence.iif);
+}
+
+void gcip_fence_submitted_signalers_unlock(struct gcip_fence *fence)
+{
+	if (fence->type == GCIP_INTER_IP_FENCE)
+		iif_fence_submitted_signalers_unlock(fence->fence.iif);
 }

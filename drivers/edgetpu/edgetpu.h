@@ -184,6 +184,7 @@ struct edgetpu_mailbox_attr {
 	/* Type of memory partitions to be used for this group, exact meaning is chip-dependent. */
 	__u32 partition_type    : 1;
 	__u32 client_priv : 1; /* client privilege level */
+	__u32 partition_type_high : 1; /* Another bit for partition type. */
 };
 
 /*

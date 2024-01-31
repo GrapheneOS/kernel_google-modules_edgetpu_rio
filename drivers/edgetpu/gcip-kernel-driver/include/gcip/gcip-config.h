@@ -33,4 +33,6 @@
 	(LINUX_VERSION_CODE < KERNEL_VERSION(5, 16, 0) &&                                          \
 	 (IS_ENABLED(CONFIG_GCIP_TEST) || GCIP_IS_GKI))
 
+#define GCIP_IOMMU_MAP_HAS_GFP (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0))
+
 #endif /* __GCIP_CONFIG_H__ */

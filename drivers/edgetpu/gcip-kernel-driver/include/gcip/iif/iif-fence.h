@@ -71,6 +71,8 @@ struct iif_fence {
 	 * @all_signaler_submitted_error.
 	 */
 	spinlock_t submitted_signalers_lock;
+	/* The interrupt state before holding @submitted_signalers_lock. */
+	unsigned long submitted_signalers_lock_flags;
 	/* The number of signaled signalers. */
 	uint16_t signaled_signalers;
 	/* Protects @signaled_signalers, @poll_cb_list and @signal_error. */
@@ -174,14 +176,24 @@ void iif_fence_put(struct iif_fence *fence);
 /*
  * Submits a signaler. @fence->submitted_signalers will be incremented by 1.
  *
+ * This function can be called in the IRQ context.
+ *
  * Returns 0 if the submission succeeds. Otherwise, returns a negative errno.
  */
 int iif_fence_submit_signaler(struct iif_fence *fence);
 
 /*
+ * Its functionality is the same with the `iif_fence_submit_signaler` function, but the caller
+ * is holding @fence->submitted_signalers_lock.
+ */
+int iif_fence_submit_signaler_locked(struct iif_fence *fence);
+
+/*
  * Submits a waiter of @ip IP. @fence->outstanding_waiters will be incremented by 1.
  * Note that the waiter submission will not be done when not all signalers have been submitted.
  * (i.e., @fence->submitted_signalers < @fence->total_signalers)
+ *
+ * This function can be called in the IRQ context.
  *
  * Returns the number of remaining signalers to be submitted (i.e., returning 0 means the submission
  * actually succeeded). Otherwise, returns a negative errno if it fails with other reasons.
@@ -269,5 +281,26 @@ int iif_fence_unsubmitted_signalers(struct iif_fence *fence);
 int iif_fence_submitted_signalers(struct iif_fence *fence);
 int iif_fence_signaled_signalers(struct iif_fence *fence);
 int iif_fence_outstanding_waiters(struct iif_fence *fence);
+
+/*
+ * Returns true if a waiter or a signaler is submittable to @fence.
+ *
+ * The caller must hold @fence->submitted_signalers_lock.
+ */
+bool iif_fence_is_waiter_submittable_locked(struct iif_fence *fence);
+bool iif_fence_is_signaler_submittable_locked(struct iif_fence *fence);
+
+/* Holds @fence->submitted_signalers_lock. */
+static inline void iif_fence_submitted_signalers_lock(struct iif_fence *fence)
+{
+	spin_lock_irqsave(&fence->submitted_signalers_lock, fence->submitted_signalers_lock_flags);
+}
+
+/* Releases @fence->submitted_signalers_lock. */
+static inline void iif_fence_submitted_signalers_unlock(struct iif_fence *fence)
+{
+	spin_unlock_irqrestore(&fence->submitted_signalers_lock,
+			       fence->submitted_signalers_lock_flags);
+}
 
 #endif /* __IIF_IIF_FENCE_H__ */

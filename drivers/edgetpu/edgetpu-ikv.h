@@ -59,6 +59,8 @@ struct edgetpu_ikv_response {
 	 * A group to notify with the EDGETPU_EVENT_RESPDATA event when this response arrives.
 	 */
 	struct edgetpu_device_group *group_to_notify;
+	/* DMA fence to signal on timeout or completion. */
+	struct dma_fence *out_fence;
 };
 
 struct edgetpu_ikv {
@@ -126,6 +128,12 @@ void edgetpu_ikv_release(struct edgetpu_dev *etdev, struct edgetpu_ikv *etikv);
  * @queue_lock will be acquired then released during this call, and will be acquired asynchronously
  * when the response arrives or times-out, so that it can be moved between queues.
  *
+ * If @in_fence is non-NULL and not yet signaled, a new thread will be created to wait on @in_fence
+ * before sending the command.
+ *
+ * @out_fence will be signaled when this command's corresponding response arrives, or errored if the
+ * command is otherwise errored/canceled.
+ *
  * Before freeing either queue, their owner must first:
  * 1) Set the `processed` flag on all responses in the @pending_queue
  * 2) Release @queue_lock (so the next step can proceed)
@@ -136,6 +144,7 @@ void edgetpu_ikv_release(struct edgetpu_dev *etdev, struct edgetpu_ikv *etikv);
  */
 int edgetpu_ikv_send_cmd(struct edgetpu_ikv *etikv, struct edgetpu_vii_command *cmd,
 			 struct list_head *pending_queue, struct list_head *ready_queue,
-			 spinlock_t *queue_lock, struct edgetpu_device_group *group_to_notify);
+			 spinlock_t *queue_lock, struct edgetpu_device_group *group_to_notify,
+			 struct dma_fence *in_fence, struct dma_fence *out_fence);
 
 #endif /* __EDGETPU_IKV_H__*/

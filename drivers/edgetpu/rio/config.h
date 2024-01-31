@@ -20,8 +20,6 @@
 #define EDGETPU_NUM_PASIDS 16
 /* Max number of virtual context IDs that can be allocated for one device. */
 #define EDGETPU_NUM_VCIDS 16
-/* Reserved VCID that uses the extra partition. */
-#define EDGETPU_VCID_EXTRA_PARTITION 0
 
 /* Pre-allocate 1 IOMMU domain per VCID */
 #define EDGETPU_NUM_PREALLOCATED_DOMAINS EDGETPU_NUM_VCIDS

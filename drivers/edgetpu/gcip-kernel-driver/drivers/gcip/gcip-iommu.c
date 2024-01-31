@@ -732,7 +732,7 @@ struct gcip_iommu_domain *gcip_iommu_domain_pool_alloc_domain(struct gcip_iommu_
 
 	gdomain->dev = pool->dev;
 	gdomain->domain_pool = pool;
-	gdomain->pasid = INVALID_IOASID;
+	gdomain->pasid = IOMMU_PASID_INVALID;
 	gdomain->domain = gcip_domain_pool_alloc(&pool->domain_pool);
 	if (IS_ERR_OR_NULL(gdomain->domain)) {
 		ret = -ENOMEM;
@@ -785,7 +785,7 @@ void gcip_iommu_domain_pool_set_pasid_range(struct gcip_iommu_domain_pool *pool,
 static int _gcip_iommu_domain_pool_attach_domain(struct gcip_iommu_domain_pool *pool,
 						 struct gcip_iommu_domain *domain)
 {
-	int ret = -EOPNOTSUPP, pasid = INVALID_IOASID;
+	int ret = -EOPNOTSUPP, pasid = IOMMU_PASID_INVALID;
 
 #if GCIP_HAS_IOMMU_PASID
 	pasid = ida_alloc_range(&pool->pasid_pool, pool->min_pasid, pool->max_pasid, GFP_KERNEL);
@@ -821,7 +821,7 @@ static int _gcip_iommu_domain_pool_attach_domain(struct gcip_iommu_domain_pool *
 int gcip_iommu_domain_pool_attach_domain(struct gcip_iommu_domain_pool *pool,
 					 struct gcip_iommu_domain *domain)
 {
-	if (domain->pasid != INVALID_IOASID)
+	if (domain->pasid != IOMMU_PASID_INVALID)
 		/* Already attached. */
 		return domain->pasid;
 
@@ -831,7 +831,7 @@ int gcip_iommu_domain_pool_attach_domain(struct gcip_iommu_domain_pool *pool,
 void gcip_iommu_domain_pool_detach_domain(struct gcip_iommu_domain_pool *pool,
 					  struct gcip_iommu_domain *domain)
 {
-	if (domain->pasid == INVALID_IOASID)
+	if (domain->pasid == IOMMU_PASID_INVALID)
 		return;
 #if GCIP_HAS_IOMMU_PASID
 	iommu_detach_device_pasid(domain->domain, pool->dev, domain->pasid);
@@ -840,7 +840,7 @@ void gcip_iommu_domain_pool_detach_domain(struct gcip_iommu_domain_pool *pool,
 	if (pool->aux_enabled)
 		iommu_aux_detach_device(domain->domain, pool->dev);
 #endif
-	domain->pasid = INVALID_IOASID;
+	domain->pasid = IOMMU_PASID_INVALID;
 }
 
 struct gcip_iommu_domain *gcip_iommu_get_domain_for_dev(struct device *dev)
@@ -1363,4 +1363,29 @@ dma_addr_t gcip_iommu_alloc_iova(struct gcip_iommu_domain *domain, size_t size, 
 void gcip_iommu_free_iova(struct gcip_iommu_domain *domain, dma_addr_t iova, size_t size)
 {
 	domain->ops->free_iova_space(domain, iova, gcip_iommu_domain_align(domain, size));
+}
+
+int gcip_iommu_map(struct gcip_iommu_domain *domain, dma_addr_t iova, phys_addr_t paddr,
+		   size_t size, u64 gcip_map_flags)
+{
+	enum dma_data_direction dir = GCIP_MAP_FLAGS_GET_DMA_DIRECTION(gcip_map_flags);
+	bool coherent = GCIP_MAP_FLAGS_GET_DMA_COHERENT(gcip_map_flags);
+	unsigned long attrs = GCIP_MAP_FLAGS_GET_DMA_ATTR(gcip_map_flags);
+	int prot = dma_info_to_prot(dir, coherent, attrs);
+
+#if GCIP_IOMMU_MAP_HAS_GFP
+	return iommu_map(domain->domain, iova, paddr, size, prot, GFP_KERNEL);
+#else
+	return iommu_map(domain->domain, iova, paddr, size, prot);
+#endif /* GCIP_IOMMU_MAP_HAS_GFP */
+}
+
+/* Reverts gcip_iommu_map(). */
+void gcip_iommu_unmap(struct gcip_iommu_domain *domain, dma_addr_t iova, size_t size)
+{
+	size_t unmapped = iommu_unmap(domain->domain, iova, size);
+
+	if (unlikely(unmapped != size))
+		dev_warn(domain->dev, "Unmapping IOVA %pad, size (%#zx) only unmapped %#zx", &iova,
+			 size, unmapped);
 }
