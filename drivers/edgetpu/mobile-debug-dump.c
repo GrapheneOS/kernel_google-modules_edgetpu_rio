@@ -161,9 +161,6 @@ static void sscd_release(struct device *dev)
 	pr_debug(DRIVER_NAME " release\n");
 }
 
-static struct sscd_platform_data sscd_pdata;
-static struct platform_device sscd_dev;
-
 static int mobile_sscd_collect_mappings_info(struct edgetpu_mapping_root *root, u32 workload_id,
 					     u8 type, struct sscd_segments_context *ctx)
 {
@@ -477,7 +474,7 @@ static int mobile_sscd_generate_coredump(void *p_etdev, void *p_dump_setup)
 		struct sscd_segment seg = {
 			.addr = dump_seg,
 			.size = sizeof(struct edgetpu_dump_segment) + dump_seg->size,
-			.paddr = (void *)(etdev->debug_dump_mem.tpu_addr + offset),
+			.paddr = (void *)(etdev->debug_dump_mem.dma_addr + offset),
 			.vaddr = (void *)(etdev->debug_dump_mem.vaddr + offset),
 		};
 
@@ -621,29 +618,37 @@ err_pm_put:
 
 int edgetpu_debug_dump_init(struct edgetpu_dev *etdev)
 {
-	size_t size;
-	int ret;
 	struct edgetpu_debug_dump_setup *dump_setup;
-	struct edgetpu_mobile_platform_dev *pdev;
+	struct edgetpu_mobile_platform_dev *pdev = to_mobile_dev(etdev);
+	struct platform_device *sscd_dev;
+	struct sscd_platform_data *sscd_pdata;
+	size_t size = EDGETPU_DEBUG_DUMP_MEM_SIZE;
+	int ret;
 
-	pdev = to_mobile_dev(etdev);
+	sscd_pdata = devm_kzalloc(etdev->dev, sizeof(*sscd_pdata), GFP_KERNEL);
+	if (!sscd_pdata)
+		return -ENOMEM;
 
-	size = EDGETPU_DEBUG_DUMP_MEM_SIZE;
+	sscd_dev = devm_kzalloc(etdev->dev, sizeof(*sscd_dev), GFP_KERNEL);
+	if (!sscd_dev) {
+		ret = -ENOMEM;
+		goto out_free_pdata;
+	}
 
-	sscd_dev = (struct platform_device) {
+	*sscd_dev = (struct platform_device) {
 		.name = DRIVER_NAME,
 		.driver_override = SSCD_NAME,
 		.id = PLATFORM_DEVID_NONE,
 		.dev = {
-			.platform_data = &sscd_pdata,
+			.platform_data = sscd_pdata,
 			.release = sscd_release,
 		},
 	};
 	/* Register SSCD platform device */
-	ret = platform_device_register(&sscd_dev);
+	ret = platform_device_register(sscd_dev);
 	if (ret) {
 		etdev_err(etdev, "SSCD platform device registration failed: %d", ret);
-		return ret;
+		goto out_free_sscd_dev;
 	}
 	/*
 	 * Allocate a buffer for various dump segments
@@ -663,8 +668,10 @@ int edgetpu_debug_dump_init(struct edgetpu_dev *etdev)
 	 */
 	etdev->debug_dump_handlers =
 		kcalloc(DUMP_REASON_NUM, sizeof(*etdev->debug_dump_handlers), GFP_KERNEL);
-	if (!etdev->debug_dump_handlers)
-		return -ENOMEM;
+	if (!etdev->debug_dump_handlers) {
+		ret = -ENOMEM;
+		goto out_unregister_platform;
+	}
 	etdev->debug_dump_handlers[DUMP_REASON_REQ_BY_USER] = mobile_sscd_generate_coredump;
 	etdev->debug_dump_handlers[DUMP_REASON_RECOVERABLE_FAULT] = mobile_sscd_generate_coredump;
 	etdev->debug_dump_handlers[DUMP_REASON_FW_CHECKPOINT] = mobile_sscd_generate_coredump;
@@ -672,12 +679,20 @@ int edgetpu_debug_dump_init(struct edgetpu_dev *etdev)
 	etdev->debug_dump_handlers[DUMP_REASON_NON_FATAL_CRASH] = mobile_sscd_generate_dump;
 	etdev->debug_dump_handlers[DUMP_REASON_SW_WATCHDOG_TIMEOUT] = mobile_sscd_generate_dump;
 
-	pdev->sscd_info.pdata = &sscd_pdata;
-	pdev->sscd_info.dev = &sscd_dev;
+	pdev->sscd_info.pdata = sscd_pdata;
+	pdev->sscd_info.dev = sscd_dev;
 	edgetpu_setup_debug_dump_fs(etdev);
+
+	INIT_WORK(&etdev->debug_dump_work, edgetpu_debug_dump_work);
+
 	return ret;
+
 out_unregister_platform:
-	platform_device_unregister(&sscd_dev);
+	platform_device_unregister(sscd_dev);
+out_free_sscd_dev:
+	devm_kfree(etdev->dev, sscd_dev);
+out_free_pdata:
+	devm_kfree(etdev->dev, sscd_pdata);
 	return ret;
 }
 
@@ -687,10 +702,13 @@ void edgetpu_debug_dump_exit(struct edgetpu_dev *etdev)
 		etdev_dbg(etdev, "Debug dump not allocated");
 		return;
 	}
+
+	cancel_work_sync(&etdev->debug_dump_work);
+
 	/*
 	 * Free the memory assigned for debug dump
 	 */
 	edgetpu_free_coherent(etdev, &etdev->debug_dump_mem);
 	kfree(etdev->debug_dump_handlers);
-	platform_device_unregister(&sscd_dev);
+	platform_device_unregister(to_mobile_dev(etdev)->sscd_info.dev);
 }

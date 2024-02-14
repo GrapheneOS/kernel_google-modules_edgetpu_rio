@@ -18,16 +18,6 @@
 /* size of queue for in-kernel VII  mailbox */
 #define QUEUE_SIZE CIRC_QUEUE_MAX_SIZE(CIRC_QUEUE_WRAP_BIT)
 
-#ifdef EDGETPU_IKV_TIMEOUT
-#define IKV_TIMEOUT	EDGETPU_IKV_TIMEOUT
-#elif IS_ENABLED(CONFIG_EDGETPU_TEST)
-/* fake-firmware could respond in a short time */
-#define IKV_TIMEOUT	(200)
-#else
-/* Wait for up to 2 minutes for FW to respond. */
-#define IKV_TIMEOUT	(120000)
-#endif
-
 static void edgetpu_ikv_handle_irq(struct edgetpu_mailbox *mailbox)
 {
 	struct edgetpu_ikv *ikv = mailbox->internal.etikv;
@@ -68,7 +58,7 @@ static int edgetpu_ikv_alloc_queue(struct edgetpu_ikv *etikv, enum gcip_mailbox_
 	if (ret)
 		return ret;
 
-	ret = edgetpu_mailbox_set_queue(etikv->mbx_hardware, type, mem->tpu_addr, QUEUE_SIZE);
+	ret = edgetpu_mailbox_set_queue(etikv->mbx_hardware, type, mem->dma_addr, QUEUE_SIZE);
 	if (ret) {
 		etdev_err(etikv->etdev, "failed to set mailbox queue: %d", ret);
 		edgetpu_iremap_free(etdev, mem);
@@ -176,12 +166,12 @@ int edgetpu_ikv_reinit(struct edgetpu_ikv *etikv)
 		return 0;
 
 	ret = edgetpu_mailbox_set_queue(mbx_hardware, GCIP_MAILBOX_CMD_QUEUE,
-					cmd_queue_mem->tpu_addr, QUEUE_SIZE);
+					cmd_queue_mem->dma_addr, QUEUE_SIZE);
 	if (ret)
 		return ret;
 
 	ret = edgetpu_mailbox_set_queue(mbx_hardware, GCIP_MAILBOX_RESP_QUEUE,
-					resp_queue_mem->tpu_addr, QUEUE_SIZE);
+					resp_queue_mem->dma_addr, QUEUE_SIZE);
 	if (ret)
 		return ret;
 
@@ -224,16 +214,17 @@ void edgetpu_ikv_release(struct edgetpu_dev *etdev, struct edgetpu_ikv *etikv)
 
 struct send_cmd_args {
 	struct edgetpu_ikv *etikv;
-	struct edgetpu_vii_command *cmd;
 	struct edgetpu_ikv_response *ikv_resp;
 	struct list_head *pending_queue;
 	spinlock_t *pending_queue_lock;
 	struct dma_fence *fence;
+	struct gcip_mailbox_resp_awaiter *err_resp_awaiter;
+	struct edgetpu_vii_command cmd;
 };
 
 static int do_send_cmd(struct send_cmd_args *args) {
 	struct edgetpu_ikv *etikv = args->etikv;
-	struct edgetpu_vii_command *cmd = args->cmd;
+	struct edgetpu_vii_command *cmd = &args->cmd;
 	struct edgetpu_ikv_response *ikv_resp = args->ikv_resp;
 	struct list_head *pending_queue = args->pending_queue;
 	spinlock_t *pending_queue_lock = args->pending_queue_lock;
@@ -261,47 +252,96 @@ err:
 	return ret;
 }
 
+static inline void build_awaiter_for_error_resp(struct edgetpu_ikv *etikv,
+						struct gcip_mailbox_resp_awaiter *awaiter,
+						struct edgetpu_ikv_response *ikv_resp)
+{
+	awaiter->async_resp.resp = &ikv_resp->resp;
+	awaiter->mailbox = etikv->mbx_protocol;
+	awaiter->data = ikv_resp;
+	awaiter->release_data = etikv->mbx_protocol->ops->release_awaiter_data;
+	refcount_set(&awaiter->refs, 1);
+	ikv_resp->awaiter = awaiter;
+}
+
+/* TODO(b/274528886) Finalize timeout value. Set to 10 seconds for now. */
+#define VII_IN_FENCE_TIMEOUT_MS 10000
+
 static int send_cmd_thread_fn(void *data)
 {
 	struct send_cmd_args *args = (struct send_cmd_args *)data;
+	/* Save a pointer to the group so it can untrack this task, even if ikv_resp is freed. */
+	struct edgetpu_device_group *group_to_notify = args->ikv_resp->group_to_notify;
 	int ret, fence_status;
-	unsigned long flags;
-	struct edgetpu_device_group *group;
+	u16 resp_code;
+	u64 resp_data;
 
-	/* TODO(b/274528886) Finalize timeout value. Set to 10 seconds for now. */
-	ret = dma_fence_wait_timeout(args->fence, true, msecs_to_jiffies(10000));
+	ret = dma_fence_wait_timeout(args->fence, true, msecs_to_jiffies(VII_IN_FENCE_TIMEOUT_MS));
 	fence_status = dma_fence_get_status(args->fence);
 	dma_fence_put(args->fence);
+
+	/* If the wait was interrupted to kill the thread, then the command is abandoned. */
 	if (kthread_should_stop()) {
 		/* The command will never be sent at this point so its response must be released. */
 		kfree(args->ikv_resp);
-		/* Task is being canceled by group. No need to tell the group to untrack. */
 		goto out_free_args;
-	} else if (!ret || fence_status < 0) {
+	}
+
+	/* If the wait ended due to a timeout or fence error, enqueue an error response. */
+	if (!ret || fence_status < 0) {
 		etdev_err(
 			args->etikv->etdev,
 			"Waiting for client_id=%u's command in-fence failed (ret=%d fence_status=%d)",
-			args->cmd->client_id, ret, fence_status);
-		/* The command is dead at this point so its response must be released. */
-		group = args->ikv_resp->group_to_notify;
-		kfree(args->ikv_resp);
-		spin_lock_irqsave(&group->ikv_resp_lock, flags);
-		group->available_vii_credits++;
-		spin_unlock_irqrestore(&group->ikv_resp_lock, flags);
-		goto out_untrack;
+			args->cmd.client_id, ret, fence_status);
+		if (!ret) {
+			resp_code = VII_RESPONSE_CODE_KERNEL_FENCE_TIMEOUT;
+			resp_data = VII_IN_FENCE_TIMEOUT_MS;
+			fence_status = -ETIMEDOUT;
+		} else {
+			resp_code = VII_RESPONSE_CODE_KERNEL_FENCE_ERROR;
+			resp_data = (u64)fence_status;
+			/* Do not override fence_status, let the error propagate. */
+		}
+		goto err_send_error_resp;
 	}
 
 	ret = do_send_cmd(args);
-	if (ret)
+	if (ret) {
 		etdev_err(args->etikv->etdev,
 			  "Failed to send command in fence thread for client_id=%u (ret=%d)",
-			  args->cmd->client_id, ret);
+			  args->cmd.client_id, ret);
+		resp_code = VII_RESPONSE_CODE_KERNEL_ENQUEUE_FAILED;
+		resp_data = (u64)ret;
+		fence_status = -ECANCELED;
+		goto err_send_error_resp;
+	}
+
+	/*
+	 * The command has been enqueued and has a proper response awaiter now. Free the
+	 * pre-allocated awaiter now that it's certain it won't be used.
+	 */
+	kfree(args->err_resp_awaiter);
+	goto out_untrack;
+
+err_send_error_resp:
+	/*
+	 * Now that the pre-allocated awaiter is being used for the error response, it will be
+	 * freed when the response itself is released.
+	 */
+	build_awaiter_for_error_resp(args->etikv, args->err_resp_awaiter, args->ikv_resp);
+	edgetpu_ikv_process_response(args->ikv_resp, &resp_code, &resp_data, fence_status);
 
 out_untrack:
-	edgetpu_device_group_untrack_fence_task(args->ikv_resp->group_to_notify, current);
+	edgetpu_device_group_untrack_fence_task(group_to_notify, current);
 
 out_free_args:
 	kfree(args);
+	/*
+	 * This is the return status of the thread, and indicates that the thread is exiting
+	 * cleanly, not that there were no errors encountered.
+	 *
+	 * Any errors have been communicated via a VII error response.
+	 */
 	return 0;
 }
 
@@ -342,11 +382,11 @@ int edgetpu_ikv_send_cmd(struct edgetpu_ikv *etikv, struct edgetpu_vii_command *
 	resp->out_fence = out_fence;
 
 	args->etikv = etikv;
-	args->cmd = cmd;
 	args->ikv_resp = resp;
 	args->pending_queue = pending_queue;
 	args->pending_queue_lock = queue_lock;
 	args->fence = in_fence;
+	memcpy(&args->cmd, cmd, sizeof(*cmd));
 
 	/* Send the command immediately if there's no fence to wait on. */
 	if (!in_fence || dma_fence_is_signaled(in_fence)) {
@@ -357,12 +397,27 @@ int edgetpu_ikv_send_cmd(struct edgetpu_ikv *etikv, struct edgetpu_vii_command *
 		return ret;
 	}
 
+	/*
+	 * Pre-allocate a gcip_mailbox_resp_awaiter to be used for an error response if the command
+	 * fails to send for any reason.
+	 *
+	 * If this function returns success, then a response must always eventually be placed in
+	 * @ready_queue. If the awaiter is not allocated here, then an allocation failure in
+	 * `send_cmd_thread_fn()` could cause the command to be dropped with no feedback for the
+	 * client.
+	 */
+	args->err_resp_awaiter = kzalloc(sizeof(*args->err_resp_awaiter), GFP_KERNEL);
+	if (!args->err_resp_awaiter) {
+		ret = -ENOMEM;
+		goto err_free_args;
+	}
+
 	wait_task = kthread_create(send_cmd_thread_fn, args,
 				   "edgetpu_ikv_send_cmd_client%u_seq%llu", cmd->client_id,
 				   cmd->seq);
 	if (IS_ERR(wait_task)) {
 		ret = PTR_ERR(wait_task);
-		goto err_free_args;
+		goto err_free_awaiter;
 	}
 
 	ret = edgetpu_device_group_track_fence_task(args->ikv_resp->group_to_notify, wait_task);
@@ -375,6 +430,8 @@ int edgetpu_ikv_send_cmd(struct edgetpu_ikv *etikv, struct edgetpu_vii_command *
 
 err_stop_thread:
 	kthread_stop(wait_task);
+err_free_awaiter:
+	kfree(args->err_resp_awaiter);
 err_free_args:
 	kfree(args);
 err_free_resp:

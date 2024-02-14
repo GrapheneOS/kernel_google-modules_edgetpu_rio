@@ -15,7 +15,6 @@ struct edgetpu_mempool {
 	struct gen_pool *gen_pool;
 	void *base_vaddr;
 	dma_addr_t base_dma_addr;
-	tpu_addr_t base_tpu_addr;
 	phys_addr_t base_phys_addr;
 	size_t granule;
 };
@@ -27,7 +26,6 @@ struct edgetpu_mempool {
  */
 int edgetpu_iremap_pool_create(struct edgetpu_dev *etdev, void *base_vaddr,
 			       dma_addr_t base_dma_addr,
-			       tpu_addr_t base_tpu_addr,
 			       phys_addr_t base_phys_addr, size_t size,
 			       size_t granule);
 
@@ -45,8 +43,7 @@ int edgetpu_iremap_alloc(struct edgetpu_dev *etdev, size_t size, struct edgetpu_
 void edgetpu_iremap_free(struct edgetpu_dev *etdev, struct edgetpu_coherent_mem *mem);
 
 /*
- * Map memory in the pool to user space. Falls back to dma_mmap_coherent when
- * the device does not have an instruction remap pool.
+ * Map memory in the pool to user space.
  */
 int edgetpu_iremap_mmap(struct edgetpu_dev *etdev, struct vm_area_struct *vma,
 			struct edgetpu_coherent_mem *mem);

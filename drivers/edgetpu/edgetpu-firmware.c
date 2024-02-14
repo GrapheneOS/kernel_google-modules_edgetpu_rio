@@ -16,6 +16,7 @@
 #include <linux/types.h>
 
 #include <gcip/gcip-fault-injection.h>
+#include <gcip/gcip-image-config.h>
 #include <gcip/gcip-pm.h>
 #include <gcip/gcip-thermal.h>
 
@@ -36,6 +37,7 @@ module_param(firmware_name, charp, 0660);
 struct edgetpu_firmware_private {
 	const struct edgetpu_firmware_chip_data *chip_fw;
 	void *data; /* for edgetpu_firmware_(set/get)_data */
+	struct gcip_image_config_parser *img_cfg_parser;
 
 	struct mutex fw_desc_lock;
 	struct edgetpu_firmware_desc fw_desc;
@@ -51,6 +53,17 @@ void edgetpu_firmware_set_data(struct edgetpu_firmware *et_fw, void *data)
 void *edgetpu_firmware_get_data(struct edgetpu_firmware *et_fw)
 {
 	return et_fw->p->data;
+}
+
+void edgetpu_firmware_set_img_cfg_parser(struct edgetpu_firmware *et_fw,
+					 struct gcip_image_config_parser *parser)
+{
+	et_fw->p->img_cfg_parser = parser;
+}
+
+struct gcip_image_config_parser *edgetpu_firmware_get_img_cfg_parser(struct edgetpu_firmware *et_fw)
+{
+	return et_fw->p->img_cfg_parser;
 }
 
 /* Request firmware and copy to carveout. */

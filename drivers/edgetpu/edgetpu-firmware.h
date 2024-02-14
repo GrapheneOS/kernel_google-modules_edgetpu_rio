@@ -10,6 +10,7 @@
 #include <linux/seq_file.h>
 
 #include <gcip/gcip-firmware.h>
+#include <gcip/gcip-image-config.h>
 
 #include "edgetpu-internal.h"
 
@@ -160,6 +161,11 @@ int edgetpu_firmware_run_default_locked(struct edgetpu_dev *etdev);
  */
 void edgetpu_firmware_set_data(struct edgetpu_firmware *et_fw, void *data);
 void *edgetpu_firmware_get_data(struct edgetpu_firmware *et_fw);
+
+void edgetpu_firmware_set_img_cfg_parser(struct edgetpu_firmware *et_fw,
+					 struct gcip_image_config_parser *parser);
+struct gcip_image_config_parser *
+edgetpu_firmware_get_img_cfg_parser(struct edgetpu_firmware *et_fw);
 
 int edgetpu_firmware_create(struct edgetpu_dev *etdev,
 			    const struct edgetpu_firmware_chip_data *chip_fw);

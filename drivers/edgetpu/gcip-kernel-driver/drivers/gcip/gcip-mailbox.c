@@ -255,12 +255,13 @@ static void gcip_mailbox_handle_response(struct gcip_mailbox *mailbox, void *res
 		memcpy(cur->async_resp->resp, resp, mailbox->resp_elem_size);
 		list_del(&cur->list);
 		awaiter = cur->awaiter;
-		if (awaiter)
+		if (awaiter) {
 			/*
 			 * The timedout handler will be fired, but pended by waiting for acquiring
 			 * the wait_list_lock.
 			 */
 			TEST_TRIGGER_TIMEOUT_RACE(awaiter);
+		}
 		kfree(cur);
 		break;
 	}

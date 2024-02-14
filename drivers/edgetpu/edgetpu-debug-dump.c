@@ -7,6 +7,7 @@
  */
 
 #include <linux/debugfs.h>
+#include <linux/seq_file.h>
 #include <linux/workqueue.h>
 
 #include <gcip/gcip-pm.h>
@@ -65,10 +66,10 @@ int edgetpu_get_debug_dump(struct edgetpu_dev *etdev, u64 type)
 		init_fw_dump_buffer = true;
 	}
 	/* Signal the type of dump and buffer address to firmware */
-	ret = edgetpu_kci_get_debug_dump(etdev->etkci, etdev->debug_dump_mem.tpu_addr,
+	ret = edgetpu_kci_get_debug_dump(etdev->etkci, etdev->debug_dump_mem.dma_addr,
 					 etdev->debug_dump_mem.size, init_fw_dump_buffer);
 	etdev_dbg(etdev, "Sent debug dump request, tpu addr: %pad",
-		  &etdev->debug_dump_mem.tpu_addr);
+		  &etdev->debug_dump_mem.dma_addr);
 	if (ret) {
 		if (ret == GCIP_KCI_ERROR_UNIMPLEMENTED) {
 			etdev_dbg(etdev, "Debug dump KCI not implemented");
@@ -112,7 +113,7 @@ void edgetpu_debug_dump(struct edgetpu_dev *etdev, struct edgetpu_debug_dump_set
 		etdev_err(etdev, "Failed to generate coredump: %d\n", ret);
 }
 
-static void edgetpu_debug_dump_work(struct work_struct *work)
+void edgetpu_debug_dump_work(struct work_struct *work)
 {
 	struct edgetpu_dev *etdev = container_of(work, struct edgetpu_dev, debug_dump_work);
 	struct edgetpu_debug_dump_setup *dump_setup =
@@ -138,8 +139,12 @@ void edgetpu_debug_dump_resp_handler(struct edgetpu_dev *etdev)
 
 	debug_dump->host_dump_available_to_read = false;
 
-	if (!etdev->debug_dump_work.func)
-		INIT_WORK(&etdev->debug_dump_work, edgetpu_debug_dump_work);
-
 	schedule_work(&etdev->debug_dump_work);
+}
+
+/* debugfs mappings dump */
+void edgetpu_debug_dump_mappings_show(struct edgetpu_dev *etdev, struct seq_file *s)
+{
+	seq_printf(s, "  %pad %lu debug dump\n", &etdev->debug_dump_mem.dma_addr,
+		   etdev->debug_dump_mem.size / PAGE_SIZE);
 }

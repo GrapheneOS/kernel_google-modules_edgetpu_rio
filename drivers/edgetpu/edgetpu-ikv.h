@@ -17,6 +17,16 @@
 #include "edgetpu-internal.h"
 #include "edgetpu-mailbox.h"
 
+#ifdef EDGETPU_IKV_TIMEOUT
+#define IKV_TIMEOUT	EDGETPU_IKV_TIMEOUT
+#elif IS_ENABLED(CONFIG_EDGETPU_TEST)
+/* fake-firmware could respond in a short time */
+#define IKV_TIMEOUT	(200)
+#else
+/* Wait for up to 2 minutes for FW to respond. */
+#define IKV_TIMEOUT	(120000)
+#endif
+
 struct edgetpu_ikv_response {
 	struct list_head list_entry;
 	struct edgetpu_vii_response resp;

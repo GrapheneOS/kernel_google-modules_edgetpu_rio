@@ -666,20 +666,63 @@ struct edgetpu_vii_command {
 
 struct edgetpu_vii_command_ioctl {
 	struct edgetpu_vii_command command;
-	/* TODO(b/274528886): Fences not yet supported. */
+	/*
+	 * User-space pointer to an array of file descriptors for dma_fences that this command
+	 * should wait on before being sent.
+	 */
 	__u64 in_fence_array;
+	/* Number of elements in `in_fence_array`. */
 	__u32 in_fence_count;
+	/*
+	 * User-space pointer to an array of file descriptors for dma_fences which should be
+	 * sigaled when this command is completed or sent an error if the command fails.
+	 */
 	__u64 out_fence_array;
+	/* Number of elements in `out_fence_array`. */
 	__u32 out_fence_count;
 };
 #define EDGETPU_VII_COMMAND \
 	_IOWR(EDGETPU_IOCTL_BASE, 35, struct edgetpu_vii_command_ioctl)
 
+#define VII_RESPONSE_CODE_KERNEL_BASE	(1 << 15)
+/*
+ * Command timed out after being submitted.
+ *
+ * When @code is this value, @retval is a uint64 equal to the length of time, in ms, waited once the
+ * command was enqueued.
+ */
+#define VII_RESPONSE_CODE_KERNEL_CMD_TIMEOUT	(VII_RESPONSE_CODE_KERNEL_BASE + 0)
+/*
+ * Command failed to enqueue asynchronously after its dependencies were met.
+ *
+ * When @code is this value, @retval is an int32 equal to a negative errno describing why the
+ * command failed to enqueue.
+ */
+#define VII_RESPONSE_CODE_KERNEL_ENQUEUE_FAILED	(VII_RESPONSE_CODE_KERNEL_BASE + 1)
+/*
+ * Command never submitted due to an in-fence dependency receiving an error signal.
+ *
+ * When @code is this value, @retval is an int32 equal to the negative errno the in-fence was
+ * signaled with.
+ */
+#define VII_RESPONSE_CODE_KERNEL_FENCE_ERROR	(VII_RESPONSE_CODE_KERNEL_BASE + 2)
+/*
+ * Command never submitted due to an in-fence dependency timing out.
+ *
+ * When @code is this value, @retval is a uint64 equal to the length of time, in ms, waited for any
+ * in-fences to be signaled.
+ */
+#define VII_RESPONSE_CODE_KERNEL_FENCE_TIMEOUT	(VII_RESPONSE_CODE_KERNEL_BASE + 3)
+
 /* VII response structure as sent by firmware and consumed from the mailbox response queue. */
 struct edgetpu_vii_response {
 	/* Sequence number. Should match the corresponding command. */
 	__u64 seq;
-	/* The error code of the response, if any. */
+	/*
+	 * The error code of the response, if any.
+	 * Values > VII_RESPONSE_CODE_KERNEL_BASE indicate an error reported by the driver that
+	 * prevented the command from ever being completed by firmware.
+	 */
 	__u16 code;
 	/* The cluster index which handled the command. -1 if the command was not handled. */
 	__s8 cluster_index;

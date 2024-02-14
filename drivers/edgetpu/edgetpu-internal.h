@@ -9,11 +9,6 @@
 
 #include <linux/printk.h>
 
-#ifdef CONFIG_X86
-#include <asm/pgtable_types.h>
-#include <asm/set_memory.h>
-#endif
-
 #include <linux/atomic.h>
 #include <linux/cdev.h>
 #include <linux/debugfs.h>
@@ -59,21 +54,13 @@
 
 typedef u64 tpu_addr_t;
 
+/* "Coherent memory" allocated via dma_alloc_coherent or iremap. */
 struct edgetpu_coherent_mem {
 	void *vaddr;		/* kernel VA, no allocation if NULL */
-	dma_addr_t dma_addr;	/* IOVA for default domain, returned by dma_alloc_coherent */
-	tpu_addr_t tpu_addr;	/*
-				 * IOVA for the domain of the context the memory was requested for.
-				 * Equal to dma_addr if requested for EDGETPU_CONTEXT_KCI.
-				 */
+	dma_addr_t dma_addr;	/* TPU DMA address (default domain) */
 	u64 host_addr;		/* address mapped on host for debugging */
 	u64 phys_addr;		/* physical address, if available */
 	size_t size;
-#ifdef CONFIG_X86
-	bool is_set_uc;		/* memory has been marked uncached on X86 */
-#endif
-	/* SGT used to map the coherent memory into the destination context. */
-	struct sg_table *client_sgt;
 };
 
 struct edgetpu_device_group;

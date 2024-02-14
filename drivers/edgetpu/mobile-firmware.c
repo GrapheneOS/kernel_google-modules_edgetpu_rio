@@ -125,16 +125,16 @@ static int mobile_firmware_after_create(struct edgetpu_firmware *et_fw)
 		return ret;
 	}
 
-	edgetpu_firmware_set_data(et_fw, data);
+	edgetpu_firmware_set_img_cfg_parser(et_fw, data);
 	return 0;
 }
 
 static void mobile_firmware_before_destroy(struct edgetpu_firmware *et_fw)
 {
-	struct gcip_image_config_parser *cfg_parser = edgetpu_firmware_get_data(et_fw);
+	struct gcip_image_config_parser *cfg_parser = edgetpu_firmware_get_img_cfg_parser(et_fw);
 
 	gcip_image_config_clear(cfg_parser);
-	edgetpu_firmware_set_data(et_fw, NULL);
+	edgetpu_firmware_set_img_cfg_parser(et_fw, NULL);
 	kfree(cfg_parser);
 }
 
@@ -172,9 +172,10 @@ static void mobile_firmware_free_buffer(
 
 static struct gcip_image_config *mobile_firmware_get_image_config(struct edgetpu_dev *etdev)
 {
-	struct gcip_image_config_parser *cfg_parser = edgetpu_firmware_get_data(etdev->firmware);
+	struct gcip_image_config_parser *cfg_parser =
+		edgetpu_firmware_get_img_cfg_parser(etdev->firmware);
 
-	return cfg_parser->last_config_valid ? &cfg_parser->last_config : NULL;
+	return (cfg_parser && cfg_parser->last_config_valid) ? &cfg_parser->last_config : NULL;
 }
 
 static int mobile_firmware_gsa_authenticate(struct edgetpu_mobile_platform_dev *etmdev,
@@ -285,8 +286,6 @@ static int mobile_firmware_update_remapped_data_region(struct edgetpu_dev *etdev
 					 etmdev->shared_mem_vaddr + EDGETPU_POOL_MEM_OFFSET,
 					 /* Base DMA address */
 					 etmdev->remapped_data_addr + EDGETPU_POOL_MEM_OFFSET,
-					 /* Base TPU address */
-					 etmdev->remapped_data_addr + EDGETPU_POOL_MEM_OFFSET,
 					 /* Base physical address */
 					 etmdev->shared_mem_paddr + EDGETPU_POOL_MEM_OFFSET,
 					 /* Size */
@@ -375,7 +374,7 @@ static int mobile_firmware_setup_buffer(struct edgetpu_firmware *et_fw,
 	void *image_vaddr;
 	struct edgetpu_dev *etdev = et_fw->etdev;
 	struct gcip_image_config *image_config;
-	struct gcip_image_config_parser *cfg_parser = edgetpu_firmware_get_data(et_fw);
+	struct gcip_image_config_parser *cfg_parser = edgetpu_firmware_get_img_cfg_parser(et_fw);
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 	phys_addr_t image_start, image_end, carveout_start, carveout_end;
 	struct mobile_image_header *hdr;
@@ -455,6 +454,8 @@ static int mobile_firmware_setup_buffer(struct edgetpu_firmware *et_fw,
 	}
 
 	ret = gcip_image_config_parse(cfg_parser, image_config);
+	if (!ret)
+		fw_buf->dma_addr = EDGETPU_INSTRUCTION_REMAP_BASE;
 out:
 	memunmap(image_vaddr);
 	return ret;

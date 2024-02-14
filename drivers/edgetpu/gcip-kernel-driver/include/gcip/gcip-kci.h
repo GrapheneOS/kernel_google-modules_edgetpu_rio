@@ -73,7 +73,7 @@ enum gcip_kci_code {
 	GCIP_KCI_CODE_GET_DEBUG_DUMP = 8,
 	GCIP_KCI_CODE_OPEN_DEVICE = 9,
 	GCIP_KCI_CODE_CLOSE_DEVICE = 10,
-	GCIP_KCI_CODE_FIRMWARE_INFO = 11,
+	GCIP_KCI_CODE_EXCHANGE_INFO = 11,
 	/* TODO(b/271372136): remove v1 when v1 firmware no longer in use. */
 	GCIP_KCI_CODE_GET_USAGE_V1 = 12,
 	/* Backward compatible define, also update when v1 firmware no longer in use. */

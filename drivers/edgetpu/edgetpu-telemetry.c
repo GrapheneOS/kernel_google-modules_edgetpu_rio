@@ -101,12 +101,12 @@ int edgetpu_telemetry_kci(struct edgetpu_dev *etdev)
 {
 	struct gcip_telemetry_kci_args log_args = {
 		.kci = etdev->etkci->kci,
-		.addr = etdev->telemetry[0].log_mem.tpu_addr,
+		.addr = etdev->telemetry[0].log_mem.dma_addr,
 		.size = etdev->telemetry[0].log_mem.size,
 	};
 	struct gcip_telemetry_kci_args trace_args = {
 		.kci = etdev->etkci->kci,
-		.addr = etdev->telemetry[0].trace_mem.tpu_addr,
+		.addr = etdev->telemetry[0].trace_mem.dma_addr,
 		.size = etdev->telemetry[0].trace_mem.size,
 	};
 	int ret;

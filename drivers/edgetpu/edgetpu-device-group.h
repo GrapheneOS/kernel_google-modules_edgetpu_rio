@@ -7,6 +7,7 @@
 #ifndef __EDGETPU_DEVICE_GROUP_H__
 #define __EDGETPU_DEVICE_GROUP_H__
 
+#include <linux/atomic.h>
 #include <linux/eventfd.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
@@ -86,6 +87,9 @@ struct edgetpu_device_group {
 	/* Virtual context ID to be sent to the firmware. */
 	u16 vcid;
 
+	/* Number of additional VII commands this client is allowed to enqueue. */
+	atomic_t available_vii_credits;
+
 	/* protects everything in the following comment block */
 	struct mutex lock;
 	/* fields protected by @lock */
@@ -120,7 +124,6 @@ struct edgetpu_device_group {
 	 * responses currently enqueued in @pending_ikv_resps.
 	 */
 	spinlock_t ikv_resp_lock;
-	uint available_vii_credits;
 
 	/* TPU IOVA mapped to host DRAM space */
 	struct edgetpu_mapping_root host_mappings;

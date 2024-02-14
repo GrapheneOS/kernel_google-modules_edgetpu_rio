@@ -626,6 +626,8 @@ static struct dma_fence *get_merged_fence_from_user(u32 count, int __user  *user
 	}
 
 	merged_fence = gcip_dma_fence_merge_fds(count, fence_fd_array);
+	if (IS_ERR(merged_fence))
+		goto out;
 	dma_fence_enable_sw_signaling(merged_fence);
 
 out:

@@ -27,7 +27,7 @@
 #include <gcip/gcip-iommu.h>
 #include <gcip/gcip-mem-pool.h>
 
-#if HAS_IOVAD_BEST_FIT_ALGO
+#if GCIP_HAS_IOVAD_BEST_FIT_ALGO
 #include <linux/dma-iommu.h>
 #endif
 
@@ -94,6 +94,13 @@ static int dma_info_to_prot(enum dma_data_direction dir, bool coherent, unsigned
 	}
 }
 
+static inline size_t gcip_iommu_domain_granule(struct gcip_iommu_domain *domain)
+{
+	if (unlikely(domain->default_domain))
+		return PAGE_SIZE;
+	return domain->domain_pool->granule;
+}
+
 /*
  * Allocates an IOVA for the scatterlist and maps it to @domain.
  *
@@ -138,11 +145,12 @@ static unsigned int gcip_iommu_domain_map_sg(struct gcip_iommu_domain *domain,
 	 * It will iterate each scatter list segment in order and map them to the IOMMU domain
 	 * as amount of the size of each segment successively.
 	 * Returns an error on failure or the total length of mapped segments on success.
-	 *
-	 * Note: Before Linux 5.15, its return type was `size_t` and it returned 0 on failure.
-	 *       To make it compatible with those old versions, we should cast the return value.
 	 */
-	map_size = (ssize_t)iommu_map_sg(domain->domain, iova, sgl, nents, prot);
+#if GCIP_IOMMU_MAP_HAS_GFP
+	map_size = iommu_map_sg(domain->domain, iova, sgl, nents, prot, GFP_KERNEL);
+#else
+	map_size = iommu_map_sg(domain->domain, iova, sgl, nents, prot);
+#endif
 	if (map_size < 0 || map_size < iova_len)
 		goto err_free_iova;
 
@@ -153,8 +161,8 @@ static unsigned int gcip_iommu_domain_map_sg(struct gcip_iommu_domain *domain,
 	ret = 0;
 	sg = sgl;
 	while (iova_len) {
-		size_t segment_len =
-			min_t(size_t, iova_len, UINT_MAX & ~(domain->domain_pool->granule - 1));
+		size_t segment_len = min_t(size_t, iova_len,
+					   UINT_MAX & ~(gcip_iommu_domain_granule(domain) - 1));
 
 		sg_dma_address(sg) = iova;
 		sg_dma_len(sg) = segment_len;
@@ -205,7 +213,7 @@ static void gcip_iommu_domain_unmap_sg(struct gcip_iommu_domain *domain, struct 
 
 static inline unsigned long gcip_iommu_domain_shift(struct gcip_iommu_domain *domain)
 {
-	return __ffs(domain->domain_pool->granule);
+	return __ffs(gcip_iommu_domain_granule(domain));
 }
 
 static inline unsigned long gcip_iommu_domain_pfn(struct gcip_iommu_domain *domain, dma_addr_t iova)
@@ -215,7 +223,7 @@ static inline unsigned long gcip_iommu_domain_pfn(struct gcip_iommu_domain *doma
 
 static inline size_t gcip_iommu_domain_align(struct gcip_iommu_domain *domain, size_t size)
 {
-	return ALIGN(size, domain->domain_pool->granule);
+	return ALIGN(size, gcip_iommu_domain_granule(domain));
 }
 
 static int iovad_initialize_domain(struct gcip_iommu_domain *domain)
@@ -233,11 +241,7 @@ static int iovad_initialize_domain(struct gcip_iommu_domain *domain)
 		reserve_iova(&domain->iova_space.iovad, pfn_lo, pfn_hi);
 	}
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 18, 0)
 	return iova_domain_init_rcaches(&domain->iova_space.iovad);
-#else
-	return 0;
-#endif
 }
 
 static void iovad_finalize_domain(struct gcip_iommu_domain *domain)
@@ -247,9 +251,9 @@ static void iovad_finalize_domain(struct gcip_iommu_domain *domain)
 
 static void iovad_enable_best_fit_algo(struct gcip_iommu_domain *domain)
 {
-#if HAS_IOVAD_BEST_FIT_ALGO
+#if GCIP_HAS_IOVAD_BEST_FIT_ALGO
 	domain->iova_space.iovad.best_fit = true;
-#endif /* HAS_IOVAD_BEST_FIT_ALGO */
+#endif /* GCIP_HAS_IOVAD_BEST_FIT_ALGO */
 }
 
 static dma_addr_t iovad_alloc_iova_space(struct gcip_iommu_domain *domain, size_t size,
@@ -261,19 +265,6 @@ static dma_addr_t iovad_alloc_iova_space(struct gcip_iommu_domain *domain, size_
 						  domain->domain_pool->last_daddr;
 
 	size = size >> shift;
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 17, 0)
-	/*
-	 * alloc_iova_fast() makes use of a cache of recently freed IOVA pages which does not
-	 * behave correctly for non-power-of-two amounts of pages. Round up the number of
-	 * pages being allocated to ensure it's a safe number of pages.
-	 *
-	 * This rounding is done automatically as of 5.17
-	 */
-	if (size < (1 << (IOVA_RANGE_CACHE_MAX_SIZE - 1)))
-		size = roundup_pow_of_two(size);
-#endif
-
 	iova_pfn = alloc_iova_fast(&domain->iova_space.iovad, size, iova_ceiling >> shift, true);
 	return (dma_addr_t)iova_pfn << shift;
 }
@@ -435,9 +426,9 @@ static inline void sync_sg_if_needed(struct device *dev, struct sg_table *sgt, u
 }
 
 /* Maps @sgt to @iova. If @iova is 0, this function allocates an IOVA space internally. */
-static unsigned int gcip_iommu_domain_map_sgt_to_iova(struct gcip_iommu_domain *domain,
-						      struct sg_table *sgt, dma_addr_t iova,
-						      u64 *gcip_map_flags)
+unsigned int gcip_iommu_domain_map_sgt_to_iova(struct gcip_iommu_domain *domain,
+					       struct sg_table *sgt, dma_addr_t iova,
+					       u64 *gcip_map_flags)
 {
 	struct scatterlist *sgl = sgt->sgl;
 	uint orig_nents = sgt->orig_nents;
@@ -476,6 +467,12 @@ void gcip_iommu_domain_unmap_sgt(struct gcip_iommu_domain *domain, struct sg_tab
 				 u64 gcip_map_flags)
 {
 	return gcip_iommu_domain_unmap_sgt_free_iova(domain, sgt, true, gcip_map_flags);
+}
+
+void gcip_iommu_domain_unmap_sgt_from_iova(struct gcip_iommu_domain *domain, struct sg_table *sgt,
+					   u64 gcip_map_flags)
+{
+	gcip_iommu_domain_unmap_sgt_free_iova(domain, sgt, false, gcip_map_flags);
 }
 
 /**
@@ -713,7 +710,7 @@ void gcip_iommu_domain_pool_destroy(struct gcip_iommu_domain_pool *pool)
 
 void gcip_iommu_domain_pool_enable_best_fit_algo(struct gcip_iommu_domain_pool *pool)
 {
-	if (pool->domain_type == GCIP_IOMMU_DOMAIN_TYPE_IOVAD && !HAS_IOVAD_BEST_FIT_ALGO) {
+	if (pool->domain_type == GCIP_IOMMU_DOMAIN_TYPE_IOVAD && !GCIP_HAS_IOVAD_BEST_FIT_ALGO) {
 		dev_warn(pool->dev, "This env doesn't support best-fit algorithm with IOVAD");
 		pool->best_fit = false;
 	} else {
@@ -959,11 +956,7 @@ static unsigned int gcip_iommu_get_gup_flags(u64 host_addr, struct device *dev)
 	unsigned int gup_flags;
 
 	mmap_read_lock(current->mm);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 14, 1)
-	vma = find_extend_vma(current->mm, host_addr & PAGE_MASK);
-#else
 	vma = vma_lookup(current->mm, host_addr & PAGE_MASK);
-#endif
 	mmap_read_unlock(current->mm);
 
 	if (!vma) {

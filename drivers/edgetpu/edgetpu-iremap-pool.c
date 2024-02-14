@@ -18,7 +18,6 @@
 
 int edgetpu_iremap_pool_create(struct edgetpu_dev *etdev, void *base_vaddr,
 			       dma_addr_t base_dma_addr,
-			       tpu_addr_t base_tpu_addr,
 			       phys_addr_t base_phys_addr, size_t size,
 			       size_t granule)
 {
@@ -41,7 +40,6 @@ int edgetpu_iremap_pool_create(struct edgetpu_dev *etdev, void *base_vaddr,
 	}
 	pool->base_vaddr = base_vaddr;
 	pool->base_dma_addr = base_dma_addr;
-	pool->base_tpu_addr = base_tpu_addr;
 	pool->base_phys_addr = base_phys_addr;
 	pool->granule = granule;
 	if (gen_pool_add(pool->gen_pool, (unsigned long)base_vaddr, size, -1)) {
@@ -79,7 +77,6 @@ int edgetpu_iremap_alloc(struct edgetpu_dev *etdev, size_t size, struct edgetpu_
 	mem->vaddr = (void *)addr;
 	offset = mem->vaddr - etmempool->base_vaddr;
 	mem->dma_addr = etmempool->base_dma_addr + offset;
-	mem->tpu_addr = etmempool->base_tpu_addr + offset;
 	mem->phys_addr = etmempool->base_phys_addr + offset;
 	mem->size = size;
 	etdev_dbg(etdev, "%s @ %pK IOVA = %pad size = %zu", __func__, mem->vaddr, &mem->dma_addr,

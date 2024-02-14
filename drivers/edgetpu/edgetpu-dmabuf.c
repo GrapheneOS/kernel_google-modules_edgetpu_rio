@@ -96,7 +96,7 @@ static struct edgetpu_mapping *dmabuf_mapping_create(struct edgetpu_device_group
 	}
 
 	mapping->flags = flags;
-	mapping->mmu_flags = map_to_mmu_flags(flags) | EDGETPU_MMU_DMABUF;
+	mapping->mmu_flags = map_to_mmu_flags(flags);
 	mapping->priv = edgetpu_device_group_get(group);
 	mapping->release = dmabuf_mapping_destroy;
 	mapping->show = dmabuf_map_callback_show;

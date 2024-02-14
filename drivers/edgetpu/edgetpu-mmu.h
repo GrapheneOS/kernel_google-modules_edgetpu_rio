@@ -20,14 +20,7 @@
 
 /* flags for MMU operations */
 
-/* Whether the TPU address allocated must be accessible to the control cluster. */
-#define EDGETPU_MMU_CC_ACCESS		(0 << 0)
-#define EDGETPU_MMU_CC_NO_ACCESS	(1 << 0)
-/* The memory will be mapped to host DRAM or dma-buf. */
-#define EDGETPU_MMU_HOST		(0 << 1)
-#define EDGETPU_MMU_DMABUF		(1 << 1)
-
-#define EDGETPU_MMU_COHERENT		(1 << 2)
+#define EDGETPU_MMU_COHERENT		(1 << 0)
 
 /* max number of allocated domains is: 1 for default + EDGETPU_NUM_VCIDS */
 #define EDGETPU_DOMAIN_TOKEN_END	(1 + EDGETPU_NUM_VCIDS)
@@ -67,12 +60,7 @@ static inline enum dma_data_direction map_flag_to_host_dma_dir(edgetpu_map_flag_
 
 static inline u32 map_to_mmu_flags(edgetpu_map_flag_t flags)
 {
-	u32 ret = 0;
-
-	ret |= (flags & EDGETPU_MAP_CPU_NONACCESSIBLE) ? EDGETPU_MMU_CC_NO_ACCESS :
-							 EDGETPU_MMU_CC_ACCESS;
-	ret |= (flags & EDGETPU_MAP_COHERENT) ? EDGETPU_MMU_COHERENT : 0;
-	return ret;
+	return (flags & EDGETPU_MAP_COHERENT) ? EDGETPU_MMU_COHERENT : 0;
 }
 
 /* To be compatible with Linux kernel without this flag. */
@@ -126,7 +114,7 @@ void edgetpu_mmu_unmap_iova_sgt_attrs(struct edgetpu_dev *etdev, tpu_addr_t iova
  * @iova: I/O virtual address (TPU VA) to map to paddr.
  * @paddr: Physical/next-stage target address to which iova is to be mapped.
  * @size: size of the mapping in bytes.
- * @prot: IOMMU API protections to use for the mapping.
+ * @gcip_map_flags: GCIP IOMMU mapping API flags.
  * @etdomain: the IOMMU domain to add the translation to.
  *
  * Description: Add a mapping from iova -> paddr to the MMU for the chip.
@@ -138,7 +126,8 @@ void edgetpu_mmu_unmap_iova_sgt_attrs(struct edgetpu_dev *etdev, tpu_addr_t iova
  * edgetpu_mmu_reserve().
  */
 int edgetpu_mmu_add_translation(struct edgetpu_dev *etdev, unsigned long iova, phys_addr_t paddr,
-				size_t size, int prot, struct edgetpu_iommu_domain *etdomain);
+				size_t size, u64 gcip_map_flags,
+				struct edgetpu_iommu_domain *etdomain);
 
 /* Remove a translation added by edgetpu_mmu_add_translation. */
 void edgetpu_mmu_remove_translation(struct edgetpu_dev *etdev, unsigned long iova, size_t size,

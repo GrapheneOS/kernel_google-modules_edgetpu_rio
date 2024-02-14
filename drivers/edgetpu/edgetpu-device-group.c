@@ -522,7 +522,7 @@ edgetpu_device_group_alloc(struct edgetpu_client *client,
 	INIT_LIST_HEAD(&group->ready_ikv_resps);
 	INIT_LIST_HEAD(&group->pending_ikv_resps);
 	spin_lock_init(&group->ikv_resp_lock);
-	group->available_vii_credits = EDGETPU_NUM_VII_CREDITS;
+	atomic_set(&group->available_vii_credits, EDGETPU_NUM_VII_CREDITS);
 	mutex_init(&group->lock);
 	rwlock_init(&group->events.lock);
 	INIT_LIST_HEAD(&group->dma_fence_list);
@@ -958,13 +958,12 @@ void edgetpu_group_mappings_show(struct edgetpu_device_group *group,
 
 	if (group->vii.cmd_queue_mem.vaddr) {
 		seq_puts(s, "VII queues:\n");
-		seq_printf(s, "  %pad %lu cmdq %#llx %pad\n", &group->vii.cmd_queue_mem.tpu_addr,
+		seq_printf(s, "  %pad %lu cmdq %#llx\n", &group->vii.cmd_queue_mem.dma_addr,
 			   DIV_ROUND_UP(group->vii.cmd_queue_mem.size, PAGE_SIZE),
-			   group->vii.cmd_queue_mem.host_addr, &group->vii.cmd_queue_mem.dma_addr);
-		seq_printf(s, "  %pad %lu rspq %#llx %pad\n", &group->vii.resp_queue_mem.tpu_addr,
+			   group->vii.cmd_queue_mem.host_addr);
+		seq_printf(s, "  %pad %lu rspq %#llx\n", &group->vii.resp_queue_mem.dma_addr,
 			   DIV_ROUND_UP(group->vii.resp_queue_mem.size, PAGE_SIZE),
-			   group->vii.resp_queue_mem.host_addr,
-			   &group->vii.resp_queue_mem.dma_addr);
+			   group->vii.resp_queue_mem.host_addr);
 	}
 }
 
@@ -974,7 +973,6 @@ int edgetpu_device_group_send_vii_command(struct edgetpu_device_group *group,
 {
 	struct edgetpu_dev *etdev = group->etdev;
 	struct edgetpu_iommu_domain *etdomain;
-	unsigned long flags;
 	int ret = gcip_pm_get_if_powered(etdev->pm, true);
 
 	if (ret) {
@@ -997,25 +995,18 @@ int edgetpu_device_group_send_vii_command(struct edgetpu_device_group *group,
 		goto unlock_group;
 	}
 
-	spin_lock_irqsave(&group->ikv_resp_lock, flags);
-	if (!group->available_vii_credits) {
-		spin_unlock_irqrestore(&group->ikv_resp_lock, flags);
+	if (!atomic_dec_if_positive(&group->available_vii_credits)) {
 		ret = -EBUSY;
 		goto unlock_group;
 	}
-	group->available_vii_credits--;
-	spin_unlock_irqrestore(&group->ikv_resp_lock, flags);
 
 	cmd->client_id = etdomain->pasid;
 	ret = edgetpu_ikv_send_cmd(etdev->etikv, cmd, &group->pending_ikv_resps,
 				   &group->ready_ikv_resps, &group->ikv_resp_lock, group, in_fence,
 				   out_fence);
-	if (ret) {
-		/* Refund credit if command failed to send. */
-		spin_lock_irqsave(&group->ikv_resp_lock, flags);
-		group->available_vii_credits++;
-		spin_unlock_irqrestore(&group->ikv_resp_lock, flags);
-	}
+	/* Refund credit if command failed to send. */
+	if (ret)
+		atomic_inc(&group->available_vii_credits);
 
 unlock_group:
 	mutex_unlock(&group->lock);

@@ -721,9 +721,6 @@ int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size, struct edgetp
 	mem->vaddr = dma_alloc_coherent(etdev->dev, size, &mem->dma_addr, GFP_KERNEL);
 	if (!mem->vaddr)
 		return -ENOMEM;
-
-	/* dma_alloc_coherent creates mappings in the default domain */
-	mem->tpu_addr = mem->dma_addr;
 	mem->size = size;
 	return 0;
 }

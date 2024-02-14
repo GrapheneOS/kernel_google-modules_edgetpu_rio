@@ -32,15 +32,6 @@
 #include <gcip/gcip-domain-pool.h>
 #include <gcip/gcip-mem-pool.h>
 
-/*
- * TODO(b/277649169) Best fit IOVA allocator was removed in 6.1 GKI
- * The API needs to either be upstreamed, integrated into this driver, or disabled for 6.1
- * compatibility. For now, disable best-fit on all non-Android kernels and any GKI > 5.15.
- */
-#define HAS_IOVAD_BEST_FIT_ALGO                           \
-	(LINUX_VERSION_CODE < KERNEL_VERSION(5, 16, 0) && \
-	 (IS_ENABLED(CONFIG_GCIP_TEST) || IS_ENABLED(CONFIG_ANDROID)))
-
 #if GCIP_HAS_IOMMU_PASID
 #include <linux/idr.h>
 #endif
@@ -70,6 +61,10 @@
 #define GCIP_MAP_FLAGS_RESTRICT_IOVA_BIT_SIZE 1
 #define GCIP_MAP_FLAGS_RESTRICT_IOVA_TO_FLAGS(restrict) \
 	((u64)(restrict) << GCIP_MAP_FLAGS_RESTRICT_IOVA_OFFSET)
+
+/* Helper macros to easily create the mapping direction flags. */
+#define GCIP_MAP_FLAGS_DMA_RW GCIP_MAP_FLAGS_DMA_DIRECTION_TO_FLAGS(DMA_BIDIRECTIONAL)
+#define GCIP_MAP_FLAGS_DMA_RO GCIP_MAP_FLAGS_DMA_DIRECTION_TO_FLAGS(DMA_TO_DEVICE)
 
 /*
  * Bitfields of @gcip_map_flags:
@@ -378,6 +373,38 @@ unsigned int gcip_iommu_domain_map_sgt(struct gcip_iommu_domain *domain, struct 
  */
 void gcip_iommu_domain_unmap_sgt(struct gcip_iommu_domain *domain, struct sg_table *sgt,
 				 u64 gcip_map_flags);
+
+/**
+ * gcip_iommu_domain_map_sgt_to_iova(): Maps the scatter-gather table with specified IOVA to the
+ *                                      target domain.
+ *
+ * @domain: The domain that the sgt will be mapped to.
+ * @sgt: The scatter-gather table to be mapped.
+ * @iova: The specified device address.
+ * @gcip_map_flags: The gcip flags used to map the @sgt.
+ *
+ * This function is almost identical to gcip_iommu_domain_map_sgt() except this function maps with
+ * the specified device address instead of allocating one internally.
+ *
+ * Note the used device address is NOT reserved by the domain, it's caller's responsibility to
+ * ensure @iova does not overlap with the domain's IOVA space.
+ *
+ * Return: The number of the entries that are mapped successfully.
+ */
+unsigned int gcip_iommu_domain_map_sgt_to_iova(struct gcip_iommu_domain *domain,
+					       struct sg_table *sgt, dma_addr_t iova,
+					       u64 *gcip_map_flags);
+/**
+ * gcip_iommu_domain_unmap_sgt_from_iova(): Reverts gcip_iommu_domain_map_sgt_to_iova().
+ * @domain: The domain that the sgt will be unmapped from.
+ * @sgt: The scatter-gather table to be unmapped.
+ * @gcip_map_flags: The gcip flags used to unmap @sgt.
+ *
+ * There is no @iova parameter because it is recorded in @sgt as done by
+ * gcip_iommu_domain_map_sgt_to_iova().
+ */
+void gcip_iommu_domain_unmap_sgt_from_iova(struct gcip_iommu_domain *domain, struct sg_table *sgt,
+					   u64 gcip_map_flags);
 
 /*
  * Returns a default GCIP IOMMU domain.

@@ -8,6 +8,7 @@
 #define pr_fmt(fmt) "iif: " fmt
 
 #include <linux/atomic.h>
+#include <linux/container_of.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/idr.h>
@@ -15,10 +16,6 @@
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/version.h>
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 16, 0)
-#include <linux/container_of.h>
-#endif
 
 #include <gcip/iif/iif-fence-table.h>
 #include <gcip/iif/iif-fence.h>

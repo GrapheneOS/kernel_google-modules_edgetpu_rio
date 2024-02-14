@@ -5,6 +5,7 @@
  * Copyright (C) 2019 Google, Inc.
  */
 
+#include <linux/bits.h>
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
 #include <linux/iommu.h>
@@ -176,7 +177,7 @@ int edgetpu_mmu_attach(struct edgetpu_dev *etdev)
 			   ret);
 		num_pasids = 8;
 	} else {
-		num_pasids = 1 << num_bits;
+		num_pasids = BIT(num_bits);
 	}
 
 	/* PASID 0 is reserved for the default domain */
@@ -249,7 +250,7 @@ int edgetpu_mmu_map_iova_sgt(struct edgetpu_dev *etdev, tpu_addr_t iova,
 			     u32 mmu_flags,
 			     struct edgetpu_iommu_domain *etdomain)
 {
-	const int prot = mmu_flag_to_iommu_prot(mmu_flags, etdev->dev, dir);
+	const u64 gcip_map_flags = mmu_flag_to_gcip_flags(mmu_flags, dir);
 	const tpu_addr_t orig_iova = iova;
 	struct scatterlist *sg;
 	int i;
@@ -257,7 +258,7 @@ int edgetpu_mmu_map_iova_sgt(struct edgetpu_dev *etdev, tpu_addr_t iova,
 
 	for_each_sg(sgt->sgl, sg, sgt->orig_nents, i) {
 		ret = edgetpu_mmu_add_translation(etdev, iova, sg_phys(sg),
-						  sg->length, prot, etdomain);
+						  sg->length, gcip_map_flags, etdomain);
 		if (ret)
 			goto error;
 		iova += sg->length;
@@ -289,14 +290,14 @@ void edgetpu_mmu_unmap_iova_sgt_attrs(struct edgetpu_dev *etdev,
 }
 
 int edgetpu_mmu_add_translation(struct edgetpu_dev *etdev, unsigned long iova,
-				phys_addr_t paddr, size_t size, int prot,
+				phys_addr_t paddr, size_t size, u64 gcip_map_flags,
 				struct edgetpu_iommu_domain *etdomain)
 {
 	if (!etdomain || !etdomain->gdomain)
 		return -ENODEV;
-	etdev_dbg(etdev, "%s: pasid=%u iova=%pad paddr=%pap size=%#zx prot=%#x\n", __func__,
-		  etdomain->pasid, &iova, &paddr, size, prot);
-	return iommu_map(etdomain->gdomain->domain, iova, paddr, size, prot);
+	etdev_dbg(etdev, "%s: pasid=%u iova=%pad paddr=%pap size=%#zx flags=%#llx\n", __func__,
+		  etdomain->pasid, &iova, &paddr, size, gcip_map_flags);
+	return gcip_iommu_map(etdomain->gdomain, iova, paddr, size, gcip_map_flags);
 }
 
 void edgetpu_mmu_remove_translation(struct edgetpu_dev *etdev,
@@ -306,7 +307,7 @@ void edgetpu_mmu_remove_translation(struct edgetpu_dev *etdev,
 	if (etdomain && etdomain->gdomain) {
 		etdev_dbg(etdev, "%s: pasid=%u iova=%#lx size=%#zx\n", __func__, etdomain->pasid,
 			  iova, size);
-		iommu_unmap(etdomain->gdomain->domain, iova, size);
+		gcip_iommu_unmap(etdomain->gdomain, iova, size);
 	}
 }
 

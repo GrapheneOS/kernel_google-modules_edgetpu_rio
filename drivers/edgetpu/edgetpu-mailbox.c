@@ -367,8 +367,8 @@ int edgetpu_mailbox_init_vii(struct edgetpu_vii *vii,
 		return ret;
 	}
 
-	etdev_dbg(group->etdev, "%s: mbox %u cmdq iova=%pad dma=%pad\n", __func__,
-		  mailbox->mailbox_id, &vii->cmd_queue_mem.tpu_addr, &vii->cmd_queue_mem.dma_addr);
+	etdev_dbg(group->etdev, "%s: mbox %u cmdq dma=%pad\n", __func__,
+		  mailbox->mailbox_id, &vii->cmd_queue_mem.dma_addr);
 	ret = edgetpu_mailbox_alloc_queue(group->etdev, mailbox, resp_queue_size, attr->sizeof_resp,
 					  GCIP_MAILBOX_RESP_QUEUE, &vii->resp_queue_mem);
 
@@ -378,9 +378,8 @@ int edgetpu_mailbox_init_vii(struct edgetpu_vii *vii,
 		return ret;
 	}
 
-	etdev_dbg(group->etdev, "%s: mbox %u rspq iova=%pad dma=%pad\n", __func__,
-		  mailbox->mailbox_id, &vii->resp_queue_mem.tpu_addr,
-		  &vii->resp_queue_mem.dma_addr);
+	etdev_dbg(group->etdev, "%s: mbox %u rspq dma=%pad\n", __func__,
+		  mailbox->mailbox_id, &vii->resp_queue_mem.dma_addr);
 	mailbox->internal.group = edgetpu_device_group_get(group);
 	vii->etdev = group->etdev;
 	vii->mailbox = mailbox;
@@ -448,7 +447,7 @@ int edgetpu_mailbox_alloc_queue(struct edgetpu_dev *etdev, struct edgetpu_mailbo
 	if (ret)
 		return ret;
 
-	ret = edgetpu_mailbox_set_queue(mailbox, type, mem->tpu_addr, queue_size);
+	ret = edgetpu_mailbox_set_queue(mailbox, type, mem->dma_addr, queue_size);
 	if (ret) {
 		edgetpu_mailbox_do_free_queue(etdev, mem);
 		return ret;
@@ -615,17 +614,17 @@ void edgetpu_mailbox_reinit_vii(struct edgetpu_device_group *group)
 	etdev_dbg(group->etdev, "Tail doorbell %s",
 		  attr->cmdq_tail_doorbell ? "enabled" : "disabled");
 	etdev_dbg(group->etdev, "cmd queue: addr=%pad size=%u\n",
-		  &group->vii.cmd_queue_mem.tpu_addr, cmd_queue_size);
+		  &group->vii.cmd_queue_mem.dma_addr, cmd_queue_size);
 	etdev_dbg(group->etdev, "resp queue: addr=%pad size=%u\n",
-		  &group->vii.resp_queue_mem.tpu_addr, resp_queue_size);
+		  &group->vii.resp_queue_mem.dma_addr, resp_queue_size);
 
 	edgetpu_mailbox_set_priority(mailbox, attr->priority);
 	EDGETPU_MAILBOX_CONTEXT_WRITE(mailbox, cmd_queue_tail_doorbell_enable,
 				      attr->cmdq_tail_doorbell);
 	edgetpu_mailbox_set_queue(mailbox, GCIP_MAILBOX_CMD_QUEUE,
-				  group->vii.cmd_queue_mem.tpu_addr, cmd_queue_size);
+				  group->vii.cmd_queue_mem.dma_addr, cmd_queue_size);
 	edgetpu_mailbox_set_queue(mailbox, GCIP_MAILBOX_RESP_QUEUE,
-				  group->vii.resp_queue_mem.tpu_addr, resp_queue_size);
+				  group->vii.resp_queue_mem.dma_addr, resp_queue_size);
 	edgetpu_mailbox_enable(mailbox);
 }
 
@@ -645,9 +644,9 @@ static void edgetpu_mailbox_init_external_mailbox(struct edgetpu_external_mailbo
 		EDGETPU_MAILBOX_CONTEXT_WRITE(mailbox, cmd_queue_tail_doorbell_enable,
 					      attr.cmdq_tail_doorbell);
 		edgetpu_mailbox_set_queue(mailbox, GCIP_MAILBOX_CMD_QUEUE,
-					  desc->cmd_queue_mem.tpu_addr, attr.cmd_queue_size);
+					  desc->cmd_queue_mem.dma_addr, attr.cmd_queue_size);
 		edgetpu_mailbox_set_queue(mailbox, GCIP_MAILBOX_RESP_QUEUE,
-					  desc->resp_queue_mem.tpu_addr, attr.resp_queue_size);
+					  desc->resp_queue_mem.dma_addr, attr.resp_queue_size);
 		edgetpu_mailbox_enable(mailbox);
 	}
 }

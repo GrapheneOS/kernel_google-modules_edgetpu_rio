@@ -71,7 +71,7 @@ static int edgetpu_kci_alloc_queue(struct edgetpu_dev *etdev, struct edgetpu_mai
 	if (ret)
 		return ret;
 
-	ret = edgetpu_mailbox_set_queue(mailbox, type, mem->tpu_addr, queue_size);
+	ret = edgetpu_mailbox_set_queue(mailbox, type, mem->dma_addr, queue_size);
 	if (ret) {
 		etdev_err(etdev, "failed to set mailbox queue: %d", ret);
 		edgetpu_iremap_free(etdev, mem);
@@ -255,15 +255,15 @@ int edgetpu_kci_init(struct edgetpu_mailbox_manager *mgr, struct edgetpu_kci *et
 	if (ret)
 		goto err_mailbox_remove;
 
-	etdev_dbg(mgr->etdev, "%s: cmdq kva=%pK iova=%pad dma=%pad", __func__, cmd_queue_mem->vaddr,
-		  &cmd_queue_mem->tpu_addr, &cmd_queue_mem->dma_addr);
+	etdev_dbg(mgr->etdev, "%s: cmdq kva=%pK dma=%pad", __func__, cmd_queue_mem->vaddr,
+		  &cmd_queue_mem->dma_addr);
 
 	ret = edgetpu_kci_alloc_queue(mgr->etdev, mailbox, GCIP_MAILBOX_RESP_QUEUE, resp_queue_mem);
 	if (ret)
 		goto err_free_cmd_queue;
 
-	etdev_dbg(mgr->etdev, "%s: rspq kva=%pK iova=%pad dma=%pad", __func__,
-		  resp_queue_mem->vaddr, &resp_queue_mem->tpu_addr, &resp_queue_mem->dma_addr);
+	etdev_dbg(mgr->etdev, "%s: rspq kva=%pK dma=%pad", __func__,
+		  resp_queue_mem->vaddr, &resp_queue_mem->dma_addr);
 
 	mailbox->handle_irq = edgetpu_kci_handle_irq;
 	mailbox->internal.etkci = etkci;
@@ -301,12 +301,12 @@ int edgetpu_kci_reinit(struct edgetpu_kci *etkci)
 	if (!mailbox)
 		return -ENODEV;
 
-	ret = edgetpu_mailbox_set_queue(mailbox, GCIP_MAILBOX_CMD_QUEUE, cmd_queue_mem->tpu_addr,
+	ret = edgetpu_mailbox_set_queue(mailbox, GCIP_MAILBOX_CMD_QUEUE, cmd_queue_mem->dma_addr,
 					QUEUE_SIZE);
 	if (ret)
 		return ret;
 
-	ret = edgetpu_mailbox_set_queue(mailbox, GCIP_MAILBOX_RESP_QUEUE, resp_queue_mem->tpu_addr,
+	ret = edgetpu_mailbox_set_queue(mailbox, GCIP_MAILBOX_RESP_QUEUE, resp_queue_mem->dma_addr,
 					QUEUE_SIZE);
 	if (ret)
 		return ret;
@@ -368,15 +368,13 @@ static int edgetpu_kci_send_cmd_with_data(struct edgetpu_kci *etkci,
 		return ret;
 	memcpy(mem.vaddr, data, size);
 
-	etdev_dbg(etdev, "%s: map kva=%pK iova=%pad dma=%pad", __func__, mem.vaddr, &mem.tpu_addr,
-		  &mem.dma_addr);
+	etdev_dbg(etdev, "%s: map kva=%pK dma=%pad", __func__, mem.vaddr, &mem.dma_addr);
 
-	cmd->dma.address = mem.tpu_addr;
+	cmd->dma.address = mem.dma_addr;
 	cmd->dma.size = size;
 	ret = gcip_kci_send_cmd(etkci->kci, cmd);
 	edgetpu_iremap_free(etdev, &mem);
-	etdev_dbg(etdev, "%s: unmap kva=%pK iova=%pad dma=%pad", __func__, mem.vaddr, &mem.tpu_addr,
-		  &mem.dma_addr);
+	etdev_dbg(etdev, "%s: unmap kva=%pK dma=%pad", __func__, mem.vaddr, &mem.dma_addr);
 
 	return ret;
 }
@@ -412,7 +410,7 @@ enum gcip_fw_flavor edgetpu_kci_fw_info(struct edgetpu_kci *etkci, struct gcip_f
 	struct edgetpu_mailbox *mailbox = etkci->mailbox;
 	struct edgetpu_dev *etdev = mailbox->etdev;
 	struct gcip_kci_command_element cmd = {
-		.code = GCIP_KCI_CODE_FIRMWARE_INFO,
+		.code = GCIP_KCI_CODE_EXCHANGE_INFO,
 		.dma = {
 			.address = 0,
 			.size = 0,
@@ -431,7 +429,7 @@ enum gcip_fw_flavor edgetpu_kci_fw_info(struct edgetpu_kci *etkci, struct gcip_f
 		memset(fw_info, 0, sizeof(*fw_info));
 	} else {
 		memset(mem.vaddr, 0, sizeof(*fw_info));
-		cmd.dma.address = mem.tpu_addr;
+		cmd.dma.address = mem.dma_addr;
 		cmd.dma.size = sizeof(*fw_info);
 	}
 
@@ -536,7 +534,7 @@ int edgetpu_kci_update_usage_locked(struct edgetpu_dev *etdev)
 retry_v1:
 	if (etdev->usage_stats && etdev->usage_stats->ustats.version == GCIP_USAGE_STATS_V1)
 		cmd.code = GCIP_KCI_CODE_GET_USAGE_V1;
-	cmd.dma.address = mem.tpu_addr;
+	cmd.dma.address = mem.dma_addr;
 	cmd.dma.size = EDGETPU_USAGE_BUFFER_SIZE;
 	memset(mem.vaddr, 0, sizeof(struct gcip_usage_stats_header));
 	ret = gcip_kci_send_cmd_return_resp(etdev->etkci->kci, &cmd, &resp);
@@ -568,14 +566,15 @@ void edgetpu_kci_mappings_show(struct edgetpu_dev *etdev, struct seq_file *s)
 	struct edgetpu_iommu_domain *default_etdomain = edgetpu_mmu_default_domain(etdev);
 
 	seq_printf(s, "kci pasid %u:\n", default_etdomain->pasid);
-	seq_printf(s, "  %pad %lu cmdq\n", &cmd_queue_mem->tpu_addr,
+	seq_printf(s, "  %pad %lu cmdq\n", &cmd_queue_mem->dma_addr,
 		   DIV_ROUND_UP(QUEUE_SIZE * gcip_kci_queue_element_size(GCIP_MAILBOX_CMD_QUEUE),
 				PAGE_SIZE));
-	seq_printf(s, "  %pad %lu rspq\n", &resp_queue_mem->tpu_addr,
+	seq_printf(s, "  %pad %lu rspq\n", &resp_queue_mem->dma_addr,
 		   DIV_ROUND_UP(QUEUE_SIZE * gcip_kci_queue_element_size(GCIP_MAILBOX_RESP_QUEUE),
 				PAGE_SIZE));
 	edgetpu_telemetry_mappings_show(etdev, s);
 	edgetpu_firmware_mappings_show(etdev, s);
+	edgetpu_debug_dump_mappings_show(etdev, s);
 }
 
 int edgetpu_kci_shutdown(struct edgetpu_kci *etkci)

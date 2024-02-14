@@ -8,6 +8,8 @@
 #ifndef __EDGETPU_DEBUG_DUMP_H__
 #define __EDGETPU_DEBUG_DUMP_H__
 
+#include <linux/seq_file.h>
+
 #include "edgetpu-internal.h"
 
 #define DEBUG_DUMP_HOST_CONTRACT_VERSION 3
@@ -112,5 +114,11 @@ void edgetpu_debug_dump_resp_handler(struct edgetpu_dev *etdev);
 
 /* Dump the external debug TPU CPU registers. */
 void edgetpu_debug_dump_cpu_regs(struct edgetpu_dev *etdev);
+
+/* Workqueue worker for debug dump generation. */
+void edgetpu_debug_dump_work(struct work_struct *work);
+
+/* debugfs mappings dump */
+void edgetpu_debug_dump_mappings_show(struct edgetpu_dev *etdev, struct seq_file *s);
 
 #endif /* EDGETPU_DEBUG_DUMP_H_ */

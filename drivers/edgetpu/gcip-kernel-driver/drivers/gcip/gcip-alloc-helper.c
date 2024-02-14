@@ -9,7 +9,6 @@
 #include <linux/device.h>
 #include <linux/gfp.h>
 #include <linux/mm_types.h>
-#include <linux/overflow.h>
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
@@ -42,8 +41,6 @@ struct sg_table *gcip_alloc_noncontiguous(struct device *dev, size_t size, gfp_t
 	void *mem;
 	struct page **pages;
 	size_t count;
-	size_t pages_bytes;
-	bool pages_use_vfree = false;
 	int ret;
 
 	if (!sh)
@@ -60,16 +57,7 @@ struct sg_table *gcip_alloc_noncontiguous(struct device *dev, size_t size, gfp_t
 		goto err_free_sh;
 	}
 
-	if (unlikely(check_mul_overflow(count, sizeof(*pages), &pages_bytes))) {
-		dev_err(dev, "GCIP alloc pages array request too large count=%zu", count);
-		goto err_free_mem;
-	}
-
-	pages = kmalloc(pages_bytes, gfp | __GFP_NOWARN);
-	if (!pages) {
-		pages = vmalloc(pages_bytes);
-		pages_use_vfree = true;
-	}
+	pages = kvmalloc_array(count, sizeof(*pages), gfp);
 	if (!pages)
 		goto err_free_mem;
 
@@ -84,12 +72,12 @@ struct sg_table *gcip_alloc_noncontiguous(struct device *dev, size_t size, gfp_t
 		goto err_free_pages;
 	}
 
-	pages_use_vfree ? vfree(pages) : kfree(pages);
+	kvfree(pages);
 	sh->mem = mem;
 	return &sh->sgt;
 
 err_free_pages:
-	pages_use_vfree ? vfree(pages) : kfree(pages);
+	kvfree(pages);
 err_free_mem:
 	vfree(mem);
 err_free_sh:

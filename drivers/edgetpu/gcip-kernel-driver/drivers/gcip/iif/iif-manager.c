@@ -5,15 +5,12 @@
  * Copyright (C) 2023 Google LLC
  */
 
+#include <linux/container_of.h>
 #include <linux/idr.h>
 #include <linux/kref.h>
 #include <linux/of.h>
 #include <linux/slab.h>
 #include <linux/version.h>
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 16, 0)
-#include <linux/container_of.h>
-#endif
 
 #include <gcip/iif/iif-fence-table.h>
 #include <gcip/iif/iif-manager.h>

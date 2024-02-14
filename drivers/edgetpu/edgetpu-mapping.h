@@ -122,30 +122,15 @@ void edgetpu_mapping_clear(struct edgetpu_mapping_root *mappings);
 void edgetpu_mappings_show(struct edgetpu_mapping_root *mappings,
 			   struct seq_file *s);
 
-static inline int __dma_dir_to_iommu_prot(enum dma_data_direction dir)
+/* Returns gcip map flags based on @mmu_flags and @dir */
+static inline u64 mmu_flag_to_gcip_flags(u32 mmu_flags, enum dma_data_direction dir)
 {
-	switch (dir) {
-	case DMA_BIDIRECTIONAL:
-		return IOMMU_READ | IOMMU_WRITE;
-	case DMA_TO_DEVICE:
-		return IOMMU_READ;
-	case DMA_FROM_DEVICE:
-		return IOMMU_WRITE;
-	default:
-		return 0;
-	}
-}
-
-/* Returns iommu prot based on @flags and @dir */
-static inline int mmu_flag_to_iommu_prot(u32 mmu_flags, struct device *dev,
-					 enum dma_data_direction dir)
-{
-	int prot = 0;
+	u64 gcip_map_flags = 0;
 
 	if (mmu_flags & EDGETPU_MMU_COHERENT)
-		prot = IOMMU_CACHE;
-	prot |= __dma_dir_to_iommu_prot(dir);
-	return prot;
+		gcip_map_flags = GCIP_MAP_FLAGS_DMA_COHERENT_TO_FLAGS(true);
+	gcip_map_flags |= GCIP_MAP_FLAGS_DMA_DIRECTION_TO_FLAGS(dir);
+	return gcip_map_flags;
 }
 
 /* Return total size of mappings under the supplied root. */

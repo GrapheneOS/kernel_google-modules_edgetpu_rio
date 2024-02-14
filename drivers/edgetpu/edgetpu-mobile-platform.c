@@ -42,7 +42,6 @@ static void set_telemetry_mem(struct edgetpu_mobile_platform_dev *etmdev,
 	for (i = 0; i < etmdev->edgetpu_dev.num_cores; i++) {
 		mem[i].vaddr = etmdev->shared_mem_vaddr + offset;
 		mem[i].dma_addr = etmdev->remapped_data_addr + offset;
-		mem[i].tpu_addr = etmdev->remapped_data_addr + offset;
 		mem[i].host_addr = 0;
 		mem[i].size = size;
 		offset += EDGETPU_TELEMETRY_LOG_BUFFER_SIZE + EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE;
@@ -303,10 +302,13 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 	mutex_init(&etmdev->platform_pwr.policy_lock);
 	etmdev->platform_pwr.curr_policy = TPU_POLICY_MAX;
 
-	/* Use 32-bit DMA mask for any default DMA API paths. */
-	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+	/* Use 36-bit DMA mask for any default DMA API paths except coherent. */
+	ret = dma_set_mask(&pdev->dev, DMA_BIT_MASK(36));
 	if (ret)
-		dev_warn(dev, "dma_set_mask_and_coherent returned %d\n", ret);
+		dev_warn(dev, "dma_set_mask returned %d\n", ret);
+	ret = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(32));
+	if (ret)
+		dev_warn(dev, "dma_set_coherent_mask returned %d\n", ret);
 
 	ret = edgetpu_platform_setup_fw_region(etmdev);
 	if (ret) {
@@ -318,8 +320,6 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 					 /* Base virtual address (kernel address space) */
 					 etmdev->shared_mem_vaddr + EDGETPU_POOL_MEM_OFFSET,
 					 /* Base DMA address */
-					 etmdev->remapped_data_addr + EDGETPU_POOL_MEM_OFFSET,
-					 /* Base TPU address */
 					 etmdev->remapped_data_addr + EDGETPU_POOL_MEM_OFFSET,
 					 /* Base physical address */
 					 etmdev->shared_mem_paddr + EDGETPU_POOL_MEM_OFFSET,
