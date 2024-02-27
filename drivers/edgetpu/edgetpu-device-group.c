@@ -995,7 +995,7 @@ int edgetpu_device_group_send_vii_command(struct edgetpu_device_group *group,
 		goto unlock_group;
 	}
 
-	if (!atomic_dec_if_positive(&group->available_vii_credits)) {
+	if (!atomic_add_unless(&group->available_vii_credits, -1, 0)) {
 		ret = -EBUSY;
 		goto unlock_group;
 	}

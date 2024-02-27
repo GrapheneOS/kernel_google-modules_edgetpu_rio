@@ -664,6 +664,8 @@ struct edgetpu_vii_command {
 	__u8 reserved_2[2];
 } __attribute__((packed));
 
+#define EDGETPU_VII_COMMAND_MAX_NUM_FENCES 64
+
 struct edgetpu_vii_command_ioctl {
 	struct edgetpu_vii_command command;
 	/*
@@ -671,14 +673,20 @@ struct edgetpu_vii_command_ioctl {
 	 * should wait on before being sent.
 	 */
 	__u64 in_fence_array;
-	/* Number of elements in `in_fence_array`. */
+	/*
+	 * Number of elements in `in_fence_array`.
+	 * If > EDGETPU_VII_COMMAND_MAX_NUM_FENCES, the ioctl will fail with errno == EINVAL.
+	 */
 	__u32 in_fence_count;
 	/*
 	 * User-space pointer to an array of file descriptors for dma_fences which should be
 	 * sigaled when this command is completed or sent an error if the command fails.
 	 */
 	__u64 out_fence_array;
-	/* Number of elements in `out_fence_array`. */
+	/*
+	 * Number of elements in `out_fence_array`.
+	 * If > EDGETPU_VII_COMMAND_MAX_NUM_FENCES, the ioctl will fail with errno == EINVAL.
+	 */
 	__u32 out_fence_count;
 };
 #define EDGETPU_VII_COMMAND \

@@ -616,6 +616,8 @@ static struct dma_fence *get_merged_fence_from_user(u32 count, int __user  *user
 	int *fence_fd_array;
 	struct dma_fence *merged_fence;
 
+	if (count > EDGETPU_VII_COMMAND_MAX_NUM_FENCES)
+		return ERR_PTR(-EINVAL);
 	fence_fd_array = kcalloc(count, sizeof(*fence_fd_array), GFP_KERNEL);
 	if (!fence_fd_array)
 		return ERR_PTR(-ENOMEM);
@@ -663,6 +665,9 @@ static int edgetpu_ioctl_vii_command(struct edgetpu_client *client,
 						      (int __user *)command.in_fence_array);
 		if (IS_ERR(in_fence)) {
 			ret = PTR_ERR(in_fence);
+			if (ret == -EINVAL)
+				etdev_err(client->etdev, "Too many VII command in_fences: %u",
+					  command.in_fence_count);
 			goto err_unlock;
 		}
 	}
@@ -672,6 +677,9 @@ static int edgetpu_ioctl_vii_command(struct edgetpu_client *client,
 						       (int __user *)command.out_fence_array);
 		if (IS_ERR(out_fence)) {
 			ret = PTR_ERR(out_fence);
+			if (ret == -EINVAL)
+				etdev_err(client->etdev, "Too many VII command out_fences: %u",
+					  command.out_fence_count);
 			goto err_free_in_fence;
 		}
 	}
