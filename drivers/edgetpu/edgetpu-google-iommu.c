@@ -16,6 +16,7 @@
 #include <gcip/gcip-iommu.h>
 
 #include "edgetpu-config.h"
+#include "edgetpu-firmware.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-mapping.h"
 #include "edgetpu-mmu.h"
@@ -123,7 +124,7 @@ static int check_default_domain(struct edgetpu_dev *etdev,
 
 	gdomain = gcip_iommu_get_domain_for_dev(etdev->dev);
 	/* if default domain exists then we are done */
-	if (gdomain) {
+	if (!IS_ERR(gdomain)) {
 		etiommu->context_0_default = true;
 		goto out;
 	}
@@ -263,8 +264,12 @@ int edgetpu_mmu_map_iova_sgt(struct edgetpu_dev *etdev, tpu_addr_t iova,
 			goto error;
 		iova += sg->length;
 	}
-	etdev_dbg(etdev, "%s: pasid=%u iova=%pad size=%#llx dir=%d\n", __func__, etdomain->pasid,
-		  &sg_dma_address(sgt->sgl), iova - orig_iova, dir);
+	sgt->nents = 1;
+	sg = sgt->sgl;
+	sg_dma_address(sg) = orig_iova;
+	sg_dma_len(sg) = iova - orig_iova;
+	etdev_dbg(etdev, "%s: pasid=%u iova=%pad size=%#x dir=%d\n", __func__, etdomain->pasid,
+		  &sg_dma_address(sgt->sgl), sg_dma_len(sgt->sgl), dir);
 	return 0;
 
 error:
@@ -370,6 +375,8 @@ int edgetpu_mmu_attach_domain(struct edgetpu_dev *etdev,
 	pasid = etdomain->gdomain->pasid;
 	etiommu->attached_etdomains[pasid] = etdomain;
 	etdomain->pasid = pasid;
+	/* Establish "shared to all contexts" mappings from the firmware image config. */
+	edgetpu_firmware_shared_mappings_context_map(etdev, etdomain);
 	return 0;
 }
 
@@ -379,9 +386,12 @@ void edgetpu_mmu_detach_domain(struct edgetpu_dev *etdev,
 	struct edgetpu_iommu *etiommu = etdev->mmu_cookie;
 	uint pasid = etdomain->pasid;
 
-	if (pasid <= 0 || pasid >= EDGETPU_NUM_PASIDS)
+	if (pasid == IOMMU_PASID_INVALID || !pasid
+	    || pasid >= EDGETPU_NUM_PASIDS)
 		return;
 	etiommu->attached_etdomains[pasid] = NULL;
+	/* Unmap "shared to all contexts" mappings from the firmware image config. */
+	edgetpu_firmware_shared_mappings_context_unmap(etdev, etdomain);
 	etdomain->pasid = IOMMU_PASID_INVALID;
 	gcip_iommu_domain_pool_detach_domain(&etiommu->domain_pool, etdomain->gdomain);
 }

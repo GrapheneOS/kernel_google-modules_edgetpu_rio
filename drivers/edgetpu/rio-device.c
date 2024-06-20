@@ -11,14 +11,6 @@
 #include "edgetpu-internal.h"
 #include "edgetpu-mailbox.h"
 
-void edgetpu_chip_init(struct edgetpu_dev *etdev)
-{
-}
-
-void edgetpu_chip_exit(struct edgetpu_dev *etdev)
-{
-}
-
 int edgetpu_chip_get_ext_mailbox_index(u32 mbox_type, u32 *start, u32 *end)
 {
 	switch (mbox_type) {

@@ -56,14 +56,6 @@
 #define EDGETPU_DEFAULT_REMAPPED_DATA_ADDR                                                         \
 	(EDGETPU_INSTRUCTION_REMAP_BASE + EDGETPU_DEFAULT_FW_LIMIT)
 
-/*
- * Size of memory for FW accessible debug dump segments.
- * Size is determined by calculating total size of structs in edgetpu_debug_dump.h and the size of
- * FW side memory segments from linker.ld in the FW source code. Some extra head room is provided
- * for segments that are not fixed length such as crash reason and debug stats.
- */
-#define EDGETPU_DEBUG_DUMP_MEM_SIZE 0x321000
-
 /* A special client ID for secure workloads pre-agreed with firmware (kTzRealmId). */
 #define EDGETPU_EXT_TZ_CONTEXT_ID 0x40000000
 

@@ -45,31 +45,55 @@ static struct edgetpu_coherent_mem *select_telemetry_mem(struct edgetpu_telemetr
 	}
 }
 
-int edgetpu_telemetry_init(struct edgetpu_dev *etdev,
-			   struct edgetpu_coherent_mem *log_mem,
-			   struct edgetpu_coherent_mem *trace_mem)
+static void set_telemetry_mem(struct edgetpu_dev *etdev)
+{
+	struct edgetpu_telemetry_ctx *telem = etdev->telemetry;
+	int i, offset = 0;
+
+	for (i = 0; i < etdev->num_cores; i++) {
+		telem[i].log_mem.vaddr = edgetpu_firmware_shared_mem_vaddr(etdev) + offset;
+		telem[i].log_mem.dma_addr = edgetpu_firmware_shared_mem_daddr(etdev) + offset;
+		telem[i].log_mem.host_addr = 0;
+		telem[i].log_mem.size = EDGETPU_TELEMETRY_LOG_BUFFER_SIZE;
+		telem[i].log_mem.vaddr = edgetpu_firmware_shared_mem_vaddr(etdev) + offset;
+		offset += EDGETPU_TELEMETRY_LOG_BUFFER_SIZE;
+		telem[i].trace_mem.vaddr = edgetpu_firmware_shared_mem_vaddr(etdev) + offset;
+		telem[i].trace_mem.dma_addr = edgetpu_firmware_shared_mem_daddr(etdev) + offset;
+		telem[i].trace_mem.host_addr = 0;
+		telem[i].trace_mem.size = EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE;
+		offset += EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE;
+	}
+}
+
+int edgetpu_telemetry_init(struct edgetpu_dev *etdev)
 {
 	int ret, i;
 
+	if (!etdev->telemetry)
+		etdev->telemetry = devm_kcalloc(etdev->dev, etdev->num_cores,
+						sizeof(*etdev->telemetry), GFP_KERNEL);
+	if (!etdev->telemetry)
+		return -ENOMEM;
+
+	set_telemetry_mem(etdev);
+
 	for (i = 0; i < etdev->num_cores; i++) {
 		ret = gcip_telemetry_init(etdev->dev, &etdev->telemetry[i].log, "telemetry_log",
-					  log_mem[i].vaddr, EDGETPU_TELEMETRY_LOG_BUFFER_SIZE,
+					  etdev->telemetry[i].log_mem.vaddr,
+					  EDGETPU_TELEMETRY_LOG_BUFFER_SIZE,
 					  gcip_telemetry_fw_log);
 		if (ret)
 			break;
 
-		etdev->telemetry[i].log_mem = log_mem[i];
-
 #if IS_ENABLED(CONFIG_EDGETPU_TELEMETRY_TRACE)
 		ret = gcip_telemetry_init(etdev->dev, &etdev->telemetry[i].trace, "telemetry_trace",
-					  trace_mem[i].vaddr, EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE,
+					  etdev->telemetry[i].trace_mem.vaddr,
+					  EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE,
 					  gcip_telemetry_fw_trace);
 		if (ret) {
 			gcip_telemetry_exit(&etdev->telemetry[i].log);
 			break;
 		}
-
-		etdev->telemetry[i].trace_mem = trace_mem[i];
 #endif
 	}
 

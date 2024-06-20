@@ -27,6 +27,7 @@
 #include <linux/uaccess.h>
 #include <linux/uidgid.h>
 
+#include <gcip/gcip-fence-array.h>
 #include <gcip/gcip-iommu.h>
 
 #include "edgetpu-async.h"
@@ -39,9 +40,11 @@
 #include "edgetpu-kci.h"
 #include "edgetpu-mapping.h"
 #include "edgetpu-mmu.h"
+#include "edgetpu-pm.h"
 #include "edgetpu-soc.h"
 #include "edgetpu-sw-watchdog.h"
 #include "edgetpu-wakelock.h"
+#include "edgetpu-vii-packet.h"
 #include "edgetpu.h"
 
 /*
@@ -343,10 +346,7 @@ static void edgetpu_device_group_release(struct edgetpu_device_group *group)
 		edgetpu_mailbox_external_disable_free_locked(group);
 		edgetpu_mailbox_remove_vii(&group->vii);
 	}
-	if (group->etdomain) {
-		edgetpu_mmu_detach_domain(group->etdev, group->etdomain);
-		edgetpu_mmu_free_domain(group->etdev, group->etdomain);
-	}
+	/* etdomain is freed after group->lock is dropped to avoid deadlock b/348298955. */
 	/* Signal any unsignaled dma fences owned by the group with an error. */
 	edgetpu_sync_fence_group_shutdown(group);
 	group->status = EDGETPU_DEVICE_GROUP_DISBANDED;
@@ -418,6 +418,7 @@ static bool edgetpu_in_any_group_locked(struct edgetpu_dev *etdev)
 void edgetpu_device_group_leave(struct edgetpu_client *client)
 {
 	struct edgetpu_device_group *group;
+	struct edgetpu_iommu_domain *etdomain;
 	struct edgetpu_list_group *l;
 
 	mutex_lock(&client->group_lock);
@@ -432,8 +433,17 @@ void edgetpu_device_group_leave(struct edgetpu_client *client)
 	edgetpu_client_put(group->client);
 	edgetpu_device_group_put(client->group);
 	client->group = NULL;
+	etdomain = group->etdomain;
+	group->etdomain = NULL;
 	mutex_unlock(&group->lock);
 	mutex_unlock(&client->group_lock);
+
+	/* Now that group->lock is released, free the etdomain b/348298955 */
+	if (etdomain) {
+		edgetpu_mmu_detach_domain(group->etdev, etdomain);
+		edgetpu_mmu_free_domain(group->etdev, etdomain);
+	}
+
 	/* remove the group from the client device */
 	mutex_lock(&client->etdev->groups_lock);
 	list_for_each_entry(l, &client->etdev->groups, list) {
@@ -583,7 +593,7 @@ int edgetpu_device_group_finalize(struct edgetpu_device_group *group)
 			goto err_unlock;
 		}
 	}
-	if (edgetpu_wakelock_count_locked(group->client->wakelock)) {
+	if (edgetpu_wakelock_count_locked(&group->client->wakelock)) {
 		ret = edgetpu_group_attach_mailbox_locked(group);
 		if (ret) {
 			etdev_err(group->etdev, "finalize attach mailbox failed: %d", ret);
@@ -592,7 +602,7 @@ int edgetpu_device_group_finalize(struct edgetpu_device_group *group)
 	}
 
 	/* send KCI only if the device is powered on */
-	if (edgetpu_wakelock_count_locked(group->client->wakelock)) {
+	if (edgetpu_wakelock_count_locked(&group->client->wakelock)) {
 		ret = edgetpu_device_group_kci_finalized(group);
 		if (ret)
 			goto err_remove_detach_mailbox;
@@ -604,7 +614,7 @@ int edgetpu_device_group_finalize(struct edgetpu_device_group *group)
 	return 0;
 
 err_remove_detach_mailbox:
-	if (edgetpu_wakelock_count_locked(group->client->wakelock))
+	if (edgetpu_wakelock_count_locked(&group->client->wakelock))
 		edgetpu_group_detach_mailbox_locked(group);
 
 err_detach_mmu_domain:
@@ -967,13 +977,14 @@ void edgetpu_group_mappings_show(struct edgetpu_device_group *group,
 	}
 }
 
-int edgetpu_device_group_send_vii_command(struct edgetpu_device_group *group,
-					  struct edgetpu_vii_command *cmd,
-					  struct dma_fence *in_fence, struct dma_fence *out_fence)
+int edgetpu_device_group_send_vii_command(struct edgetpu_device_group *group, void *cmd,
+					  struct gcip_fence_array *in_fence_array,
+					  struct gcip_fence_array *out_fence_array,
+					  struct edgetpu_ikv_additional_info *additional_info)
 {
 	struct edgetpu_dev *etdev = group->etdev;
 	struct edgetpu_iommu_domain *etdomain;
-	int ret = gcip_pm_get_if_powered(etdev->pm, true);
+	int ret = edgetpu_pm_get_if_powered(etdev, true);
 
 	if (ret) {
 		etdev_err(etdev, "Unable to send VII command, TPU block is off");
@@ -1000,22 +1011,21 @@ int edgetpu_device_group_send_vii_command(struct edgetpu_device_group *group,
 		goto unlock_group;
 	}
 
-	cmd->client_id = etdomain->pasid;
+	edgetpu_vii_command_set_client_id(cmd, etdomain->pasid);
 	ret = edgetpu_ikv_send_cmd(etdev->etikv, cmd, &group->pending_ikv_resps,
-				   &group->ready_ikv_resps, &group->ikv_resp_lock, group, in_fence,
-				   out_fence);
+				   &group->ready_ikv_resps, &group->ikv_resp_lock, group,
+				   in_fence_array, out_fence_array, additional_info);
 	/* Refund credit if command failed to send. */
 	if (ret)
 		atomic_inc(&group->available_vii_credits);
 
 unlock_group:
 	mutex_unlock(&group->lock);
-	gcip_pm_put(etdev->pm);
+	edgetpu_pm_put(etdev);
 	return ret;
 }
 
-int edgetpu_device_group_get_vii_response(struct edgetpu_device_group *group,
-					  struct edgetpu_vii_response *resp)
+int edgetpu_device_group_get_vii_response(struct edgetpu_device_group *group, void *resp)
 {
 	struct edgetpu_ikv_response *ikv_resp;
 	unsigned long flags;
@@ -1041,7 +1051,7 @@ int edgetpu_device_group_get_vii_response(struct edgetpu_device_group *group,
 
 	spin_unlock_irqrestore(&group->ikv_resp_lock, flags);
 
-	memcpy(resp, &ikv_resp->resp, sizeof(*resp));
+	memcpy(resp, ikv_resp->resp, edgetpu_vii_response_packet_size());
 	/* This will also free `ikv_resp` */
 	gcip_mailbox_release_awaiter(ikv_resp->awaiter);
 

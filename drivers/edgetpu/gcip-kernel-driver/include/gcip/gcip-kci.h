@@ -52,7 +52,7 @@ struct gcip_kci_response_element {
 	 */
 	u16 status;
 	/*
-	 * Return value is not currently needed by KCI command responses.
+	 * Return value is used by some KCI command responses.
 	 * For reverse KCI commands this is set as value2.
 	 */
 	u32 retval;
@@ -90,6 +90,8 @@ enum gcip_kci_code {
 	GCIP_KCI_CODE_SET_DEVICE_PROPERTIES = 22,
 	GCIP_KCI_CODE_FAULT_INJECTION = 23,
 	GCIP_KCI_CODE_SET_FREQ_LIMITS = 24,
+	GCIP_KCI_CODE_DEBUG_CMD = 25,
+	GCIP_KCI_CODE_DEBUG_RESET = 26,
 
 	GCIP_KCI_CODE_RKCI_ACK = 256,
 };
@@ -113,6 +115,7 @@ enum gcip_reverse_kci_code {
 	GCIP_RKCI_GENERIC_CODE_FIRST = 0x8000,
 	GCIP_RKCI_FIRMWARE_CRASH = GCIP_RKCI_GENERIC_CODE_FIRST + 0,
 	GCIP_RKCI_JOB_LOCKUP = GCIP_RKCI_GENERIC_CODE_FIRST + 1,
+	GCIP_RKCI_DEBUG_ASYNC_RESP = GCIP_RKCI_GENERIC_CODE_FIRST + 2,
 	GCIP_RKCI_GENERIC_CODE_LAST = 0xFFFF,
 };
 

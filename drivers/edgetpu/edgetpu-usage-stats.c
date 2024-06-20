@@ -209,7 +209,7 @@ static int get_default_dvfs_freqs_num(void *data)
 	return EDGETPU_NUM_STATES;
 }
 
-static int get_default_dvfs_freq(int idx, void *data)
+static unsigned int get_default_dvfs_freq(int idx, void *data)
 {
 	if (idx >= EDGETPU_NUM_STATES)
 		return 0;

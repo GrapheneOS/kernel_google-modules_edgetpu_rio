@@ -3,42 +3,41 @@
  * Implements methods common to the family of EdgeTPUs for mobile devices to retrieve host side
  * debug dump segments and report them to SSCD.
  *
- * Copyright (C) 2021-2022 Google LLC
+ * Copyright (C) 2020-2022, 2024 Google LLC
  */
 
 #include <linux/atomic.h>
 #include <linux/bits.h>
+#include <linux/completion.h>
+#include <linux/debugfs.h>
 #include <linux/delay.h>
+#include <linux/dma-mapping.h>
+#include <linux/fs.h>
 #include <linux/ktime.h>
 #include <linux/mutex.h>
 #include <linux/platform_data/sscoredump.h>
 #include <linux/platform_device.h>
 #include <linux/rbtree.h>
+#include <linux/seq_file.h>
 #include <linux/slab.h>
+#include <linux/workqueue.h>
 
-#include <gcip/gcip-pm.h>
+#include <gcip/gcip-alloc-helper.h>
 
 #include "edgetpu-config.h"
+#include "edgetpu-debug.h"
 #include "edgetpu-device-group.h"
 #include "edgetpu-dump-info.h"
 #include "edgetpu-internal.h"
+#include "edgetpu-iremap-pool.h"
+#include "edgetpu-kci.h"
 #include "edgetpu-mailbox.h"
 #include "edgetpu-mapping.h"
+#include "edgetpu-mmu.h"
 #include "edgetpu-mobile-platform.h"
+#include "edgetpu-pm.h"
 #include "edgetpu-telemetry.h"
 #include "edgetpu-wakelock.h"
-#include "mobile-debug-dump.h"
-
-#include "edgetpu-debug-dump.c"
-
-/*
- * The minimum wait time in millisecond to be enforced between two successive calls to the SSCD
- * module to prevent the overwrite of the previous generated core dump files. SSCD module generates
- * the files whose name are at second precision i.e.
- * crashinfo_<SUBSYSTEM_NAME>_<%Y-%m-%d_%H-%M-%S>.txt and
- * coredump_<SUBSYSTEM_NAME>_<%Y-%m-%d_%H-%M-%S>.bin.
- */
-#define SSCD_REPORT_WAIT_TIME (1000ULL)
 
 #define EXTERNAL_DEBUG_NS_INVASIVE_MASK (BIT(2) - 1)
 #define EXTERNAL_DEBUG_NS_INVASIVE_ENABLE (BIT(0) | BIT(1))
@@ -54,7 +53,247 @@
 #define EXTERNAL_DEBUG_OS_LOCK_OSLK BIT(5)
 #define EXTERNAL_DEBUG_OS_LOCK_DLK BIT(6)
 
+/* Handle FW response data available. */
+void edgetpu_fw_debug_resp_ready(struct edgetpu_dev *etdev, u32 data_len)
+{
+	if (data_len > FW_DEBUG_BUFFER_SIZE)
+		data_len = FW_DEBUG_BUFFER_SIZE;
+	etdev->fw_debug_mem.data_len = data_len;
+	dma_sync_sgtable_for_cpu(etdev->dev, etdev->fw_debug_mem.sgt, DMA_BIDIRECTIONAL);
+	complete(&etdev->fw_debug_mem.rd_data_ready);
+}
+
+/* Read response data from firmware debug service. */
+static ssize_t fw_debug_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
+{
+	struct edgetpu_dev *etdev = file->private_data;
+
+	/* If no response data ready to be consumed wait for notification of KCI/RKCI response. */
+	if (wait_for_completion_interruptible(&etdev->fw_debug_mem.rd_data_ready))
+		return -EINTR;
+	if (etdev->fw_debug_mem.data_len - *ppos < count)
+		count = etdev->fw_debug_mem.data_len - *ppos;
+	if (copy_to_user(buf, etdev->fw_debug_mem.vaddr + *ppos, count))
+		return -EFAULT;
+	*ppos += count;
+	if (*ppos >= etdev->fw_debug_mem.data_len) {
+		*ppos = 0;
+		etdev->fw_debug_mem.data_len = 0;
+		reinit_completion(&etdev->fw_debug_mem.rd_data_ready);
+	}
+	return count;
+}
+
+/* Write/append command data to firmware debug service buffer. */
+static ssize_t fw_debug_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
+{
+	struct edgetpu_dev *etdev = file->private_data;
+
+	if (etdev->fw_debug_mem.data_len + count > FW_DEBUG_BUFFER_SIZE)
+		count = FW_DEBUG_BUFFER_SIZE - etdev->fw_debug_mem.data_len;
+	if (count) {
+		if (copy_from_user(etdev->fw_debug_mem.vaddr + etdev->fw_debug_mem.data_len, buf,
+				   count))
+			return -EFAULT;
+		etdev->fw_debug_mem.data_len += count;
+	}
+	return count;
+}
+
+/* Send command buffer to firmware if closing writeable fd. */
+static void fw_debug_release_flush(struct edgetpu_dev *etdev, struct file *file)
+{
+	size_t data_len = etdev->fw_debug_mem.data_len;
+	int ret;
+
+	if (!(file->f_mode & FMODE_WRITE))
+		return;
+	if (!etdev->fw_debug_mem.data_len)
+		return;
+
+	dma_sync_sgtable_for_device(etdev->dev, etdev->fw_debug_mem.sgt, DMA_BIDIRECTIONAL);
+	etdev->fw_debug_mem.data_len = 0;
+	ret = edgetpu_kci_fw_debug_cmd(etdev, FW_DEBUG_BUFFER_IOVA, data_len);
+	if (ret != GCIP_KCI_ERROR_OK && ret != GCIP_KCI_ERROR_UNAVAILABLE)
+		etdev_warn_ratelimited(etdev, "fw debug command error %d", ret);
+}
+
+static int fw_debug_release(struct inode *inode, struct file *file)
+{
+	struct edgetpu_dev *etdev = file->private_data;
+
+	fw_debug_release_flush(etdev, file);
+	edgetpu_pm_put(etdev);
+	return 0;
+}
+
+/* Open firmware debug service debugfs interface. */
+static int fw_debug_open(struct inode *inode, struct file *file)
+{
+	struct edgetpu_dev *etdev = inode->i_private;
+	int ret;
+
+	file->private_data = etdev;
+
+	ret = edgetpu_pm_get(etdev);
+	if (ret) {
+		etdev_err_ratelimited(etdev, "fw debug error powering TPU: %d", ret);
+		return ret;
+	}
+
+	/* Allocate command/response buffer and map to TPU if not already. */
+	if (etdev->fw_debug_mem.sgt)
+		return 0;
+
+	etdev->fw_debug_mem.sgt =
+		gcip_alloc_noncontiguous(etdev->dev, FW_DEBUG_BUFFER_SIZE, GFP_KERNEL);
+	if (!etdev->fw_debug_mem.sgt) {
+		edgetpu_pm_put(etdev);
+		return -ENOMEM;
+	}
+	etdev->fw_debug_mem.vaddr = gcip_noncontiguous_sgt_to_mem(etdev->fw_debug_mem.sgt);
+	ret = edgetpu_mmu_map_iova_sgt(etdev, FW_DEBUG_BUFFER_IOVA, etdev->fw_debug_mem.sgt,
+				       DMA_BIDIRECTIONAL, 0, edgetpu_mmu_default_domain(etdev));
+	if (ret) {
+		gcip_free_noncontiguous(etdev->fw_debug_mem.sgt);
+		etdev->fw_debug_mem.sgt = NULL;
+		edgetpu_pm_put(etdev);
+		return ret;
+	}
+
+	return 0;
+}
+
+static const struct file_operations fops_fw_debug = {
+	.open = fw_debug_open,
+	.read = fw_debug_read,
+	.write = fw_debug_write,
+	.owner = THIS_MODULE,
+	.release = fw_debug_release,
+};
+
+/* Init firmware debug interface. */
+static void edgetpu_fw_debug_init(struct edgetpu_dev *etdev)
+{
+	debugfs_create_file("fw_debug", 0660, etdev->d_entry, etdev, &fops_fw_debug);
+	init_completion(&etdev->fw_debug_mem.rd_data_ready);
+}
+
+/* De-init firmware debug interface. */
+static void edgetpu_fw_debug_exit(struct edgetpu_dev *etdev)
+{
+	/* All debugfs files are deleted by other code, not necessary to remove here. */
+
+	if (!etdev->fw_debug_mem.sgt)
+		return;
+
+	edgetpu_mmu_unmap_iova_sgt(etdev, FW_DEBUG_BUFFER_IOVA, etdev->fw_debug_mem.sgt,
+				   DMA_BIDIRECTIONAL, edgetpu_mmu_default_domain(etdev));
+	gcip_free_noncontiguous(etdev->fw_debug_mem.sgt);
+}
+
+void edgetpu_debug_dump_cpu_regs(struct edgetpu_dev *etdev)
+{
+	u32 val;
+
+	/* Acquires the PM count to ensure the TPU block and control cluster are powered. */
+	if (edgetpu_pm_get_if_powered(etdev, false)) {
+		dev_info(etdev->dev, "Device off. Skip CPU registers dump.");
+		return;
+	}
+
+	/* Non-secure invasive debug is disabled on fused devices. */
+	val = edgetpu_dev_read_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_AUTHSTATUS);
+	if ((val & EXTERNAL_DEBUG_NS_INVASIVE_MASK) != EXTERNAL_DEBUG_NS_INVASIVE_ENABLE) {
+		dev_info(etdev->dev, "Fused device. Skip CPU registers dump.");
+		goto err_pm_put;
+	}
+
+	/* Unlocks external debug lock. */
+	edgetpu_dev_write_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_LOCK_ACCESS,
+				  EXTERNAL_DEBUG_UNLOCK_KEY);
+	val = edgetpu_dev_read_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_LOCK_STATUS);
+	if (val & EXTERNAL_DEBUG_LOCK_SLK) {
+		dev_err(etdev->dev, "Fail to unlock external debug lock.");
+		goto err_pm_put;
+	}
+
+	/*
+	 * Checks if:
+	 *   1. external debug processor is in a low-power or powerdown state where the debug
+	 *      registers cannot be accessed.
+	 *   2. OS is double locked.
+	 *   3. external debug processor is in reset state.
+	 */
+	val = edgetpu_dev_read_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_PROCESSOR_STATUS);
+	if (!(val & EXTERNAL_DEBUG_OS_LOCK_UP) || (val & EXTERNAL_DEBUG_OS_LOCK_DLK) ||
+	    (val & EXTERNAL_DEBUG_OS_LOCK_R)) {
+		dev_err(etdev->dev, "External debug OS lock status unknown. Processor status: %#x",
+			val);
+		goto err_external_debug_lock;
+	}
+
+	/* Unlocks OS lock. */
+	edgetpu_dev_write_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_OS_LOCK_ACCESS,
+				  EXTERNAL_DEBUG_OS_UNLOCK_KEY);
+	val = edgetpu_dev_read_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_PROCESSOR_STATUS);
+	if (val & EXTERNAL_DEBUG_OS_LOCK_OSLK) {
+		dev_err(etdev->dev, "Fail to unlock external debug OS lock.");
+		goto err_external_debug_lock;
+	}
+
+	/* Reads external debug registers. */
+	val = edgetpu_dev_read_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_PROGRAM_COUNTER);
+	dev_info(etdev->dev, "External debug program counter: %#x", val);
+
+	/* Locks OS lock. */
+	edgetpu_dev_write_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_OS_LOCK_ACCESS,
+				  EXTERNAL_DEBUG_OS_LOCK_KEY);
+err_external_debug_lock:
+	/* Locks external debug lock. */
+	edgetpu_dev_write_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_LOCK_ACCESS,
+				  EXTERNAL_DEBUG_LOCK_KEY);
+err_pm_put:
+	edgetpu_pm_put(etdev);
+}
+
+#if IS_ENABLED(CONFIG_SUBSYSTEM_COREDUMP) || IS_ENABLED(CONFIG_EDGETPU_TEST)
+
+/*
+ * The minimum wait time in millisecond to be enforced between two successive calls to the SSCD
+ * module to prevent the overwrite of the previous generated core dump files. SSCD module generates
+ * the files whose name are at second precision i.e.
+ * crashinfo_<SUBSYSTEM_NAME>_<%Y-%m-%d_%H-%M-%S>.txt and
+ * coredump_<SUBSYSTEM_NAME>_<%Y-%m-%d_%H-%M-%S>.bin.
+ */
+#define SSCD_REPORT_WAIT_TIME (1000ULL)
+
 #define SET_FIELD(info, obj, __field) ((info)->__field = (obj)->__field)
+
+static int edgetpu_get_debug_dump_set(void *data, u64 val)
+{
+	struct edgetpu_dev *etdev = data;
+	int ret = edgetpu_pm_get(etdev);
+
+	if (ret)
+		return ret;
+	edgetpu_debug_dump(etdev, DUMP_REASON_REQ_BY_USER);
+	edgetpu_pm_put(etdev);
+	return 0;
+}
+
+DEFINE_DEBUGFS_ATTRIBUTE(fops_get_debug_dump, NULL, edgetpu_get_debug_dump_set, "%llu\n");
+
+/*
+ * Creates debugFS entries for interacting with debug dump functions.
+ *
+ * This is expected to be called by edgetpu_debug_dump_init().
+ */
+static inline void edgetpu_setup_debug_dump_fs(struct edgetpu_dev *etdev)
+{
+	/* forwards write requests to edgetpu_debug_dump() */
+	debugfs_create_file("get_debug_dump", 0220, etdev->d_entry, etdev, &fops_get_debug_dump);
+}
 
 /* Helper structure to hold the segments to be reported to SSCD. */
 struct sscd_segments_context {
@@ -244,7 +483,8 @@ static int mobile_sscd_collect_group_mappings_info(struct edgetpu_device_group *
 	return 0;
 }
 
-static int mobile_sscd_collect_etdev_info(struct edgetpu_dev *etdev, struct sscd_segments_context *ctx)
+static int mobile_sscd_collect_etdev_info(struct edgetpu_dev *etdev,
+					  struct sscd_segments_context *ctx)
 {
 	struct edgetpu_dump_segment *seg_hdr;
 	struct edgetpu_dev_info *info;
@@ -300,7 +540,7 @@ static int mobile_sscd_collect_clients_info(struct edgetpu_client **clients, siz
 		SET_FIELD(info, client, pid);
 		SET_FIELD(info, client, tgid);
 		SET_FIELD(info, client, perdie_events);
-		info->wakelock_req_count = client->wakelock->req_count;
+		info->wakelock_req_count = client->wakelock.req_count;
 		mutex_lock(&client->group_lock);
 		info->group_workload_id = client->group ? client->group->workload_id : ~0u;
 		mutex_unlock(&client->group_lock);
@@ -434,88 +674,14 @@ out_put_clients:
 	return ret;
 }
 
-/* Generates coredump sent by the firmware. */
-static int mobile_sscd_generate_coredump(void *p_etdev, void *p_dump_setup)
-{
-	struct edgetpu_dev *etdev;
-	struct edgetpu_debug_dump_setup *dump_setup;
-	struct edgetpu_mobile_platform_dev *pdev;
-	struct sscd_segments_context sscd_ctx;
-	struct edgetpu_debug_dump *debug_dump;
-	struct edgetpu_crash_reason *crash_reason;
-	struct edgetpu_dump_segment *dump_seg;
-	char crash_info[128];
-	int i, ret;
-	u64 offset;
-
-	if (!p_etdev || !p_dump_setup)
-		return -EINVAL;
-
-	etdev = (struct edgetpu_dev *)p_etdev;
-	dump_setup = (struct edgetpu_debug_dump_setup *)p_dump_setup;
-	pdev = to_mobile_dev(etdev);
-	ret = sscd_ctx_init(&sscd_ctx, &pdev->sscd_info);
-	if (ret)
-		goto err;
-
-	debug_dump = (struct edgetpu_debug_dump *)(dump_setup + 1);
-
-	/* Populate crash reason */
-	crash_reason =
-		(struct edgetpu_crash_reason *)((u8 *)dump_setup + debug_dump->crash_reason_offset);
-	scnprintf(crash_info, sizeof(crash_info), "[edgetpu_coredump] error code: %#llx",
-		  crash_reason->code);
-
-	/* Populate sscd segments */
-	dump_seg = (struct edgetpu_dump_segment *)((u8 *)dump_setup +
-						   debug_dump->dump_segments_offset);
-	offset = debug_dump->dump_segments_offset;
-	for (i = 0; i < debug_dump->dump_segments_num; i++) {
-		struct sscd_segment seg = {
-			.addr = dump_seg,
-			.size = sizeof(struct edgetpu_dump_segment) + dump_seg->size,
-			.paddr = (void *)(etdev->debug_dump_mem.dma_addr + offset),
-			.vaddr = (void *)(etdev->debug_dump_mem.vaddr + offset),
-		};
-
-		ret = sscd_ctx_push_segment(&sscd_ctx, &seg, false);
-		if (ret)
-			goto err_release;
-		offset += sizeof(struct edgetpu_dump_segment) + dump_seg->size;
-		dump_seg = (struct edgetpu_dump_segment *)((u8 *)dump_setup +
-							   ALIGN(offset, sizeof(uint64_t)));
-	}
-
-	ret = mobile_collect_device_info(etdev, &sscd_ctx);
-	if (ret)
-		goto err_release;
-
-	ret = sscd_ctx_report_and_release(&sscd_ctx, crash_info);
-	if (ret)
-		goto err;
-
-	return 0;
-
-err_release:
-	sscd_ctx_release(&sscd_ctx);
-err:
-	etdev_err(etdev, "failed to generate coredump: %d", ret);
-	return ret;
-}
-
 /* Generates general dump, including telemetry logs and device info. */
-static int mobile_sscd_generate_dump(void *p_etdev, void *p_dump_setup)
+static int mobile_sscd_generate_dump(struct edgetpu_dev *etdev)
 {
-	struct edgetpu_dev *etdev;
 	struct edgetpu_mobile_platform_dev *pdev;
 	struct sscd_segments_context sscd_ctx;
 	static const char crash_info[] = "[edgetpu dump]";
 	int i, ret;
 
-	if (!p_etdev)
-		return -EINVAL;
-
-	etdev = (struct edgetpu_dev *)p_etdev;
 	pdev = to_mobile_dev(etdev);
 	ret = sscd_ctx_init(&sscd_ctx, &pdev->sscd_info);
 	if (ret)
@@ -547,82 +713,24 @@ static int mobile_sscd_generate_dump(void *p_etdev, void *p_dump_setup)
 err_release:
 	sscd_ctx_release(&sscd_ctx);
 err:
-	etdev_err(etdev, "failed to generate dump: %d", ret);
+	etdev_warn(etdev, "failed to generate dump: %d", ret);
 	return ret;
 }
 
-void edgetpu_debug_dump_cpu_regs(struct edgetpu_dev *etdev)
+void edgetpu_debug_dump(struct edgetpu_dev *etdev, u64 dump_reason)
 {
-	u32 val;
+	int ret;
 
-	/* Acquires the PM count to ensure the TPU block and control cluster are powered. */
-	if (gcip_pm_get_if_powered(etdev->pm, false)) {
-		dev_info(etdev->dev, "Device off. Skip CPU registers dump.");
-		return;
-	}
-
-	/* Non-secure invasive debug is disabled on fused devices. */
-	val = edgetpu_dev_read_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_AUTHSTATUS);
-	if ((val & EXTERNAL_DEBUG_NS_INVASIVE_MASK) != EXTERNAL_DEBUG_NS_INVASIVE_ENABLE) {
-		dev_info(etdev->dev, "Fused device. Skip CPU registers dump.");
-		goto err_pm_put;
-	}
-
-	/* Unlocks external debug lock. */
-	edgetpu_dev_write_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_LOCK_ACCESS,
-				  EXTERNAL_DEBUG_UNLOCK_KEY);
-	val = edgetpu_dev_read_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_LOCK_STATUS);
-	if (val & EXTERNAL_DEBUG_LOCK_SLK) {
-		dev_err(etdev->dev, "Fail to unlock external debug lock.");
-		goto err_pm_put;
-	}
-
-	/*
-	 * Checks if:
-	 *   1. external debug processor is in a low-power or powerdown state where the debug
-	 *      registers cannot be accessed.
-	 *   2. OS is double locked.
-	 *   3. external debug processor is in reset state.
-	 */
-	val = edgetpu_dev_read_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_PROCESSOR_STATUS);
-	if (!(val & EXTERNAL_DEBUG_OS_LOCK_UP) || (val & EXTERNAL_DEBUG_OS_LOCK_DLK) ||
-	    (val & EXTERNAL_DEBUG_OS_LOCK_R)) {
-		dev_err(etdev->dev, "External debug OS lock status unknown. Processor status: %#x",
-			val);
-		goto err_external_debug_lock;
-	}
-
-	/* Unlocks OS lock. */
-	edgetpu_dev_write_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_OS_LOCK_ACCESS,
-				  EXTERNAL_DEBUG_OS_UNLOCK_KEY);
-	val = edgetpu_dev_read_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_PROCESSOR_STATUS);
-	if (val & EXTERNAL_DEBUG_OS_LOCK_OSLK) {
-		dev_err(etdev->dev, "Fail to unlock external debug OS lock.");
-		goto err_external_debug_lock;
-	}
-
-	/* Reads external debug registers. */
-	val = edgetpu_dev_read_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_PROGRAM_COUNTER);
-	dev_info(etdev->dev, "External debug program counter: %#x", val);
-
-	/* Locks OS lock. */
-	edgetpu_dev_write_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_OS_LOCK_ACCESS,
-				  EXTERNAL_DEBUG_OS_LOCK_KEY);
-err_external_debug_lock:
-	/* Locks external debug lock. */
-	edgetpu_dev_write_32_sync(etdev, EDGETPU_REG_EXTERNAL_DEBUG_LOCK_ACCESS,
-				  EXTERNAL_DEBUG_LOCK_KEY);
-err_pm_put:
-	gcip_pm_put(etdev->pm);
+	ret = mobile_sscd_generate_dump(etdev);
+	if (ret)
+		etdev_warn(etdev, "Failed to generate debug dump: %d\n", ret);
 }
 
-int edgetpu_debug_dump_init(struct edgetpu_dev *etdev)
+static int edgetpu_debug_dump_init(struct edgetpu_dev *etdev)
 {
-	struct edgetpu_debug_dump_setup *dump_setup;
 	struct edgetpu_mobile_platform_dev *pdev = to_mobile_dev(etdev);
 	struct platform_device *sscd_dev;
 	struct sscd_platform_data *sscd_pdata;
-	size_t size = EDGETPU_DEBUG_DUMP_MEM_SIZE;
 	int ret;
 
 	sscd_pdata = devm_kzalloc(etdev->dev, sizeof(*sscd_pdata), GFP_KERNEL);
@@ -650,45 +758,11 @@ int edgetpu_debug_dump_init(struct edgetpu_dev *etdev)
 		etdev_err(etdev, "SSCD platform device registration failed: %d", ret);
 		goto out_free_sscd_dev;
 	}
-	/*
-	 * Allocate a buffer for various dump segments
-	 */
-	ret = edgetpu_alloc_coherent(etdev, size, &etdev->debug_dump_mem);
-	if (ret) {
-		etdev_err(etdev, "Debug dump seg alloc failed");
-		etdev->debug_dump_mem.vaddr = NULL;
-		goto out_unregister_platform;
-	}
-	dump_setup = (struct edgetpu_debug_dump_setup *)etdev->debug_dump_mem.vaddr;
-	memset(dump_setup, 0, size);
-	dump_setup->dump_mem_size = size;
-
-	/*
-	 * Allocate memory for debug dump handlers
-	 */
-	etdev->debug_dump_handlers =
-		kcalloc(DUMP_REASON_NUM, sizeof(*etdev->debug_dump_handlers), GFP_KERNEL);
-	if (!etdev->debug_dump_handlers) {
-		ret = -ENOMEM;
-		goto out_unregister_platform;
-	}
-	etdev->debug_dump_handlers[DUMP_REASON_REQ_BY_USER] = mobile_sscd_generate_coredump;
-	etdev->debug_dump_handlers[DUMP_REASON_RECOVERABLE_FAULT] = mobile_sscd_generate_coredump;
-	etdev->debug_dump_handlers[DUMP_REASON_FW_CHECKPOINT] = mobile_sscd_generate_coredump;
-	etdev->debug_dump_handlers[DUMP_REASON_UNRECOVERABLE_FAULT] = mobile_sscd_generate_dump;
-	etdev->debug_dump_handlers[DUMP_REASON_NON_FATAL_CRASH] = mobile_sscd_generate_dump;
-	etdev->debug_dump_handlers[DUMP_REASON_SW_WATCHDOG_TIMEOUT] = mobile_sscd_generate_dump;
-
 	pdev->sscd_info.pdata = sscd_pdata;
 	pdev->sscd_info.dev = sscd_dev;
 	edgetpu_setup_debug_dump_fs(etdev);
-
-	INIT_WORK(&etdev->debug_dump_work, edgetpu_debug_dump_work);
-
 	return ret;
 
-out_unregister_platform:
-	platform_device_unregister(sscd_dev);
 out_free_sscd_dev:
 	devm_kfree(etdev->dev, sscd_dev);
 out_free_pdata:
@@ -696,19 +770,40 @@ out_free_pdata:
 	return ret;
 }
 
-void edgetpu_debug_dump_exit(struct edgetpu_dev *etdev)
+static void edgetpu_debug_dump_exit(struct edgetpu_dev *etdev)
 {
-	if (!etdev->debug_dump_mem.vaddr) {
-		etdev_dbg(etdev, "Debug dump not allocated");
-		return;
-	}
-
-	cancel_work_sync(&etdev->debug_dump_work);
-
-	/*
-	 * Free the memory assigned for debug dump
-	 */
-	edgetpu_free_coherent(etdev, &etdev->debug_dump_mem);
-	kfree(etdev->debug_dump_handlers);
 	platform_device_unregister(to_mobile_dev(etdev)->sscd_info.dev);
+}
+
+#else /* IS_ENABLED(CONFIG_SUBSYSTEM_COREDUMP) || IS_ENABLED(CONFIG_EDGETPU_TEST) */
+
+static int edgetpu_debug_dump_init(struct edgetpu_dev *etdev)
+{
+	return 0;
+}
+
+static void edgetpu_debug_dump_exit(struct edgetpu_dev *etdev)
+{
+}
+
+void edgetpu_debug_dump(struct edgetpu_dev *etdev, u64 dump_reason)
+{
+}
+
+#endif /* IS_ENABLED(CONFIG_SUBSYSTEM_COREDUMP) || IS_ENABLED(CONFIG_EDGETPU_TEST) */
+
+void edgetpu_debug_init(struct edgetpu_dev *etdev)
+{
+	int ret;
+
+	ret = edgetpu_debug_dump_init(etdev);
+	if (ret)
+		etdev_warn(etdev, "debug dump init fail: %d", ret);
+	edgetpu_fw_debug_init(etdev);
+}
+
+void edgetpu_debug_exit(struct edgetpu_dev *etdev)
+{
+	edgetpu_debug_dump_exit(etdev);
+	edgetpu_fw_debug_exit(etdev);
 }

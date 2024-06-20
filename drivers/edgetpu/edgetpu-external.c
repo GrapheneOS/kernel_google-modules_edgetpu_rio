@@ -12,7 +12,7 @@
 
 #include <soc/google/tpu-ext.h>
 
-#include <gcip/iif/iif-manager.h>
+#include <iif/iif-manager.h>
 
 #include "edgetpu-config.h"
 #include "edgetpu-device-group.h"

@@ -26,11 +26,12 @@
 
 #include <gcip/gcip-dma-fence.h>
 #include <gcip/gcip-firmware.h>
-#include <gcip/gcip-pm.h>
 #include <gcip/gcip-thermal.h>
-#include <gcip/iif/iif-manager.h>
+#include <iif/iif-manager.h>
 
 #include "edgetpu.h"
+#include "edgetpu-debug.h"
+#include "edgetpu-wakelock.h"
 
 #define get_dev_for_logging(etdev)                                                                 \
 	((etdev)->etiface && (etdev)->etiface->etcdev ? (etdev)->etiface->etcdev : (etdev)->dev)
@@ -54,7 +55,7 @@
 
 typedef u64 tpu_addr_t;
 
-/* "Coherent memory" allocated via dma_alloc_coherent or iremap. */
+/* "Coherent memory" allocated in iremap region. */
 struct edgetpu_coherent_mem {
 	void *vaddr;		/* kernel VA, no allocation if NULL */
 	dma_addr_t dma_addr;	/* TPU DMA address (default domain) */
@@ -64,7 +65,6 @@ struct edgetpu_coherent_mem {
 };
 
 struct edgetpu_device_group;
-struct edgetpu_wakelock;
 struct edgetpu_dev_iface;
 struct edgetpu_soc_data;
 
@@ -94,7 +94,7 @@ struct edgetpu_client {
 	/* the interface from which this client was opened */
 	struct edgetpu_dev_iface *etiface;
 	/* Per-client request to keep device active */
-	struct edgetpu_wakelock *wakelock;
+	struct edgetpu_wakelock wakelock;
 	/* Bit field of registered per die events */
 	u64 perdie_events;
 };
@@ -123,11 +123,10 @@ struct edgetpu_mapping;
 struct edgetpu_mailbox_manager;
 struct edgetpu_kci;
 struct edgetpu_ikv;
+struct edgetpu_pm;
 struct edgetpu_telemetry_ctx;
 struct edgetpu_mempool;
 struct gcip_kci_response_element;
-
-typedef int(*edgetpu_debug_dump_handlers)(void *etdev, void *dump_setup);
 
 #define EDGETPU_DEVICE_NAME_MAX	64
 
@@ -143,6 +142,7 @@ enum edgetpu_dev_state {
 	ETDEV_STATE_GOOD = 1,	/* healthy firmware running. */
 	ETDEV_STATE_FWLOADING = 2, /* firmware is getting loaded on device. */
 	ETDEV_STATE_BAD = 3,	/* firmware/device is in unusable state. */
+	ETDEV_STATE_SHUTDOWN = 4, /* driver is shutting down, don't start firmware. */
 };
 
 /*
@@ -197,7 +197,7 @@ struct edgetpu_dev {
 	struct edgetpu_telemetry_ctx *telemetry;
 	struct gcip_thermal *thermal;
 	struct edgetpu_usage_stats *usage_stats; /* usage stats private data */
-	struct gcip_pm *pm; /* Power management interface */
+	struct edgetpu_pm *pm; /* Power management interface */
 	/* Memory pool in instruction remap region */
 	struct edgetpu_mempool *iremap_pool;
 	struct edgetpu_sw_wdt *etdev_sw_wdt;	/* software watchdog */
@@ -212,13 +212,12 @@ struct edgetpu_dev {
 	uint firmware_crash_count;
 	uint watchdog_timeout_count;
 
-	struct edgetpu_coherent_mem debug_dump_mem;	/* debug dump memory */
-	/* debug dump handlers */
-	edgetpu_debug_dump_handlers *debug_dump_handlers;
-	struct work_struct debug_dump_work;
-
 	/* Inter-IP fence manager. */
 	struct iif_manager *iif_mgr;
+	struct device *iif_dev;
+
+	/* Firmware debug service */
+	struct edgetpu_fw_debug_mem fw_debug_mem;
 };
 
 struct edgetpu_dev_iface {
@@ -286,17 +285,6 @@ static inline void edgetpu_dev_write_64(struct edgetpu_dev *etdev,
 	writeq_relaxed(value, etdev->regs.mem + reg_offset);
 }
 
-/*
- * Attempt to allocate memory from the dma coherent memory using dma_alloc.
- * Use this to allocate memory outside the instruction remap pool.
- */
-int edgetpu_alloc_coherent(struct edgetpu_dev *etdev, size_t size,
-			   struct edgetpu_coherent_mem *mem);
-/*
- * Free memory allocated by the function above from the dma coherent memory.
- */
-void edgetpu_free_coherent(struct edgetpu_dev *etdev, struct edgetpu_coherent_mem *mem);
-
 /* Checks if @file belongs to edgetpu driver */
 bool is_edgetpu_file(struct file *file);
 
@@ -336,10 +324,6 @@ void edgetpu_fs_remove(struct edgetpu_dev *dev);
 struct dentry *edgetpu_fs_debugfs_dir(void);
 
 /* Core/Device/FS -> Chip API */
-
-/* Chip-specific init/exit */
-void edgetpu_chip_init(struct edgetpu_dev *etdev);
-void edgetpu_chip_exit(struct edgetpu_dev *etdev);
 
 /* Device -> Core API */
 

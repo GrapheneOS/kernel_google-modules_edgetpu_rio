@@ -5,10 +5,11 @@ CURRENT_DIR=$(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 GIT_PATH=$(CURRENT_DIR)/../../
 GIT_BIN=/usr/bin/git
 GIT=$(GIT_BIN) -C $(GIT_PATH)
+# TODO(b/336717718): Remove include path of embedded IIF
 ccflags-y	+= $(EXTRA_CFLAGS) -DCONFIG_EDGETPU_TELEMETRY_TRACE=1 -DCONFIG_GCIP=1 \
 		   -I$(CURRENT_DIR)/include \
 		   -I$(CURRENT_DIR)/gcip-kernel-driver/include \
-		   -I$(KERNEL_SRC)/../private/google-modules/power/mitigation
+		   -I$(CURRENT_DIR)/gcip-kernel-driver/drivers/gcip/iif/include
 # Flags needed for external modules.
 ccflags-y	+= -DCONFIG_GOOGLE_BCL
 
@@ -24,35 +25,33 @@ GCIP_DIR=gcip-kernel-driver/drivers/gcip
 edgetpu-objs	:= edgetpu-async.o \
 		   edgetpu-dmabuf.o \
 		   edgetpu-firmware-util.o \
-		   edgetpu-firmware.o \
+		   edgetpu-ikv-additional-info.o \
 		   edgetpu-ikv-mailbox-ops.o \
 		   edgetpu-ikv.o \
 		   edgetpu-iremap-pool.o \
-		   edgetpu-kci.o \
-		   edgetpu-mailbox.o \
 		   edgetpu-mapping.o \
 		   edgetpu-sw-watchdog.o \
 		   edgetpu-telemetry.o \
-		   edgetpu-thermal.o \
 		   edgetpu-trace.o
 
-ifndef CONFIG_EDGETPU_TEST
-# Unit testing doesn't need this because GCIP is compiled as a built-in there.
 edgetpu-objs	+= $(GCIP_DIR)/gcip.o
-endif
 
 rio-objs	:= rio-core.o \
-		   rio-debug-dump.o \
+		   rio-debug.o \
 		   rio-device-group.o \
 		   rio-device.o \
 		   rio-external.o \
 		   rio-firmware.o \
 		   rio-fs.o \
+		   rio-kci.o \
 		   rio-iommu.o \
+		   rio-mailbox.o \
 		   rio-platform.o \
 		   rio-pm.o \
 		   rio-soc.o \
+		   rio-thermal.o \
 		   rio-usage-stats.o \
+		   rio-vii-packet.o \
 		   rio-wakelock.o \
 		   $(edgetpu-objs)
 
@@ -62,13 +61,24 @@ CFLAGS_rio-device.o := -DCONFIG_RIO=1
 CFLAGS_rio-device-group.o := -DCONFIG_RIO=1
 CFLAGS_rio-firmware.o := -DCONFIG_RIO=1
 CFLAGS_rio-iommu.o := -DCONFIG_RIO=1
+CFLAGS_rio-kci.o := -DCONFIG_RIO=1
+CFLAGS_rio-mailbox.o := -DCONFIG_RIO=1
 CFLAGS_rio-platform.o := -DCONFIG_RIO=1
 CFLAGS_rio-pm.o := -DCONFIG_RIO=1
-CFLAGS_rio-debug-dump.o := -DCONFIG_RIO=1
+CFLAGS_rio-debug.o := -DCONFIG_RIO=1
+CFLAGS_rio-thermal.o := -DCONFIG_RIO=1
 CFLAGS_rio-usage-stats.o := -DCONFIG_RIO=1
+CFLAGS_rio-vii-packet.o := -DCONFIG_RIO=1
 CFLAGS_rio-wakelock.o := -DCONFIG_RIO=1
 CFLAGS_rio-external.o := -DCONFIG_RIO=1
 CFLAGS_rio-soc.o := -DCONFIG_RIO=1
 
 
+
+
+
+ifneq ($(wildcard $(KERNEL_SRC)/../private/google-modules/),)
+ccflags-y	+= -I$(KERNEL_SRC)/../private/google-modules/power/mitigation \
+		   -I$(KERNEL_SRC)/../private/google-modules/iif/include
+endif
 

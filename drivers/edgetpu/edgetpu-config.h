@@ -38,4 +38,8 @@
 #define EDGETPU_FEATURE_ALWAYS_ON 0
 #endif
 
+#ifndef EDGETPU_USE_LITEBUF_VII
+#define EDGETPU_USE_LITEBUF_VII 0
+#endif
+
 #endif /* __EDGETPU_CONFIG_H__ */
