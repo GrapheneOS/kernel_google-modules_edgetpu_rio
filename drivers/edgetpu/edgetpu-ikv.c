@@ -448,6 +448,9 @@ int edgetpu_ikv_send_cmd(struct edgetpu_ikv *etikv, void *cmd, struct list_head 
 		ret = do_send_cmd(args);
 		if (ret)
 			goto err_put_out_fence_array;
+		/* If the command was successfully sent, args is no longer needed. */
+		kfree(args->cmd);
+		kfree(args);
 		return 0;
 	}
 
