@@ -294,6 +294,7 @@ static int send_cmd_thread_fn(void *data)
 		gcip_fence_array_put(args->ikv_resp->in_fence_array);
 		edgetpu_ikv_additional_info_free(args->ikv_resp->etikv->etdev,
 						 &args->ikv_resp->additional_info);
+		kfree(args->ikv_resp->resp);
 		kfree(args->ikv_resp);
 		goto out_free_args;
 	}
