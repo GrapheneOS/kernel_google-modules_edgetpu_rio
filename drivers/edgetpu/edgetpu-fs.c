@@ -92,6 +92,21 @@ static int edgetpu_fs_open(struct inode *inode, struct file *file)
 {
 	struct edgetpu_dev_iface *etiface =
 		container_of(inode->i_cdev, struct edgetpu_dev_iface, cdev);
+	struct edgetpu_dev *etdev = etiface->etdev;
+	int ret = 0;
+
+	/* Initialize `vii_format` the first time open() is called. */
+	mutex_lock(&etdev->vii_format_uninitialized_lock);
+	if (etdev->vii_format == EDGETPU_VII_FORMAT_UNKNOWN) {
+		ret = edgetpu_pm_get(etdev);
+		if (ret) {
+			etdev_err(etdev, "Failed to load firmware to init vii_format %d", ret);
+			mutex_unlock(&etdev->vii_format_uninitialized_lock);
+			return ret;
+		}
+		edgetpu_pm_put(etdev);
+	}
+	mutex_unlock(&etdev->vii_format_uninitialized_lock);
 
 	return edgetpu_open(etiface, file);
 }
@@ -555,7 +570,7 @@ edgetpu_ioctl_acquire_ext_mailbox(struct edgetpu_client *client,
 	if (copy_from_user(&ext_mailbox, argp, sizeof(ext_mailbox)))
 		return -EFAULT;
 
-	ret = edgetpu_chip_acquire_ext_mailbox(client, &ext_mailbox);
+	ret = edgetpu_acquire_ext_mailbox(client, &ext_mailbox);
 	if (ret)
 		etdev_err(client->etdev, "client pid %d failed to acquire ext mailbox",
 			  client->pid);
@@ -571,7 +586,7 @@ edgetpu_ioctl_release_ext_mailbox(struct edgetpu_client *client,
 	if (copy_from_user(&ext_mailbox, argp, sizeof(ext_mailbox)))
 		return -EFAULT;
 
-	return edgetpu_chip_release_ext_mailbox(client, &ext_mailbox);
+	return edgetpu_release_ext_mailbox(client, &ext_mailbox);
 }
 
 static int edgetpu_ioctl_get_fatal_errors(struct edgetpu_client *client,
@@ -674,9 +689,6 @@ out:
 static int edgetpu_ioctl_vii_command(struct edgetpu_client *client,
 				     struct edgetpu_vii_command_ioctl __user *argp)
 {
-#if EDGETPU_USE_LITEBUF_VII
-	return -EOPNOTSUPP;
-#else
 	struct edgetpu_vii_command_ioctl command;
 	struct gcip_fence_array *in_fence_array;
 	struct gcip_fence_array *out_fence_array;
@@ -687,7 +699,8 @@ static int edgetpu_ioctl_vii_command(struct edgetpu_client *client,
 
 	trace_edgetpu_vii_command_start(client);
 
-	if (!client->etdev->mailbox_manager->use_ikv) {
+	if (!client->etdev->mailbox_manager->use_ikv ||
+	    client->etdev->vii_format != EDGETPU_VII_FORMAT_FLATBUFFER) {
 		ret = -EOPNOTSUPP;
 		goto err_ret;
 	}
@@ -714,7 +727,9 @@ static int edgetpu_ioctl_vii_command(struct edgetpu_client *client,
 	}
 
 	ret = edgetpu_device_group_send_vii_command(client->group, &command.command, in_fence_array,
-						    out_fence_array, NULL);
+						    out_fence_array, /*additional_info=*/NULL,
+						    /*release_callback=*/NULL,
+						    /*release_data=*/NULL);
 	gcip_fence_array_put(out_fence_array);
 err_free_in_fence:
 	gcip_fence_array_put(in_fence_array);
@@ -723,21 +738,18 @@ err_unlock:
 err_ret:
 	trace_edgetpu_vii_command_end(client, &command, ret);
 	return ret;
-#endif
 }
 
 static int edgetpu_ioctl_vii_response(struct edgetpu_client *client,
 				      struct edgetpu_vii_response_ioctl __user *argp)
 {
-#if EDGETPU_USE_LITEBUF_VII
-	return -EOPNOTSUPP;
-#else
 	struct edgetpu_vii_response_ioctl ibuf;
 	int ret = 0;
 
 	trace_edgetpu_vii_response_start(client);
 
-	if (!client->etdev->mailbox_manager->use_ikv) {
+	if (!client->etdev->mailbox_manager->use_ikv ||
+	    client->etdev->vii_format != EDGETPU_VII_FORMAT_FLATBUFFER) {
 		ret = -EOPNOTSUPP;
 		goto out_end_trace;
 	}
@@ -760,15 +772,24 @@ out_unlock:
 out_end_trace:
 	trace_edgetpu_vii_response_end(client, &ibuf, ret);
 	return ret;
-#endif
+}
+
+struct litebuf_command_iremap_buffer {
+	struct edgetpu_dev *etdev;
+	struct edgetpu_coherent_mem mem;
+};
+
+static void release_litebuf_iremap_buffer(void *data)
+{
+	struct litebuf_command_iremap_buffer *buffer = data;
+
+	edgetpu_iremap_free(buffer->etdev, &buffer->mem);
+	kfree(buffer);
 }
 
 static int edgetpu_ioctl_vii_litebuf_command(struct edgetpu_client *client,
 					     struct edgetpu_vii_litebuf_command_ioctl __user *argp)
 {
-#if !EDGETPU_USE_LITEBUF_VII
-	return -EOPNOTSUPP;
-#else
 	struct edgetpu_vii_litebuf_command_ioctl ibuf;
 	struct edgetpu_vii_litebuf_command cmd;
 	struct gcip_fence_array *in_fence_array;
@@ -776,6 +797,8 @@ static int edgetpu_ioctl_vii_litebuf_command(struct edgetpu_client *client,
 	struct edgetpu_ikv_additional_info additional_info = {};
 	uint16_t *in_iif_fences, *out_iif_fences;
 	int num_in_iif_fences, num_out_iif_fences;
+	struct litebuf_command_iremap_buffer *iremap_buffer = NULL;
+	void (*release_callback)(void *) = NULL;
 	int ret = 0;
 
 	if (copy_from_user(&ibuf, argp, sizeof(ibuf)))
@@ -783,7 +806,8 @@ static int edgetpu_ioctl_vii_litebuf_command(struct edgetpu_client *client,
 
 	trace_edgetpu_vii_litebuf_command_start(client);
 
-	if (!client->etdev->mailbox_manager->use_ikv) {
+	if (!client->etdev->mailbox_manager->use_ikv ||
+	    client->etdev->vii_format != EDGETPU_VII_FORMAT_LITEBUF) {
 		ret = -EOPNOTSUPP;
 		goto out_end_trace;
 	}
@@ -801,19 +825,34 @@ static int edgetpu_ioctl_vii_litebuf_command(struct edgetpu_client *client,
 		}
 		cmd.type = EDGETPU_VII_LITEBUF_RUNTIME_COMMAND;
 	} else {
+		iremap_buffer = kzalloc(sizeof(*iremap_buffer), GFP_KERNEL);
+		if (!iremap_buffer) {
+			ret = -ENOMEM;
+			goto out_unlock;
+		}
+
+		iremap_buffer->etdev = client->etdev;
+		ret = edgetpu_iremap_alloc(client->etdev, ibuf.litebuf_size, &iremap_buffer->mem);
+		if (ret)
+			goto out_free_large_command_buffer;
+
+		if (copy_from_user(iremap_buffer->mem.vaddr, (u8 __user *)ibuf.litebuf_address,
+				   ibuf.litebuf_size)) {
+			ret = -EFAULT;
+			goto out_free_large_command_iremap;
+		}
+
+		cmd.large_runtime_command.address = iremap_buffer->mem.dma_addr;
 		cmd.large_runtime_command.size_bytes = ibuf.litebuf_size;
 		cmd.type = EDGETPU_VII_LITEBUF_LARGE_RUNTIME_COMMAND;
-		/* TODO(b/320514103): Allocate iremap buffer and copy litebuf to it */
-		etdev_dbg(client->etdev, "Support for LARGE_RUNTIME_COMMANDs not yet implemented");
-		ret = -EINVAL;
-		goto out_unlock;
+		release_callback = release_litebuf_iremap_buffer;
 	}
 
 	/*
 	 * In-kernel VII expects a command to have the client-provided sequence number set.
 	 * It will be saved and overridden by the in-kernel VII stack before it is sent to firmware.
 	 */
-	edgetpu_vii_command_set_seq_number(&cmd, ibuf.seq);
+	edgetpu_vii_command_set_seq_number(client->etdev, &cmd, ibuf.seq);
 
 	in_fence_array = get_fence_array_from_user(client->etdev, ibuf.in_fence_count,
 						   (int __user *)ibuf.in_fence_array, true, false,
@@ -848,7 +887,8 @@ static int edgetpu_ioctl_vii_litebuf_command(struct edgetpu_client *client,
 					 out_iif_fences, num_out_iif_fences, 0, NULL, 0);
 
 	ret = edgetpu_device_group_send_vii_command(client->group, &cmd, in_fence_array,
-						    out_fence_array, &additional_info);
+						    out_fence_array, &additional_info,
+						    release_callback, iremap_buffer);
 
 	kfree(out_iif_fences);
 out_free_in_iif_fences:
@@ -857,21 +897,23 @@ out_free_out_fence_array:
 	gcip_fence_array_put(out_fence_array);
 out_free_in_fence_array:
 	gcip_fence_array_put(in_fence_array);
+out_free_large_command_iremap:
+	if (ret && iremap_buffer)
+		edgetpu_iremap_free(client->etdev, &iremap_buffer->mem);
+out_free_large_command_buffer:
+	if (ret && iremap_buffer)
+		kfree(iremap_buffer);
 out_unlock:
 	UNLOCK(client);
 out_end_trace:
 	trace_edgetpu_vii_litebuf_command_end(client, &ibuf, ret);
 	return ret;
-#endif
 }
 
 static int
 edgetpu_ioctl_vii_litebuf_response(struct edgetpu_client *client,
 				   struct edgetpu_vii_litebuf_response_ioctl __user *argp)
 {
-#if !EDGETPU_USE_LITEBUF_VII
-	return -EOPNOTSUPP;
-#else
 	struct edgetpu_vii_litebuf_response_ioctl ibuf;
 	struct edgetpu_vii_litebuf_response resp;
 	int ret = 0;
@@ -881,7 +923,8 @@ edgetpu_ioctl_vii_litebuf_response(struct edgetpu_client *client,
 
 	trace_edgetpu_vii_litebuf_response_start(client);
 
-	if (!client->etdev->mailbox_manager->use_ikv) {
+	if (!client->etdev->mailbox_manager->use_ikv ||
+	    client->etdev->vii_format != EDGETPU_VII_FORMAT_LITEBUF) {
 		ret = -EOPNOTSUPP;
 		goto out_end_trace;
 	}
@@ -911,7 +954,6 @@ out_unlock:
 out_end_trace:
 	trace_edgetpu_vii_litebuf_response_end(client, &ibuf, ret);
 	return ret;
-#endif
 }
 
 long edgetpu_ioctl(struct file *file, uint cmd, ulong arg)

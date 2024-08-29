@@ -23,7 +23,7 @@
 #define IKV_TIMEOUT	EDGETPU_IKV_TIMEOUT
 #elif IS_ENABLED(CONFIG_EDGETPU_TEST)
 /* fake-firmware could respond in a short time */
-#define IKV_TIMEOUT	(200)
+#define IKV_TIMEOUT	(2000)
 #else
 /* Wait for up to 2 minutes for FW to respond. */
 #define IKV_TIMEOUT	(120000)
@@ -79,6 +79,9 @@ struct edgetpu_ikv_response {
 	struct gcip_fence_array *out_fence_array;
 	/* The coherent buffer for the additional_info to be shared with the firmware. */
 	struct edgetpu_coherent_mem additional_info;
+	/* Callback to clean-up any data allocated for this command. */
+	void (*release_callback)(void *data);
+	void *release_data;
 };
 
 struct edgetpu_ikv {
@@ -166,6 +169,11 @@ void edgetpu_ikv_release(struct edgetpu_dev *etdev, struct edgetpu_ikv *etikv);
  * 3) Cancel all responses in @pending_queue with `gcip_mailbox_cancel_awaiter()`
  * 4) Release all responses in both queues with `gcip_mailbox_release_awaiter()`
  *
+ * @release_callback will be called, with @release_data as an argument, immediately before the
+ * command's edgetpu_ikv_response is released. This can be used to release any resources that were
+ * allocated to support the command. If this function returns an error, @release_callback will not
+ * be called.
+ *
  * Returns 0 on success, -errno on error.
  */
 int edgetpu_ikv_send_cmd(struct edgetpu_ikv *etikv, void *cmd, struct list_head *pending_queue,
@@ -173,6 +181,21 @@ int edgetpu_ikv_send_cmd(struct edgetpu_ikv *etikv, void *cmd, struct list_head 
 			 struct edgetpu_device_group *group_to_notify,
 			 struct gcip_fence_array *in_fence_array,
 			 struct gcip_fence_array *out_fence_array,
-			 struct edgetpu_ikv_additional_info *additional_info);
+			 struct edgetpu_ikv_additional_info *additional_info,
+			 void (*release_callback)(void *), void *release_data);
+
+/*
+ * Process all responses currently in the VII response queue.
+ *
+ * By the time this function returns, all valid responses will have been added to their ready_queue
+ * and invalid responses (e.g. those with an invalid sequence number or client_id) will be dropped.
+ *
+ * This function should not be called from an interrupt context, as it will wait for the response
+ * queue spinlock if another thread is already processing responses.
+ *
+ * The caller of this function must not hold any response queue_locks (see edgetpu_ikv_send_cmd())
+ * or @etikv's resp_queue_lock, as they may be acquired during response processing.
+ */
+void edgetpu_ikv_flush_responses(struct edgetpu_ikv *etikv);
 
 #endif /* __EDGETPU_IKV_H__*/

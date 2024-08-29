@@ -95,6 +95,11 @@
 #define EDGETPU_LPM_IMEM_OPS_SET(etdev, n, value)                                                  \
 	edgetpu_dev_write_32_sync(etdev, EDGETPU_LPM_IMEM_OPS(n), value)
 
+u32 edgetpu_active_states[EDGETPU_NUM_STATES] = {
+	TPU_ACTIVE_MIN, TPU_ACTIVE_ULTRA_LOW, TPU_ACTIVE_VERY_LOW, TPU_ACTIVE_SUB_LOW,
+	TPU_ACTIVE_LOW, TPU_ACTIVE_MEDIUM,    TPU_ACTIVE_NOM,
+};
+
 static int gsx01_parse_ssmt(struct edgetpu_dev *etdev)
 {
 	struct platform_device *pdev = to_platform_device(etdev->dev);

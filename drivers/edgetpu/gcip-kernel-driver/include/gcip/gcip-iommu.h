@@ -22,6 +22,7 @@
 #include <linux/device.h>
 #include <linux/dma-buf.h>
 #include <linux/dma-direction.h>
+#include <linux/idr.h>
 #include <linux/iommu.h>
 #include <linux/iova.h>
 #include <linux/scatterlist.h>
@@ -31,10 +32,6 @@
 #include <gcip/gcip-config.h>
 #include <gcip/gcip-domain-pool.h>
 #include <gcip/gcip-mem-pool.h>
-
-#if GCIP_HAS_IOMMU_PASID
-#include <linux/idr.h>
-#endif
 
 /*
  * Helpers for manipulating @gcip_map_flags parameter of the `gcip_iommu_domain_{map,unmap}_sg`
@@ -132,9 +129,6 @@ struct gcip_iommu_mapping_ops {
  *       This value is the real one that was used for mapping and should be the same as the one
  *       encoded in gcip_map_flags.
  *       This field should be used in revert functions and dma sync functions.
- * @orig_dir: The data direction that the user originally tried to map.
- *            This value may be different from the one encoded in gcip_map_flags.
- *            This field should be used for logging to user to hide the underlying mechanisms
  * @gcip_map_flags: The flags used to create the mapping, which can be encoded with
  *                  gcip_iommu_encode_gcip_map_flags() or `GCIP_MAP_FLAGS_DMA_*_TO_FLAGS` macros.
  * @owning_mm: For holding a reference to MM.
@@ -152,7 +146,6 @@ struct gcip_iommu_mapping {
 	uint num_pages;
 	struct sg_table *sgt;
 	enum dma_data_direction dir;
-	enum dma_data_direction orig_dir;
 	u64 gcip_map_flags;
 	/*
 	 * TODO(b/302510715): Use another wrapper struct to contain this because it is used in
@@ -198,11 +191,7 @@ struct gcip_iommu_domain_pool {
 	enum gcip_iommu_domain_type domain_type;
 	ioasid_t min_pasid;
 	ioasid_t max_pasid;
-#if GCIP_HAS_IOMMU_PASID
 	struct ida pasid_pool;
-#elif GCIP_HAS_AUX_DOMAINS
-	bool aux_enabled;
-#endif
 };
 
 /*
@@ -325,6 +314,16 @@ void gcip_iommu_domain_pool_set_pasid_range(struct gcip_iommu_domain_pool *pool,
 static inline int gcip_iommu_domain_pool_get_num_pasid(struct gcip_iommu_domain_pool *pool)
 {
 	return pool->max_pasid - pool->min_pasid + 1;
+}
+
+/*
+ * Returns the size of IOVA space of this pool. Does not consider reserved size.
+ *
+ * @pool: IOMMU domain pool.
+ */
+static inline size_t gcip_iommu_domain_pool_get_size(struct gcip_iommu_domain_pool *pool)
+{
+	return pool->size;
 }
 
 /*

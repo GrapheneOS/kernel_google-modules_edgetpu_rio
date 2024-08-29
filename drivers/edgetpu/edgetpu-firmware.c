@@ -18,6 +18,7 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/types.h>
+#include <linux/vmalloc.h>
 
 #include <gcip/gcip-alloc-helper.h>
 #include <gcip/gcip-fault-injection.h>
@@ -44,21 +45,18 @@
 #include "edgetpu-telemetry.h"
 #include "edgetpu-usage-stats.h"
 
-/* Log and trace buffers at the beginning of the remapped region, pool memory afterwards. */
+/*
+ * Log and trace buffers at the beginning of the remapped region, pool memory afterwards.
+ *
+ * Note this is default value when the number of cores equals the number of telemetry buffers
+ * and may be adjusted at runtime when a firmware that specifies telemetry buffer config is loaded.
+ */
 #define EDGETPU_POOL_MEM_OFFSET                                                                    \
 	((EDGETPU_TELEMETRY_LOG_BUFFER_SIZE + EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE) *               \
 	 EDGETPU_NUM_CORES)
 
 static char *firmware_name;
 module_param(firmware_name, charp, 0660);
-
-struct edgetpu_firmware_buffer {
-	void *vaddr;		/* kernel VA */
-	size_t alloc_size;	/* allocated size of @vaddr in bytes */
-	size_t used_size_align;	/* firmware size alignment in bytes */
-	size_t used_size;	/* actual size of firmware image */
-	const char *name;	/* the name of this firmware */
-};
 
 /*
  * Driver-managed firmware mappings from image config: non-secure memory allocations + IOVA mappings
@@ -88,16 +86,14 @@ struct edgetpu_firmware {
 	phys_addr_t fw_region_paddr;
 	/* Size of the firmware region */
 	size_t fw_region_size;
-	/* TPU address from which the TPU CPU can access data in the remapped region */
-	tpu_addr_t remapped_data_daddr;
-	/* Size of remapped DRAM data region */
-	size_t remapped_data_size;
-	/* Virtual address of the memory region shared with firmware */
-	void *shared_mem_vaddr;
-	/* Physical address of the memory region shared with firmware */
-	phys_addr_t shared_mem_paddr;
-	/* Size of the shared memory region size */
-	size_t shared_mem_size;
+	/* Shared data region in TPU's CPU address space */
+	tpu_addr_t shared_data_daddr;
+	/* Size of shared data region */
+	size_t shared_data_size;
+	/* Virtual address of the shared data region */
+	void *shared_data_vaddr;
+	/* Physical address of the shared data region */
+	phys_addr_t shared_data_paddr;
 
 	struct gcip_image_config_parser *img_cfg_parser;
 	/* List of firmware image config mappings for the device that need special processing. */
@@ -107,7 +103,8 @@ struct edgetpu_firmware {
 
 	/* Firmware state lock: load/unload disallowed while held. */
 	struct mutex fw_state_lock;
-	struct edgetpu_firmware_buffer fw_buf;
+	/* Name of the firmware image */
+	const char *name;
 	enum gcip_fw_status status;
 	struct gcip_fw_info fw_info;
 
@@ -343,8 +340,10 @@ static void image_config_unmap(void *data, dma_addr_t daddr, size_t size,
 					   edgetpu_mmu_default_domain(etdev));
 		gcip_free_noncontiguous(image_config_map->sgt);
 	} else {
-		edgetpu_mmu_remove_translation(etdev, daddr, size,
-					       edgetpu_mmu_default_domain(etdev));
+		/* Shared (all VII contexts) mappings are not mapped in KCI context, skip. */
+		if (!GCIP_IMAGE_CONFIG_MAP_SHARED(cfg_map_flags))
+			edgetpu_mmu_remove_translation(etdev, daddr, size,
+						       edgetpu_mmu_default_domain(etdev));
 	}
 
 	kfree(image_config_map);
@@ -386,35 +385,6 @@ static void edgetpu_firmware_deinit_image_config(struct edgetpu_firmware *et_fw)
 	kfree(cfg_parser);
 }
 
-static int edgetpu_firmware_alloc_buffer(struct edgetpu_firmware *et_fw,
-					 struct edgetpu_firmware_buffer *fw_buf)
-{
-	struct edgetpu_dev *etdev = et_fw->etdev;
-
-	/* Allocate extra space the image header */
-	size_t buffer_size = EDGETPU_MAX_FW_LIMIT + EDGETPU_FW_HEADER_SIZE;
-
-	fw_buf->vaddr = vmalloc(buffer_size);
-	if (!fw_buf->vaddr) {
-		etdev_err(etdev, "%s: failed to allocate buffer (%zu bytes)\n",
-			  __func__, buffer_size);
-		return -ENOMEM;
-	}
-	fw_buf->alloc_size = buffer_size;
-	fw_buf->used_size_align = 16;
-	return 0;
-}
-
-static void edgetpu_firmware_free_buffer(
-		struct edgetpu_firmware *et_fw,
-		struct edgetpu_firmware_buffer *fw_buf)
-{
-	vfree(fw_buf->vaddr);
-	fw_buf->vaddr = NULL;
-	fw_buf->alloc_size = 0;
-	fw_buf->used_size_align = 0;
-}
-
 static struct gcip_image_config *edgetpu_firmware_get_image_config(struct edgetpu_dev *etdev)
 {
 	struct gcip_image_config_parser *cfg_parser =
@@ -423,8 +393,7 @@ static struct gcip_image_config *edgetpu_firmware_get_image_config(struct edgetp
 	return (cfg_parser && cfg_parser->last_config_valid) ? &cfg_parser->last_config : NULL;
 }
 
-static int edgetpu_firmware_gsa_authenticate(struct edgetpu_dev *etdev,
-					     struct edgetpu_firmware_buffer *fw_buf,
+static int edgetpu_firmware_gsa_authenticate(struct edgetpu_dev *etdev, const struct firmware *fw,
 					     void *image_vaddr)
 {
 	struct edgetpu_firmware *et_fw = etdev->firmware;
@@ -450,23 +419,20 @@ static int edgetpu_firmware_gsa_authenticate(struct edgetpu_dev *etdev,
 		}
 	}
 
-	/* Copy the firmware image to the target location, skipping the header */
-	memcpy(image_vaddr, fw_buf->vaddr + EDGETPU_FW_HEADER_SIZE,
-	       fw_buf->used_size - EDGETPU_FW_HEADER_SIZE);
+	/* Copy the firmware image to the carveout, skipping the header */
+	memcpy(image_vaddr, fw->data + EDGETPU_FW_HEADER_SIZE, fw->size - EDGETPU_FW_HEADER_SIZE);
 
 	/* Allocate coherent memory for the image header */
 	header_vaddr = dma_alloc_coherent(et_fw->gsa_dev, EDGETPU_FW_HEADER_SIZE, &header_dma_addr,
 					  GFP_KERNEL);
 	if (!header_vaddr) {
-		etdev_err(etdev,
-			  "Failed to allocate coherent memory for header\n");
+		etdev_err(etdev, "Failed to allocate coherent memory for header\n");
 		return -ENOMEM;
 	}
 
-	memcpy(header_vaddr, fw_buf->vaddr, EDGETPU_FW_HEADER_SIZE);
+	memcpy(header_vaddr, fw->data, EDGETPU_FW_HEADER_SIZE);
 	etdev_dbg(etdev, "Requesting GSA image load. meta = %pad payload = %pap", &header_dma_addr,
 		  &et_fw->fw_region_paddr);
-
 	ret = gsa_load_tpu_fw_image(et_fw->gsa_dev, header_dma_addr, et_fw->fw_region_paddr);
 	if (ret)
 		etdev_err(etdev, "GSA authentication failed: %d\n", ret);
@@ -479,28 +445,54 @@ static int edgetpu_firmware_update_remapped_data_region(struct edgetpu_dev *etde
 {
 	struct edgetpu_firmware *et_fw = etdev->firmware;
 	struct gcip_image_config *config = edgetpu_firmware_get_image_config(etdev);
-	tpu_addr_t remapped_data_daddr = EDGETPU_INSTRUCTION_REMAP_BASE + et_fw->fw_region_size;
-	size_t remapped_data_size = (config && config->remapped_data_size) ?
-		config->remapped_data_size : EDGETPU_DEFAULT_REMAPPED_DATA_SIZE;
-	phys_addr_t shared_mem_paddr = et_fw->fw_region_paddr + et_fw->fw_region_size;
+	bool i_has_shared_data_addr = config && config->shared_data_start &&
+				      config->shared_data_size;
+	/*
+	 * If the image config provides a shared data physical address, calculate the DMA address
+	 * by adding the offset from the carveout physical address to the instruction remap base.
+	 * Otherwise, assume the shared data region starts right after firmware code.
+	 */
+	tpu_addr_t shared_data_daddr =
+		config->shared_data_iova ? config->shared_data_iova :
+					   (EDGETPU_INSTRUCTION_REMAP_BASE + et_fw->fw_region_size);
+	phys_addr_t shared_data_paddr = i_has_shared_data_addr ?
+						config->shared_data_start :
+						et_fw->fw_region_paddr + et_fw->fw_region_size;
+	size_t shared_data_size = i_has_shared_data_addr ? config->shared_data_size :
+							   EDGETPU_DEFAULT_REMAPPED_DATA_SIZE;
 	size_t firmware_size = (config) ? config->firmware_size : 0;
 	u32 firmware_base = (config) ? config->firmware_base : 0;
-	u32 remapped_region_start = (config) ? config->remapped_region_start : 0;
+	u32 secure_data_start = (config) ? config->secure_data_start : 0;
+	struct gcip_telemetry_buffer_config telemetry_config;
+	bool i_has_telemetry_config =
+		config && gcip_image_config_get_telemetry_buffer_config(config, &telemetry_config);
 	int ret;
+	size_t iremap_pool_mem_offset = EDGETPU_POOL_MEM_OFFSET;
 
-	if (et_fw->remapped_data_daddr == remapped_data_daddr &&
-	    et_fw->remapped_data_size == remapped_data_size &&
-	    et_fw->shared_mem_paddr == shared_mem_paddr)
+	if (et_fw->shared_data_daddr == shared_data_daddr &&
+	    et_fw->shared_data_size == shared_data_size &&
+	    et_fw->shared_data_paddr == shared_data_paddr)
 		return 0;
 
-	if (remapped_data_daddr < EDGETPU_INSTRUCTION_REMAP_BASE + firmware_size ||
-	    firmware_base + et_fw->fw_region_size + remapped_data_size > remapped_region_start)
+	/* Allow shared data region to be placed after secure data if an address was provided */
+	if (shared_data_daddr <
+		    EDGETPU_INSTRUCTION_REMAP_BASE + firmware_size ||
+	    (!i_has_shared_data_addr &&
+	     (firmware_base + et_fw->fw_region_size + shared_data_size >
+	      secure_data_start))) {
+		etdev_err(etdev, "Firmware shared data address invalid");
+		etdev_err(etdev, "Shared data @ %08llX (%zu bytes)", shared_data_daddr,
+			  shared_data_size);
+		etdev_err(etdev, "Firmware base @ %08X", firmware_base);
+		etdev_err(etdev, "Firmware %s a shared data address",
+			  i_has_shared_data_addr ? "provided" : "did not provide");
 		return -EINVAL;
+	}
 
-	etdev_dbg(etdev, "Moving remapped data from %pad to %pad\n", &et_fw->remapped_data_daddr,
-		  &remapped_data_daddr);
+	etdev_dbg(etdev, "Moving remapped data from %pad to %pad\n",
+		  &et_fw->shared_data_daddr, &shared_data_daddr);
 
-	if (et_fw->shared_mem_vaddr) {
+	if (et_fw->shared_data_vaddr) {
 		/*
 		 * No need to free user-space VII queues, since allocated groups will block fw from
 		 * loading.
@@ -509,15 +501,32 @@ static int edgetpu_firmware_update_remapped_data_region(struct edgetpu_dev *etde
 		edgetpu_ikv_release(etdev, etdev->etikv);
 		edgetpu_telemetry_exit(etdev);
 		edgetpu_iremap_pool_destroy(etdev);
-		memunmap(et_fw->shared_mem_vaddr);
+		memunmap(et_fw->shared_data_vaddr);
 	}
 
-	et_fw->remapped_data_daddr = remapped_data_daddr;
-	et_fw->remapped_data_size = remapped_data_size;
-	et_fw->shared_mem_paddr = shared_mem_paddr;
-	et_fw->shared_mem_vaddr =
-		memremap(et_fw->shared_mem_paddr, et_fw->remapped_data_size, MEMREMAP_WC);
-	if (!et_fw->shared_mem_vaddr) {
+	if (i_has_telemetry_config) {
+		etdev_dbg(
+			etdev,
+			"Updating telemetry buffer config. Count = %zu log size = %zu trace size = %zu",
+			telemetry_config.count, telemetry_config.log_buffer_size,
+			telemetry_config.trace_buffer_size);
+		etdev->num_telemetry_buffers = telemetry_config.count;
+		etdev->log_buffer_size = telemetry_config.log_buffer_size;
+		etdev->trace_buffer_size = telemetry_config.trace_buffer_size;
+		iremap_pool_mem_offset = (etdev->log_buffer_size + etdev->trace_buffer_size) *
+					 etdev->num_telemetry_buffers;
+	} else {
+		etdev->num_telemetry_buffers = EDGETPU_NUM_CORES;
+		etdev->log_buffer_size = EDGETPU_TELEMETRY_LOG_BUFFER_SIZE;
+		etdev->trace_buffer_size = EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE;
+	}
+
+	et_fw->shared_data_daddr = shared_data_daddr;
+	et_fw->shared_data_size = shared_data_size;
+	et_fw->shared_data_paddr = shared_data_paddr;
+	et_fw->shared_data_vaddr =
+		memremap(et_fw->shared_data_paddr, et_fw->shared_data_size, MEMREMAP_WC);
+	if (!et_fw->shared_data_vaddr) {
 		etdev_err(etdev, "Shared fw memory remap failed\n");
 		ret = -ENOMEM;
 		goto out;
@@ -525,13 +534,13 @@ static int edgetpu_firmware_update_remapped_data_region(struct edgetpu_dev *etde
 
 	ret = edgetpu_iremap_pool_create(etdev,
 					 /* Base virtual address (kernel address space) */
-					 et_fw->shared_mem_vaddr + EDGETPU_POOL_MEM_OFFSET,
+					 et_fw->shared_data_vaddr + iremap_pool_mem_offset,
 					 /* Base DMA address */
-					 et_fw->remapped_data_daddr + EDGETPU_POOL_MEM_OFFSET,
+					 et_fw->shared_data_daddr + iremap_pool_mem_offset,
 					 /* Base physical address */
-					 et_fw->shared_mem_paddr + EDGETPU_POOL_MEM_OFFSET,
+					 et_fw->shared_data_paddr + iremap_pool_mem_offset,
 					 /* Size */
-					 et_fw->remapped_data_size - EDGETPU_POOL_MEM_OFFSET,
+					 et_fw->shared_data_size - iremap_pool_mem_offset,
 					 /* Granularity */
 					 PAGE_SIZE);
 	if (ret) {
@@ -560,47 +569,51 @@ out_telemetry_exit:
 out_iremap_pool_destroy:
 	edgetpu_iremap_pool_destroy(etdev);
 out_memunmap:
-	memunmap(et_fw->shared_mem_vaddr);
+	memunmap(et_fw->shared_data_vaddr);
 
 out:
-	et_fw->remapped_data_daddr = 0;
-	et_fw->remapped_data_size = 0;
-	et_fw->shared_mem_paddr = 0;
-	et_fw->shared_mem_vaddr = NULL;
+	et_fw->shared_data_daddr = 0;
+	et_fw->shared_data_size = 0;
+	et_fw->shared_data_paddr = 0;
+	et_fw->shared_data_vaddr = NULL;
+
+	etdev->num_telemetry_buffers = EDGETPU_NUM_CORES;
+	etdev->log_buffer_size = EDGETPU_TELEMETRY_LOG_BUFFER_SIZE;
+	etdev->trace_buffer_size = EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE;
 
 	return ret;
 }
 
 /* Return KVA of FW shared memory area. */
-void *edgetpu_firmware_shared_mem_vaddr(struct edgetpu_dev *etdev)
+void *edgetpu_firmware_shared_data_vaddr(struct edgetpu_dev *etdev)
 {
 	struct edgetpu_firmware *et_fw = etdev->firmware;
 
-	return et_fw->shared_mem_vaddr;
+	return et_fw->shared_data_vaddr;
 }
 
 /* Return phys addr of FW shared memory area. */
-phys_addr_t edgetpu_firmware_shared_mem_paddr(struct edgetpu_dev *etdev)
+phys_addr_t edgetpu_firmware_shared_data_paddr(struct edgetpu_dev *etdev)
 {
 	struct edgetpu_firmware *et_fw = etdev->firmware;
 
-	return et_fw->shared_mem_paddr;
+	return et_fw->shared_data_paddr;
 }
 
 /* Return device DMA addr of FW shared memory area. */
-dma_addr_t edgetpu_firmware_shared_mem_daddr(struct edgetpu_dev *etdev)
+dma_addr_t edgetpu_firmware_shared_data_daddr(struct edgetpu_dev *etdev)
 {
 	struct edgetpu_firmware *et_fw = etdev->firmware;
 
-	return et_fw->remapped_data_daddr;
+	return et_fw->shared_data_daddr;
 }
 
 /* Return size of FW shared memory area. */
-size_t edgetpu_firmware_shared_mem_size(struct edgetpu_dev *etdev)
+size_t edgetpu_firmware_shared_data_size(struct edgetpu_dev *etdev)
 {
 	struct edgetpu_firmware *et_fw = etdev->firmware;
 
-	return et_fw->remapped_data_size;
+	return et_fw->shared_data_size;
 }
 
 /* Return phys addr of FW remap region start. */
@@ -619,8 +632,7 @@ size_t edgetpu_firmware_fw_region_size(struct edgetpu_dev *etdev)
 	return et_fw->fw_region_size;
 }
 
-static int edgetpu_firmware_prepare_run(struct edgetpu_firmware *et_fw,
-					struct edgetpu_firmware_buffer *fw_buf)
+static int edgetpu_firmware_prepare_run(struct edgetpu_firmware *et_fw)
 {
 	struct edgetpu_dev *etdev = et_fw->etdev;
 	int ret;
@@ -656,8 +668,10 @@ static int edgetpu_firmware_restart(struct edgetpu_firmware *et_fw, bool force_r
 	return edgetpu_firmware_reset_cpu(etdev, false);
 }
 
-static int edgetpu_firmware_setup_buffer(struct edgetpu_firmware *et_fw,
-					 struct edgetpu_firmware_buffer *fw_buf)
+/*
+ * Copy image to carveout.  Process image_config.  Caller must hold edgetpu_firmware_load_lock().
+ */
+static int edgetpu_firmware_setup_image(struct edgetpu_firmware *et_fw, const struct firmware *fw)
 {
 	int ret = 0;
 	void *image_vaddr;
@@ -667,13 +681,13 @@ static int edgetpu_firmware_setup_buffer(struct edgetpu_firmware *et_fw,
 	phys_addr_t image_start, image_end, carveout_start, carveout_end;
 	struct edgetpu_image_header *hdr;
 
-	if (fw_buf->used_size < EDGETPU_FW_HEADER_SIZE) {
-		etdev_err(etdev, "Invalid buffer size: %zu < %d\n",
-			  fw_buf->used_size, EDGETPU_FW_HEADER_SIZE);
+	if (fw->size < EDGETPU_FW_HEADER_SIZE) {
+		etdev_err(etdev, "Invalid firmware image size: %zu < %d\n",
+			  fw->size, EDGETPU_FW_HEADER_SIZE);
 		return -EINVAL;
 	}
 
-	hdr = (struct edgetpu_image_header *)fw_buf->vaddr;
+	hdr = (struct edgetpu_image_header *)fw->data;
 	if (hdr->common.Magic != EDGETPU_FW_MAGIC) {
 		etdev_err(etdev, "Invalid firmware header magic value %#08x\n", hdr->common.Magic);
 		return -EINVAL;
@@ -694,30 +708,39 @@ static int edgetpu_firmware_setup_buffer(struct edgetpu_firmware *et_fw,
 
 	et_fw->fw_region_paddr = image_config->firmware_base;
 	et_fw->fw_region_size =
-		image_config->remapped_data_start ?
-			image_config->remapped_data_start - image_config->firmware_base :
+		image_config->shared_data_start ?
+			image_config->shared_data_start - image_config->firmware_base :
 			EDGETPU_DEFAULT_FW_LIMIT;
 
 	image_vaddr = memremap(et_fw->fw_region_paddr, et_fw->fw_region_size, MEMREMAP_WC);
 	if (!image_vaddr) {
-		etdev_err(etdev, "FW region remap failed\n");
+		etdev_err(etdev, "FW region remap failed %#08x %#08x\n",
+			  image_config->shared_data_start, image_config->firmware_base);
 		return -ENOMEM;
 	}
 
 	memcpy(&etdev->fw_version, &image_config->firmware_versions, sizeof(etdev->fw_version));
 
-	if (et_fw->gsa_dev && !gcip_image_config_is_ns(image_config)) {
-		ret = edgetpu_firmware_gsa_authenticate(etdev, fw_buf, image_vaddr);
+	if (et_fw->gsa_dev) {
+		ret = edgetpu_firmware_gsa_authenticate(etdev, fw, image_vaddr);
+		if (ret)
+			goto out;
 	} else if (gcip_image_config_is_ns(image_config)) {
-		etdev_dbg(etdev, "Loading unauthenticated non-secure firmware\n");
-		/* Copy the firmware image to the target location, skipping the header */
-		memcpy(image_vaddr, fw_buf->vaddr + EDGETPU_FW_HEADER_SIZE,
-		       fw_buf->used_size - EDGETPU_FW_HEADER_SIZE);
+		etdev_dbg(etdev, "No GSA device available, but firmware is non-secure.");
+		etdev_dbg(etdev, "Continuing without authentication.");
 	} else {
 		etdev_err(etdev,
 			  "Cannot load firmware at privilege level %d with no authentication\n",
 			  image_config->privilege_level);
 		ret = -EINVAL;
+		goto out;
+	}
+
+	if (gcip_image_config_is_ns(image_config)) {
+		etdev_dbg(etdev, "Loading non-secure firmware\n");
+		/* Copy the firmware image to the target location, skipping the header */
+		memcpy(image_vaddr, fw->data + EDGETPU_FW_HEADER_SIZE,
+		       fw->size - EDGETPU_FW_HEADER_SIZE);
 	}
 
 	if (ret)
@@ -745,20 +768,17 @@ out:
 
 static void program_iremap_csr(struct edgetpu_dev *etdev)
 {
+	int i;
 
 	edgetpu_soc_set_tpu_cpu_security(etdev);
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_NEW_BASE,
-			     EDGETPU_INSTRUCTION_REMAP_BASE);
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_NEW_BASE + 8,
-			     EDGETPU_INSTRUCTION_REMAP_BASE);
 
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_LIMIT,
-			     EDGETPU_INSTRUCTION_REMAP_BASE + SZ_32M);
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_LIMIT + 8,
-			     EDGETPU_INSTRUCTION_REMAP_BASE + SZ_32M);
-
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_CONTROL, 1);
-	edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_CONTROL + 8, 1);
+	for (i = 0; i < etdev->num_cores; i++) {
+		edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_NEW_BASE + 8 * i,
+				     EDGETPU_INSTRUCTION_REMAP_BASE);
+		edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_LIMIT + 8 * i,
+				     EDGETPU_INSTRUCTION_REMAP_BASE + SZ_32M);
+		edgetpu_dev_write_32(etdev, EDGETPU_REG_INSTRUCTION_REMAP_CONTROL + 8 * i, 1);
+	}
 }
 
 int edgetpu_firmware_reset_cpu(struct edgetpu_dev *etdev, bool assert_reset)
@@ -787,8 +807,11 @@ int edgetpu_firmware_reset_cpu(struct edgetpu_dev *etdev, bool assert_reset)
 
 	etdev_dbg(etdev, "%s CPU reset result = %d", assert_reset ? "assert" : "release", ret);
 
-	if (ret < 0)
+	if (ret < 0) {
+		etdev_err(etdev, "GSA CPU reset %s failed: %d\n",
+			  assert_reset ? "assert" : "release", ret);
 		return ret;
+	}
 
 	return 0;
 }
@@ -804,16 +827,18 @@ struct gcip_image_config_parser *edgetpu_firmware_get_img_cfg_parser(struct edge
 	return et_fw->img_cfg_parser;
 }
 
-/* Request firmware and copy to carveout. */
-static int edgetpu_firmware_carveout_load_locked(struct edgetpu_firmware *et_fw,
-						 struct edgetpu_firmware_buffer *fw_buf,
-						 const char *name)
+static void edgetpu_firmware_image_clear(struct edgetpu_firmware *et_fw)
 {
-	int ret;
+	et_fw->name = NULL;
+}
+
+/* Load firmware named @name.  Caller must hold edgetpu_firmware_load_lock(). */
+static int edgetpu_firmware_load(struct edgetpu_firmware *et_fw, const char *name)
+{
 	struct edgetpu_dev *etdev = et_fw->etdev;
 	struct device *dev = etdev->dev;
 	const struct firmware *fw;
-	size_t aligned_size;
+	int ret;
 
 	ret = request_firmware(&fw, name, dev);
 	if (ret) {
@@ -821,63 +846,13 @@ static int edgetpu_firmware_carveout_load_locked(struct edgetpu_firmware *et_fw,
 		return ret;
 	}
 
-	aligned_size = ALIGN(fw->size, fw_buf->used_size_align);
-	if (aligned_size > fw_buf->alloc_size) {
-		etdev_err(etdev,
-			  "firmware buffer too small: alloc size=%#zx, required size=%#zx\n",
-			  fw_buf->alloc_size, aligned_size);
-		ret = -ENOSPC;
-		goto out_release_firmware;
-	}
-
-	memcpy(fw_buf->vaddr, fw->data, fw->size);
-	fw_buf->used_size = aligned_size;
 	/* May return NULL on out of memory, driver must handle properly */
-	fw_buf->name = devm_kstrdup(dev, name, GFP_KERNEL);
-
-out_release_firmware:
+	et_fw->name = devm_kstrdup(dev, name, GFP_KERNEL);
+	ret = edgetpu_firmware_setup_image(et_fw, fw);
 	release_firmware(fw);
+	if (ret)
+		edgetpu_firmware_image_clear(et_fw);
 	return ret;
-}
-
-static void edgetpu_firmware_carveout_unload_locked(struct edgetpu_firmware *et_fw,
-						    struct edgetpu_firmware_buffer *fw_buf)
-{
-	fw_buf->name = NULL;
-	fw_buf->used_size = 0;
-}
-
-static int edgetpu_firmware_load_locked(struct edgetpu_firmware *et_fw,
-					struct edgetpu_firmware_buffer *new_fw_buf,
-					const char *name)
-{
-	int ret;
-
-	ret = edgetpu_firmware_alloc_buffer(et_fw, new_fw_buf);
-	if (ret)
-		return ret;
-
-	ret = edgetpu_firmware_carveout_load_locked(et_fw, new_fw_buf, name);
-	if (ret)
-		goto out_free_buffer;
-
-	ret = edgetpu_firmware_setup_buffer(et_fw, new_fw_buf);
-	if (ret)
-		goto out_unload_locked;
-	return 0;
-
-out_unload_locked:
-	edgetpu_firmware_carveout_unload_locked(et_fw, new_fw_buf);
-out_free_buffer:
-	edgetpu_firmware_free_buffer(et_fw, new_fw_buf);
-	return ret;
-}
-
-static void edgetpu_firmware_unload_locked(struct edgetpu_firmware *et_fw,
-					   struct edgetpu_firmware_buffer *fw_buf)
-{
-	edgetpu_firmware_carveout_unload_locked(et_fw, fw_buf);
-	edgetpu_firmware_free_buffer(et_fw, fw_buf);
 }
 
 static int edgetpu_firmware_handshake(struct edgetpu_firmware *et_fw)
@@ -891,6 +866,8 @@ static int edgetpu_firmware_handshake(struct edgetpu_firmware *et_fw)
 	et_fw->fw_info.fw_flavor = GCIP_FW_FLAVOR_UNKNOWN;
 	et_fw->fw_info.fw_changelist = 0;
 	fw_flavor = edgetpu_kci_fw_info(etdev->etkci, &et_fw->fw_info);
+	etdev_info(etdev, "R52 boot stage: %u\n",
+		   EDGETPU_MAILBOX_CONTEXT_READ(etdev->etkci->mailbox, config_spare_1));
 	if (fw_flavor < 0) {
 		etdev_err(etdev, "firmware handshake failed: %d", fw_flavor);
 		et_fw->fw_info.fw_flavor = GCIP_FW_FLAVOR_UNKNOWN;
@@ -1073,31 +1050,60 @@ static void edgetpu_firmware_load_unlock(struct edgetpu_dev *etdev)
 	mutex_unlock(&et_fw->fw_state_lock);
 }
 
+static void edgetpu_firmware_reset_boot_stage(struct edgetpu_firmware *et_fw)
+{
+	EDGETPU_MAILBOX_CONTEXT_WRITE(et_fw->etdev->etkci->mailbox, config_spare_1, 0);
+}
+
+#define FLATBUFFER_MIN_VII_VERSION	0
+#define LITEBUF_MIN_VII_VERSION	3
+/*
+ * Update the driver's current VII format, based on the current firmware's VII version.
+ * This function must only be called during the process of loading new firmware.
+ */
+static int edgetpu_update_vii_format(struct edgetpu_dev *etdev)
+{
+	enum edgetpu_vii_format new_format;
+
+	if (etdev->fw_version.vii_version >= LITEBUF_MIN_VII_VERSION)
+		new_format = EDGETPU_VII_FORMAT_LITEBUF;
+	else
+		new_format = EDGETPU_VII_FORMAT_FLATBUFFER;
+
+	if (etdev->vii_format != new_format) {
+		etdev->vii_format = new_format;
+		edgetpu_ikv_release(etdev, etdev->etikv);
+		/* If IKV init fails, the firmware load will fail, and format set to UNKNOWN. */
+		return edgetpu_ikv_init(etdev->mailbox_manager, etdev->etikv);
+	}
+
+	return 0;
+}
+
 static int edgetpu_firmware_run_locked(struct edgetpu_firmware *et_fw, const char *name)
 {
 	struct edgetpu_dev *etdev = et_fw->etdev;
-	struct edgetpu_firmware_buffer new_fw_buf;
 	int ret;
 
 	edgetpu_firmware_set_loading(et_fw);
 	edgetpu_sw_wdt_stop(et_fw->etdev);
-	memset(&new_fw_buf, 0, sizeof(new_fw_buf));
-	ret = edgetpu_firmware_load_locked(et_fw, &new_fw_buf, name);
+	ret = edgetpu_firmware_load(et_fw, name);
+	edgetpu_firmware_reset_boot_stage(et_fw);
+	if (ret)
+		goto out_failed;
+
+	/*
+	 * Update VII format now that the image_config has been read and before
+	 * edgetpu_firmware_prepare_run() can reinitialize the in-Kernel VII stack.
+	 */
+	edgetpu_update_vii_format(etdev);
 	if (ret)
 		goto out_failed;
 
 	etdev_dbg(etdev, "run fw %s", name);
-	ret = edgetpu_firmware_prepare_run(et_fw, &new_fw_buf);
+	ret = edgetpu_firmware_prepare_run(et_fw);
 	if (ret)
-		goto out_unload_new_fw;
-
-	/*
-	 * Previous firmware buffer is not used anymore when the CPU runs on
-	 * new firmware buffer. Unload this before et_fw->fw_buf is
-	 * overwritten by new buffer information.
-	 */
-	edgetpu_firmware_unload_locked(et_fw, &et_fw->fw_buf);
-	et_fw->fw_buf = new_fw_buf;
+		goto out_clear_image;
 
 	gcip_fault_inject_send(et_fw->fault_inject);
 
@@ -1110,10 +1116,11 @@ static int edgetpu_firmware_run_locked(struct edgetpu_firmware *et_fw, const cha
 		etdev->usage_stats->ustats.version = EDGETPU_USAGE_METRIC_VERSION;
 	return ret;
 
-out_unload_new_fw:
-	edgetpu_firmware_unload_locked(et_fw, &new_fw_buf);
+out_clear_image:
+	edgetpu_firmware_image_clear(et_fw);
 out_failed:
 	edgetpu_firmware_set_state(et_fw, ret);
+	etdev->vii_format = EDGETPU_VII_FORMAT_UNKNOWN;
 	return ret;
 }
 
@@ -1196,13 +1203,14 @@ int edgetpu_firmware_restart_locked(struct edgetpu_dev *etdev, bool force_reset)
 
 	edgetpu_firmware_set_loading(et_fw);
 	edgetpu_sw_wdt_stop(etdev);
+	edgetpu_firmware_reset_boot_stage(et_fw);
 	/*
 	 * Try restarting the firmware first, fall back to normal firmware start
 	 * if this fails.
 	 */
 	ret = edgetpu_firmware_restart(et_fw, force_reset);
 	if (ret) {
-		ret = edgetpu_firmware_prepare_run(et_fw, &et_fw->fw_buf);
+		ret = edgetpu_firmware_prepare_run(et_fw);
 		if (ret)
 			goto out;
 	}
@@ -1219,7 +1227,6 @@ ssize_t edgetpu_firmware_get_name(struct edgetpu_dev *etdev, char *buf,
 {
 	struct edgetpu_firmware *et_fw = etdev->firmware;
 	int ret;
-	const char *fw_name;
 
 	if (!et_fw)
 		goto fw_none;
@@ -1227,10 +1234,9 @@ ssize_t edgetpu_firmware_get_name(struct edgetpu_dev *etdev, char *buf,
 	mutex_lock(&et_fw->fw_state_lock);
 	if (edgetpu_firmware_status_locked(etdev) != GCIP_FW_VALID)
 		goto unlock_fw_none;
-	fw_name = et_fw->fw_buf.name;
-	if (!fw_name)
+	if (!et_fw->name)
 		goto unlock_fw_none;
-	ret = scnprintf(buf, buflen, "%s\n", fw_name);
+	ret = scnprintf(buf, buflen, "%s\n", et_fw->name);
 	mutex_unlock(&et_fw->fw_state_lock);
 	return ret;
 
@@ -1429,7 +1435,7 @@ void edgetpu_firmware_destroy(struct edgetpu_dev *etdev)
 	edgetpu_firmware_deinit_image_config(et_fw);
 	device_remove_group(etdev->dev, &edgetpu_firmware_attr_group);
 	mutex_lock(&et_fw->fw_state_lock);
-	edgetpu_firmware_unload_locked(et_fw, &et_fw->fw_buf);
+	edgetpu_firmware_image_clear(et_fw);
 	et_fw->status = GCIP_FW_INVALID;
 	mutex_unlock(&et_fw->fw_state_lock);
 	/* Disallow further firmware run on power up. */
@@ -1458,7 +1464,7 @@ static void edgetpu_firmware_setup_gsa(struct edgetpu_dev *etdev)
 		etdev_warn(etdev,
 			   "GSA device not found in device tree, authentication not available.");
 	else
-		et_fw->gsa_dev = get_device(&gsa_pdev->dev);
+		et_fw->gsa_dev = &gsa_pdev->dev;
 
 	of_node_put(np);
 }
@@ -1487,10 +1493,12 @@ static void edgetpu_firmware_cleanup_gsa(struct edgetpu_dev *etdev)
 /* Used by unit tests to set a mocked GSA device. */
 void edgetpu_firmware_set_fake_gsa_dev(struct edgetpu_dev *etdev, struct device *gsa_dev)
 {
-	if (!etdev->firmware)
+	if (!etdev->firmware) {
 		pr_err("set fake GSA dev called with no fw set\n");
-	else
-		etdev->firmware->gsa_dev = gsa_dev;
+	} else {
+		edgetpu_firmware_cleanup_gsa(etdev);
+		etdev->firmware->gsa_dev = get_device(gsa_dev);
+	}
 }
 #endif
 
@@ -1507,11 +1515,11 @@ int edgetpu_firmware_setup_fw_region(struct edgetpu_dev *etdev, phys_addr_t fw_r
 
 	et_fw->fw_region_paddr = fw_region_paddr;
 	et_fw->fw_region_size = EDGETPU_DEFAULT_FW_LIMIT;
-	et_fw->remapped_data_daddr = EDGETPU_INSTRUCTION_REMAP_BASE + et_fw->fw_region_size;
-	et_fw->remapped_data_size = EDGETPU_DEFAULT_REMAPPED_DATA_SIZE;
-	et_fw->shared_mem_vaddr = memremap(et_fw->fw_region_paddr + et_fw->fw_region_size,
-					 et_fw->remapped_data_size, MEMREMAP_WC);
-	if (!et_fw->shared_mem_vaddr) {
+	et_fw->shared_data_daddr = EDGETPU_INSTRUCTION_REMAP_BASE + et_fw->fw_region_size;
+	et_fw->shared_data_size = EDGETPU_DEFAULT_REMAPPED_DATA_SIZE;
+	et_fw->shared_data_vaddr = memremap(et_fw->fw_region_paddr + et_fw->fw_region_size,
+					 et_fw->shared_data_size, MEMREMAP_WC);
+	if (!et_fw->shared_data_vaddr) {
 		etdev_err(etdev, "Shared fw memory remap failed");
 		ret = -ENOMEM;
 		goto out_free_et_fw;
@@ -1519,13 +1527,13 @@ int edgetpu_firmware_setup_fw_region(struct edgetpu_dev *etdev, phys_addr_t fw_r
 
 	ret = edgetpu_iremap_pool_create(etdev,
 					 /* Base virtual address (kernel address space) */
-					 et_fw->shared_mem_vaddr + EDGETPU_POOL_MEM_OFFSET,
+					 et_fw->shared_data_vaddr + EDGETPU_POOL_MEM_OFFSET,
 					 /* Base DMA address */
-					 et_fw->remapped_data_daddr + EDGETPU_POOL_MEM_OFFSET,
+					 et_fw->shared_data_daddr + EDGETPU_POOL_MEM_OFFSET,
 					 /* Base physical address */
-					 et_fw->shared_mem_paddr + EDGETPU_POOL_MEM_OFFSET,
+					 et_fw->shared_data_paddr + EDGETPU_POOL_MEM_OFFSET,
 					 /* Size */
-					 et_fw->remapped_data_size - EDGETPU_POOL_MEM_OFFSET,
+					 et_fw->shared_data_size - EDGETPU_POOL_MEM_OFFSET,
 					 /* Granularity */
 					 PAGE_SIZE);
 	if (ret) {
@@ -1538,7 +1546,7 @@ int edgetpu_firmware_setup_fw_region(struct edgetpu_dev *etdev, phys_addr_t fw_r
 	return 0;
 
 out_unmap_fw:
-	memunmap(et_fw->shared_mem_vaddr);
+	memunmap(et_fw->shared_data_vaddr);
 out_free_et_fw:
 	kfree(et_fw);
 	return ret;
@@ -1551,11 +1559,11 @@ void edgetpu_firmware_cleanup_fw_region(struct edgetpu_dev *etdev)
 	edgetpu_firmware_cleanup_gsa(etdev);
 	edgetpu_iremap_pool_destroy(etdev);
 
-	if (et_fw->shared_mem_vaddr) {
-		memunmap(et_fw->shared_mem_vaddr);
-		et_fw->shared_mem_vaddr = NULL;
-		et_fw->remapped_data_daddr = 0;
-		et_fw->remapped_data_size = 0;
+	if (et_fw->shared_data_vaddr) {
+		memunmap(et_fw->shared_data_vaddr);
+		et_fw->shared_data_vaddr = NULL;
+		et_fw->shared_data_daddr = 0;
+		et_fw->shared_data_size = 0;
 	}
 
 	etdev->firmware = NULL;
@@ -1567,16 +1575,14 @@ void edgetpu_firmware_mappings_show(struct edgetpu_dev *etdev,
 				    struct seq_file *s)
 {
 	struct edgetpu_firmware *et_fw = etdev->firmware;
-	struct edgetpu_firmware_buffer *fw_buf;
-	dma_addr_t fw_buf_daddr = EDGETPU_INSTRUCTION_REMAP_BASE;
+	dma_addr_t fw_carveout_daddr = EDGETPU_INSTRUCTION_REMAP_BASE;
 
 	if (!et_fw)
 		return;
-	fw_buf = &et_fw->fw_buf;
-	if (!fw_buf->vaddr)
+	if (!et_fw->name)
 		return;
-	seq_printf(s, "  %pad %lu fw\n", &fw_buf_daddr,
-		   DIV_ROUND_UP(fw_buf->alloc_size, PAGE_SIZE));
+	seq_printf(s, "  %pad %lu fw\n", &fw_carveout_daddr,
+		   DIV_ROUND_UP(et_fw->fw_region_size, PAGE_SIZE));
 }
 
 #if IS_ENABLED(CONFIG_EDGETPU_TEST)

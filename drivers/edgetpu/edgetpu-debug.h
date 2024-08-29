@@ -26,10 +26,14 @@ struct edgetpu_fw_debug_mem {
 	struct sg_table *sgt;
 	/* Kernel VA of buffer start. */
 	void *vaddr;
-	/* Firmware returned response data ready for reading. */
+	/* If true, data in buffer is a fw response, will discard if not read before write. */
+	bool resp_data_ready;
+	/* Completion for firmware returned response data ready for reading. */
 	struct completion rd_data_ready;
 	/* Length of firmware buffer data ready for reading or writing. */
 	size_t data_len;
+	/* If true FW responded to last cmd saying response packet will be async via RKCI. */
+	bool async_resp_pending;
 };
 
 #define DEBUG_DUMP_HOST_CONTRACT_VERSION 3
@@ -43,9 +47,6 @@ enum edgetpu_dump_type_bit_position {
 	DUMP_TYPE_CSRS_BIT = 5,
 
 	DUMP_TYPE_KERNEL_ETDEV_BIT = 32,
-	DUMP_TYPE_KERNEL_CLIENTS_BIT = 33,
-	DUMP_TYPE_KERNEL_GROUPS_BIT = 34,
-	DUMP_TYPE_KERNEL_MAPPINGS_BIT = 35,
 
 	DUMP_TYPE_MAX_BIT = 63
 };

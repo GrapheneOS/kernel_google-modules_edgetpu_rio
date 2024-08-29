@@ -315,4 +315,10 @@ int edgetpu_kci_fault_injection(struct gcip_fault_inject *injection);
  */
 int edgetpu_kci_fw_debug_cmd(struct edgetpu_dev *etdev, dma_addr_t daddr, size_t count);
 
+/**
+ * edgetpu_kci_fw_debug_reset() - Send firmware debug service reset while waiting for async
+ * response to the previous command.
+ */
+int edgetpu_kci_fw_debug_reset(struct edgetpu_dev *etdev);
+
 #endif /* __EDGETPU_KCI_H__ */

@@ -16,7 +16,6 @@
 #include "edgetpu-internal.h"
 #include "edgetpu-mobile-platform.h"
 #include "edgetpu-pm.h"
-#include "rio-platform.h"
 
 #include "edgetpu-mobile-platform.c"
 
@@ -32,28 +31,9 @@ static const struct of_device_id edgetpu_of_match[] = {
 
 MODULE_DEVICE_TABLE(of, edgetpu_of_match);
 
-static int edgetpu_platform_probe(struct platform_device *pdev)
-{
-	struct device *dev = &pdev->dev;
-	struct rio_platform_dev *rpdev;
-	struct edgetpu_mobile_platform_dev *etmdev;
-
-	rpdev = devm_kzalloc(dev, sizeof(*rpdev), GFP_KERNEL);
-	if (!rpdev)
-		return -ENOMEM;
-
-	etmdev = &rpdev->mobile_dev;
-	return edgetpu_mobile_platform_probe(pdev, etmdev);
-}
-
-static int edgetpu_platform_remove(struct platform_device *pdev)
-{
-	return edgetpu_mobile_platform_remove(pdev);
-}
-
 static struct platform_driver edgetpu_platform_driver = {
-	.probe = edgetpu_platform_probe,
-	.remove = edgetpu_platform_remove,
+	.probe = edgetpu_mobile_platform_probe,
+	.remove = edgetpu_mobile_platform_remove,
 	.driver = {
 			.name = "edgetpu_platform",
 			.of_match_table = edgetpu_of_match,

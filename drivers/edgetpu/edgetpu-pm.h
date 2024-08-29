@@ -9,11 +9,13 @@
 #define __EDGETPU_PM_H__
 
 #include <linux/pm.h>
+#include <linux/types.h>
 
 #include <gcip/gcip-pm.h>
 
-#include "edgetpu-config.h"
 #include "edgetpu-internal.h"
+
+extern u32 edgetpu_active_states[];
 
 /* Power management data for an EdgeTPU device. */
 struct edgetpu_pm {
@@ -21,7 +23,7 @@ struct edgetpu_pm {
 	struct gcip_pm *gpm;
 	struct dentry *debugfs_dir;
 	struct mutex policy_lock;
-	enum edgetpu_pwr_state curr_policy;
+	u32 curr_policy;
 	struct mutex state_lock;
 	u64 requested_state;
 	/*
@@ -108,6 +110,21 @@ static inline void edgetpu_pm_unlock(struct edgetpu_dev *etdev)
 {
 	gcip_pm_unlock(etdev->pm->gpm);
 }
+
+/**
+ * edgetpu_pm_set_freq_limits() - Set min and max frequencies to operate the TPU block at.
+ * @etdev: The TPU device to set the limits for
+ * @min_freq: A pointer to the min frequency in kHz. If NULL, the existing min will be unchanged
+ * @max_freq: A pointer to the max frequency in kHz. If NULL, the existing max will be unchanged
+ *
+ * Set new minimum and maximum frequencies to run the TPU block at. If firmware is running, these
+ * limits will be sent immediately, otherwise they will be sent next time firmware starts. A value
+ * of 0 indicates no limit for either field. A NULL pointer indicates that the existing limit
+ * should be preserved.
+ *
+ * Return: 0 on success, or an error code if firmware is running and rejects the limits.
+ */
+int edgetpu_pm_set_freq_limits(struct edgetpu_dev *etdev, u32 *min_freq, u32 *max_freq);
 
 /* Initialize a power management interface for an edgetpu device */
 int edgetpu_pm_create(struct edgetpu_dev *etdev);

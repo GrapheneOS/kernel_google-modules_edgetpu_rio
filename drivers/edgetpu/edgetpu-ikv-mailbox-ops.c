@@ -95,17 +95,23 @@ static void edgetpu_ikv_release_cmd_queue_lock(struct gcip_mailbox *mailbox)
 
 static u64 edgetpu_ikv_get_cmd_elem_seq(struct gcip_mailbox *mailbox, void *cmd)
 {
-	return edgetpu_vii_command_get_seq_number(cmd);
+	struct edgetpu_ikv *ikv = gcip_mailbox_get_data(mailbox);
+
+	return edgetpu_vii_command_get_seq_number(ikv->etdev, cmd);
 }
 
 static void edgetpu_ikv_set_cmd_elem_seq(struct gcip_mailbox *mailbox, void *cmd, u64 seq)
 {
-	edgetpu_vii_command_set_seq_number(cmd, seq);
+	struct edgetpu_ikv *ikv = gcip_mailbox_get_data(mailbox);
+
+	edgetpu_vii_command_set_seq_number(ikv->etdev, cmd, seq);
 }
 
 static u32 edgetpu_ikv_get_cmd_elem_code(struct gcip_mailbox *mailbox, void *cmd)
 {
-	return edgetpu_vii_command_get_code(cmd);
+	struct edgetpu_ikv *ikv = gcip_mailbox_get_data(mailbox);
+
+	return edgetpu_vii_command_get_code(ikv->etdev, cmd);
 }
 
 static u32 edgetpu_ikv_get_resp_queue_size(struct gcip_mailbox *mailbox)
@@ -162,12 +168,16 @@ static void edgetpu_ikv_release_resp_queue_lock(struct gcip_mailbox *mailbox)
 
 static u64 edgetpu_ikv_get_resp_elem_seq(struct gcip_mailbox *mailbox, void *resp)
 {
-	return edgetpu_vii_response_get_seq_number(resp);
+	struct edgetpu_ikv *ikv = gcip_mailbox_get_data(mailbox);
+
+	return edgetpu_vii_response_get_seq_number(ikv->etdev, resp);
 }
 
 static void edgetpu_ikv_set_resp_elem_seq(struct gcip_mailbox *mailbox, void *resp, u64 seq)
 {
-	edgetpu_vii_response_set_seq_number(resp, seq);
+	struct edgetpu_ikv *ikv = gcip_mailbox_get_data(mailbox);
+
+	edgetpu_vii_response_set_seq_number(ikv->etdev, resp, seq);
 }
 
 static void edgetpu_ikv_acquire_wait_list_lock(struct gcip_mailbox *mailbox, bool irqsave,
@@ -317,6 +327,8 @@ static void edgetpu_ikv_release_awaiter_data(void *data)
 	struct edgetpu_ikv_response *ikv_resp = data;
 
 	edgetpu_ikv_additional_info_free(ikv_resp->etikv->etdev, &ikv_resp->additional_info);
+	if (ikv_resp->release_callback)
+		ikv_resp->release_callback(ikv_resp->release_data);
 	kfree(ikv_resp->resp);
 	kfree(ikv_resp);
 }
@@ -370,12 +382,14 @@ void edgetpu_ikv_process_response(struct edgetpu_ikv_response *ikv_resp, u16 *re
 
 	/* If the command resulted in an error, override the error code and retval as provided. */
 	if (resp_code)
-		edgetpu_vii_response_set_code(ikv_resp->resp, *resp_code);
+		edgetpu_vii_response_set_code(ikv_resp->etikv->etdev, ikv_resp->resp, *resp_code);
 	if (resp_retval)
-		edgetpu_vii_response_set_retval(ikv_resp->resp, *resp_retval);
+		edgetpu_vii_response_set_retval(ikv_resp->etikv->etdev, ikv_resp->resp,
+						*resp_retval);
 
 	/* Set the response sequence number to the value expected by the client. */
-	edgetpu_vii_response_set_seq_number(ikv_resp->resp, ikv_resp->client_seq);
+	edgetpu_vii_response_set_seq_number(ikv_resp->etikv->etdev, ikv_resp->resp,
+					    ikv_resp->client_seq);
 
 	/*
 	 * Move the response from the "pending" list to the "ready" list.

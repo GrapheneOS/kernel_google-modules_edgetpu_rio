@@ -2,6 +2,9 @@
 #
 # Makefile for GCIP framework.
 #
+# Arguments
+#   GMODULE_SRC_PATH: The path of directory containing source of google-modules.
+#                     (default: $(KERNEL_SRC)/../private/google-modules)
 
 CONFIG_GCIP		?= m
 obj-$(CONFIG_GCIP)	+= gcip.o
@@ -39,8 +42,11 @@ CURRENT_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 ccflags-y	+= -I$(CURRENT_DIR)/../../include \
 		   -I$(CURRENT_DIR)/iif/include \
 
-ifneq ($(wildcard $(KERNEL_SRC)/../private/google-modules/iif/include/),)
-ccflags-y	+= -I$(KERNEL_SRC)/../private/google-modules/iif/include
+# Set the path of google-modules sources if not defined.
+GMODULE_SRC_PATH ?= $(KERNEL_SRC)/../private/google-modules
+
+ifneq ($(wildcard $(GMODULE_SRC_PATH)/iif/include),)
+ccflags-y	+= -I$(GMODULE_SRC_PATH)/iif/include
 endif
 
 

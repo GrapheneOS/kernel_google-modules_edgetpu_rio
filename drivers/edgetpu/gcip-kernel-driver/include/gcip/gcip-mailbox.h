@@ -449,6 +449,21 @@ void gcip_mailbox_release(struct gcip_mailbox *mailbox);
 void gcip_mailbox_consume_responses_work(struct gcip_mailbox *mailbox);
 
 /*
+ * The role of this function is the same with the `gcip_mailbox_consume_responses_work` function
+ * above, but expected to be called from the non-deferred work. The function guarantees that all
+ * responses in the mailbox at the moment have been processed when the function returns.
+ *
+ * If the purpose of calling this function is to handle un-processed arrived responses when a client
+ * is going to stop using the mailbox, the caller should guarantee that the IP won't return
+ * responses for the client anymore first.
+ *
+ * Note that it is recommended to call this function in the normal context only. Otherwise, please
+ * keep in mind that if the `handle_awaiter_arrived`, `before_handle_resp` or `after_fetch_resps`
+ * operators can sleep, this function shouldn't be called in the IRQ context.
+ */
+void gcip_mailbox_consume_responses(struct gcip_mailbox *mailbox);
+
+/*
  * Pushes an element to cmd queue and waits for the response (synchronous).
  * Returns -ETIMEDOUT if no response is received within mailbox->timeout msecs.
  *

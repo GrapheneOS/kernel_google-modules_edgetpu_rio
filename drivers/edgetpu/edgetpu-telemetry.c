@@ -50,18 +50,18 @@ static void set_telemetry_mem(struct edgetpu_dev *etdev)
 	struct edgetpu_telemetry_ctx *telem = etdev->telemetry;
 	int i, offset = 0;
 
-	for (i = 0; i < etdev->num_cores; i++) {
-		telem[i].log_mem.vaddr = edgetpu_firmware_shared_mem_vaddr(etdev) + offset;
-		telem[i].log_mem.dma_addr = edgetpu_firmware_shared_mem_daddr(etdev) + offset;
+	for (i = 0; i < etdev->num_telemetry_buffers; i++) {
+		telem[i].log_mem.vaddr = edgetpu_firmware_shared_data_vaddr(etdev) + offset;
+		telem[i].log_mem.dma_addr = edgetpu_firmware_shared_data_daddr(etdev) + offset;
 		telem[i].log_mem.host_addr = 0;
-		telem[i].log_mem.size = EDGETPU_TELEMETRY_LOG_BUFFER_SIZE;
-		telem[i].log_mem.vaddr = edgetpu_firmware_shared_mem_vaddr(etdev) + offset;
-		offset += EDGETPU_TELEMETRY_LOG_BUFFER_SIZE;
-		telem[i].trace_mem.vaddr = edgetpu_firmware_shared_mem_vaddr(etdev) + offset;
-		telem[i].trace_mem.dma_addr = edgetpu_firmware_shared_mem_daddr(etdev) + offset;
+		telem[i].log_mem.size = etdev->log_buffer_size;
+		telem[i].log_mem.vaddr = edgetpu_firmware_shared_data_vaddr(etdev) + offset;
+		offset += etdev->log_buffer_size;
+		telem[i].trace_mem.vaddr = edgetpu_firmware_shared_data_vaddr(etdev) + offset;
+		telem[i].trace_mem.dma_addr = edgetpu_firmware_shared_data_daddr(etdev) + offset;
 		telem[i].trace_mem.host_addr = 0;
-		telem[i].trace_mem.size = EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE;
-		offset += EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE;
+		telem[i].trace_mem.size = etdev->trace_buffer_size;
+		offset += etdev->trace_buffer_size;
 	}
 }
 
@@ -69,15 +69,21 @@ int edgetpu_telemetry_init(struct edgetpu_dev *etdev)
 {
 	int ret, i;
 
-	if (!etdev->telemetry)
-		etdev->telemetry = devm_kcalloc(etdev->dev, etdev->num_cores,
+	if (!etdev->telemetry) {
+		etdev->telemetry = devm_kcalloc(etdev->dev, etdev->num_telemetry_buffers,
 						sizeof(*etdev->telemetry), GFP_KERNEL);
+	} else {
+		etdev->telemetry = devm_krealloc(
+			etdev->dev, etdev->telemetry,
+			etdev->num_telemetry_buffers * sizeof(*etdev->telemetry), GFP_KERNEL);
+	}
+
 	if (!etdev->telemetry)
 		return -ENOMEM;
 
 	set_telemetry_mem(etdev);
 
-	for (i = 0; i < etdev->num_cores; i++) {
+	for (i = 0; i < etdev->num_telemetry_buffers; i++) {
 		ret = gcip_telemetry_init(etdev->dev, &etdev->telemetry[i].log, "telemetry_log",
 					  etdev->telemetry[i].log_mem.vaddr,
 					  EDGETPU_TELEMETRY_LOG_BUFFER_SIZE,
@@ -113,7 +119,7 @@ void edgetpu_telemetry_exit(struct edgetpu_dev *etdev)
 {
 	int i;
 
-	for (i = 0; i < etdev->num_cores; i++) {
+	for (i = 0; i < etdev->num_telemetry_buffers; i++) {
 #if IS_ENABLED(CONFIG_EDGETPU_TELEMETRY_TRACE)
 		gcip_telemetry_exit(&etdev->telemetry[i].trace);
 #endif
@@ -155,7 +161,7 @@ int edgetpu_telemetry_set_event(struct edgetpu_dev *etdev, enum gcip_telemetry_t
 {
 	int i, ret;
 
-	for (i = 0; i < etdev->num_cores; i++) {
+	for (i = 0; i < etdev->num_telemetry_buffers; i++) {
 		ret = gcip_telemetry_set_event(select_telemetry(&etdev->telemetry[i], type),
 					       eventfd);
 		if (ret) {
@@ -171,7 +177,7 @@ void edgetpu_telemetry_unset_event(struct edgetpu_dev *etdev, enum gcip_telemetr
 {
 	int i;
 
-	for (i = 0; i < etdev->num_cores; i++)
+	for (i = 0; i < etdev->num_telemetry_buffers; i++)
 		gcip_telemetry_unset_event(select_telemetry(&etdev->telemetry[i], type));
 }
 
@@ -179,7 +185,7 @@ void edgetpu_telemetry_irq_handler(struct edgetpu_dev *etdev)
 {
 	int i;
 
-	for (i = 0; i < etdev->num_cores; i++) {
+	for (i = 0; i < etdev->num_telemetry_buffers; i++) {
 		gcip_telemetry_irq_handler(&etdev->telemetry[i].log);
 #if IS_ENABLED(CONFIG_EDGETPU_TELEMETRY_TRACE)
 		gcip_telemetry_irq_handler(&etdev->telemetry[i].trace);
@@ -199,7 +205,7 @@ void edgetpu_telemetry_mappings_show(struct edgetpu_dev *etdev,
 {
 	int i;
 
-	for (i = 0; i < etdev->num_cores; i++) {
+	for (i = 0; i < etdev->num_telemetry_buffers; i++) {
 		telemetry_mappings_show(&etdev->telemetry[i].log, &etdev->telemetry[i].log_mem, s);
 #if IS_ENABLED(CONFIG_EDGETPU_TELEMETRY_TRACE)
 		telemetry_mappings_show(&etdev->telemetry[i].trace, &etdev->telemetry[i].trace_mem,
@@ -235,6 +241,9 @@ int edgetpu_mmap_telemetry_buffer(struct edgetpu_dev *etdev, enum gcip_telemetry
 		.mem = select_telemetry_mem(&etdev->telemetry[core_id], type),
 		.vma = vma,
 	};
+
+	if (core_id > etdev->num_telemetry_buffers)
+		return -EINVAL;
 
 	return gcip_telemetry_mmap_buffer(select_telemetry(&etdev->telemetry[core_id], type),
 					  telemetry_mmap_buffer, &args);

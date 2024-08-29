@@ -160,10 +160,19 @@ struct edgetpu_dev_prop {
 /* a mark to know whether we read valid versions from the firmware header */
 #define EDGETPU_INVALID_KCI_VERSION (~0u)
 
+enum edgetpu_vii_format {
+	EDGETPU_VII_FORMAT_UNKNOWN,
+	EDGETPU_VII_FORMAT_FLATBUFFER,
+	EDGETPU_VII_FORMAT_LITEBUF,
+};
+
 struct edgetpu_dev {
 	struct device *dev;	   /* platform/pci bus device */
 	uint num_ifaces;		   /* Number of device interfaces */
 	uint num_cores; /* Number of cores */
+	uint num_telemetry_buffers; /* Number of telemetry buffers */
+	size_t log_buffer_size;
+	size_t trace_buffer_size;
 	/*
 	 * Array of device interfaces
 	 * First element is the default interface
@@ -196,6 +205,7 @@ struct edgetpu_dev {
 	struct gcip_fw_tracing *fw_tracing; /* firmware tracing */
 	struct edgetpu_telemetry_ctx *telemetry;
 	struct gcip_thermal *thermal;
+	struct gcip_devfreq *devfreq;
 	struct edgetpu_usage_stats *usage_stats; /* usage stats private data */
 	struct edgetpu_pm *pm; /* Power management interface */
 	/* Memory pool in instruction remap region */
@@ -204,6 +214,13 @@ struct edgetpu_dev {
 	struct gcip_dma_fence_manager *gfence_mgr; /* DMA sync fences manager */
 	/* version read from the firmware binary file */
 	struct edgetpu_fw_version fw_version;
+	/*
+	 * When a client opens the device, the open handler must acquire this lock and ensure
+	 * `vii_format` is not EDGETPU_VII_FORMAT_UNKNOWN. If it is, the handler must attempt to
+	 * load firmware to initialize `vii_format`.
+	 */
+	struct mutex vii_format_uninitialized_lock;
+	enum edgetpu_vii_format vii_format;
 	atomic_t job_count;	/* times joined to a device group */
 	/* To save device properties */
 	struct edgetpu_dev_prop device_prop;
@@ -334,9 +351,6 @@ edgetpu_client_add(struct edgetpu_dev_iface *etiface);
 /* Remove TPU client */
 void edgetpu_client_remove(struct edgetpu_client *client);
 
-/* Handle chip-specific client removal */
-void edgetpu_chip_client_remove(struct edgetpu_client *client);
-
 /* mmap() device/queue memory */
 int edgetpu_mmap(struct edgetpu_client *client, struct vm_area_struct *vma);
 
@@ -354,24 +368,18 @@ int edgetpu_get_state_errno_locked(struct edgetpu_dev *etdev);
 
 /*
  * "External mailboxes" below refers to mailboxes that are not handled
- * directly by the runtime, such as secure or device-to-device.
- *
- * Chip specific code will typically keep track of state and inform the firmware
- * that a mailbox has become active/inactive.
+ * directly by the runtime, such as TZ or inter-IP mailboxes.
  */
 
-/* Chip-specific code to acquire external mailboxes */
-int edgetpu_chip_acquire_ext_mailbox(struct edgetpu_client *client,
-				     struct edgetpu_ext_mailbox_ioctl *args);
+/* Acquire external mailbox */
+int edgetpu_acquire_ext_mailbox(struct edgetpu_client *client,
+				struct edgetpu_ext_mailbox_ioctl *args);
 
-/* Chip-specific code to release external mailboxes */
-int edgetpu_chip_release_ext_mailbox(struct edgetpu_client *client,
-				     struct edgetpu_ext_mailbox_ioctl *args);
+/* Release external mailbox */
+int edgetpu_release_ext_mailbox(struct edgetpu_client *client,
+				struct edgetpu_ext_mailbox_ioctl *args);
 
-/*
- * Chip specific function to get indexes of external mailbox based on
- * @mbox_type
- */
-int edgetpu_chip_get_ext_mailbox_index(u32 mbox_type, u32 *start, u32 *end);
+/* External mailbox/secure client removal, called by edgetpu_client_remove() */
+void edgetpu_ext_client_remove(struct edgetpu_client *client);
 
 #endif /* __EDGETPU_INTERNAL_H__ */

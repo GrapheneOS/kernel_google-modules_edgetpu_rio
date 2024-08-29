@@ -328,12 +328,17 @@ void edgetpu_group_mappings_show(struct edgetpu_device_group *group,
  * If @out_fence is not NULL, then the fence will be signaled when the response for this command
  * arrives. If the command is canceled or times out, then @out_fence will be errored.
  *
+ * @release_callback will be called, with @release_data as an argument, immediately before the sent
+ * command's response is released, regardless of whether any in-fences prevent the command from
+ * being sent. If this function returns an error, @release_callback will NOT be called.
+ *
  * Returns zero on success or a negative errno on error.
  */
 int edgetpu_device_group_send_vii_command(struct edgetpu_device_group *group, void *cmd,
 					  struct gcip_fence_array *in_fence_array,
 					  struct gcip_fence_array *out_fence_array,
-					  struct edgetpu_ikv_additional_info *additional_info);
+					  struct edgetpu_ikv_additional_info *additional_info,
+					  void (*release_callback)(void *), void *release_data);
 
 /*
  * Pops the oldest received VII response sent to `group`, and copies it to `resp`

@@ -831,8 +831,17 @@ void edgetpu_mailbox_deactivate_vii(struct edgetpu_dev *etdev, u32 pasid)
 
 	mutex_lock(&eh->lock);
 	/* TODO(b/267978887) Finalize `client_id` field format */
-	if (mailbox_map & eh->fw_state)
+	if (mailbox_map & eh->fw_state) {
 		edgetpu_kci_release_vmbox(etdev->etkci, pasid);
+
+		/*
+		 * Now that firmware has acknowledged the PASID's closure and flushed all in-flight
+		 * IKV commands, the IKV response queue must be flushed to ensure no stale packets
+		 * meant for this PASID are not incorrectly consumed by a future client that
+		 * recycles this PASID.
+		 */
+		edgetpu_ikv_flush_responses(etdev->etikv);
+	}
 
 	eh->state &= ~mailbox_map;
 	eh->fw_state &= ~mailbox_map;

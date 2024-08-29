@@ -28,10 +28,6 @@
 #include <gcip/gcip-iommu.h>
 #include <gcip/gcip-mem-pool.h>
 
-#if GCIP_HAS_IOVAD_BEST_FIT_ALGO
-#include <linux/dma-iommu.h>
-#endif
-
 /* Macros for manipulating @gcip_map_flags parameter. */
 #define GCIP_MAP_MASK(ATTR) \
 	((BIT_ULL(GCIP_MAP_FLAGS_##ATTR##_BIT_SIZE) - 1) << (GCIP_MAP_FLAGS_##ATTR##_OFFSET))
@@ -247,9 +243,6 @@ static void iovad_finalize_domain(struct gcip_iommu_domain *domain)
 
 static void iovad_enable_best_fit_algo(struct gcip_iommu_domain *domain)
 {
-#if GCIP_HAS_IOVAD_BEST_FIT_ALGO
-	domain->iova_space.iovad.best_fit = true;
-#endif /* GCIP_HAS_IOVAD_BEST_FIT_ALGO */
 }
 
 static dma_addr_t iovad_alloc_iova_space(struct gcip_iommu_domain *domain, size_t size,
@@ -687,16 +680,7 @@ int gcip_iommu_domain_pool_init(struct gcip_iommu_domain_pool *pool, struct devi
 
 	pool->min_pasid = 0;
 	pool->max_pasid = 0;
-#if GCIP_HAS_IOMMU_PASID
 	ida_init(&pool->pasid_pool);
-#elif GCIP_HAS_AUX_DOMAINS
-	if (iommu_dev_enable_feature(dev, IOMMU_DEV_FEAT_AUX))
-		dev_warn(dev, "AUX domains not supported\n");
-	else
-		pool->aux_enabled = true;
-#else
-	dev_warn(dev, "Attaching additional domains not supported\n");
-#endif
 
 	dev_dbg(dev, "Init GCIP IOMMU domain pool, base_daddr=%#llx, size=%#zx", pool->base_daddr,
 		pool->size);
@@ -707,14 +691,12 @@ int gcip_iommu_domain_pool_init(struct gcip_iommu_domain_pool *pool, struct devi
 void gcip_iommu_domain_pool_destroy(struct gcip_iommu_domain_pool *pool)
 {
 	gcip_domain_pool_destroy(&pool->domain_pool);
-#if GCIP_HAS_IOMMU_PASID
 	ida_destroy(&pool->pasid_pool);
-#endif
 }
 
 void gcip_iommu_domain_pool_enable_best_fit_algo(struct gcip_iommu_domain_pool *pool)
 {
-	if (pool->domain_type == GCIP_IOMMU_DOMAIN_TYPE_IOVAD && !GCIP_HAS_IOVAD_BEST_FIT_ALGO) {
+	if (pool->domain_type == GCIP_IOMMU_DOMAIN_TYPE_IOVAD) {
 		dev_warn(pool->dev, "This env doesn't support best-fit algorithm with IOVAD");
 		pool->best_fit = false;
 	} else {
@@ -788,7 +770,6 @@ static int _gcip_iommu_domain_pool_attach_domain(struct gcip_iommu_domain_pool *
 {
 	int ret = -EOPNOTSUPP, pasid = IOMMU_PASID_INVALID;
 
-#if GCIP_HAS_IOMMU_PASID
 	pasid = ida_alloc_range(&pool->pasid_pool, pool->min_pasid, pool->max_pasid, GFP_KERNEL);
 	if (pasid < 0)
 		return pasid;
@@ -799,22 +780,6 @@ static int _gcip_iommu_domain_pool_attach_domain(struct gcip_iommu_domain_pool *
 		return ret;
 	}
 
-#elif GCIP_HAS_AUX_DOMAINS
-	if (!pool->aux_enabled)
-		return -ENODEV;
-
-	ret = iommu_aux_attach_device(domain->domain, pool->dev);
-	if (ret)
-		return ret;
-
-	pasid = iommu_aux_get_pasid(domain->domain, pool->dev);
-	if (pasid < pool->min_pasid || pasid > pool->max_pasid) {
-		dev_warn(pool->dev, "Invalid PASID %d returned from iommu", pasid);
-		iommu_aux_detach_device(domain->domain, pool->dev);
-		return -EINVAL;
-	}
-
-#endif
 	domain->pasid = pasid;
 	return ret;
 }
@@ -834,13 +799,8 @@ void gcip_iommu_domain_pool_detach_domain(struct gcip_iommu_domain_pool *pool,
 {
 	if (domain->pasid == IOMMU_PASID_INVALID)
 		return;
-#if GCIP_HAS_IOMMU_PASID
 	iommu_detach_device_pasid(domain->domain, pool->dev, domain->pasid);
 	ida_free(&pool->pasid_pool, domain->pasid);
-#elif GCIP_HAS_AUX_DOMAINS
-	if (pool->aux_enabled)
-		iommu_aux_detach_device(domain->domain, pool->dev);
-#endif
 	domain->pasid = IOMMU_PASID_INVALID;
 }
 
@@ -901,7 +861,7 @@ void gcip_iommu_dmabuf_map_show(struct gcip_iommu_mapping *mapping, struct seq_f
 		container_of(mapping, struct gcip_iommu_dma_buf_mapping, mapping);
 
 	seq_printf(s, "  %pad %lu %s %s %pad", &mapping->device_address,
-		   DIV_ROUND_UP(mapping->size, PAGE_SIZE), dma_dir_tbl[mapping->orig_dir],
+		   DIV_ROUND_UP(mapping->size, PAGE_SIZE), dma_dir_tbl[mapping->dir],
 		   dmabuf_mapping->dma_buf->exp_name,
 		   &sg_dma_address(dmabuf_mapping->sgt_default->sgl));
 	entry_show_dma_addrs(mapping, s);
@@ -1066,7 +1026,6 @@ static struct gcip_iommu_mapping *gcip_iommu_domain_map_buffer_sgt(struct gcip_i
 	mapping->domain = domain;
 	mapping->sgt = sgt;
 	mapping->type = GCIP_IOMMU_MAPPING_BUFFER;
-	mapping->orig_dir = orig_dir;
 	mapping->user_specified_daddr = iova;
 
 	ret = gcip_iommu_domain_map_sgt_to_iova(domain, sgt, iova, &gcip_map_flags);
@@ -1130,7 +1089,6 @@ gcip_iommu_domain_map_dma_buf_sgt(struct gcip_iommu_domain *domain, struct dma_b
 	mapping->domain = domain;
 	mapping->size = dmabuf->size;
 	mapping->type = GCIP_IOMMU_MAPPING_DMA_BUF;
-	mapping->orig_dir = orig_dir;
 	mapping->user_specified_daddr = iova;
 
 	if (domain->default_domain) {
@@ -1292,9 +1250,7 @@ struct gcip_iommu_mapping *gcip_iommu_domain_map_dma_buf_to_iova(struct gcip_iom
 		return ERR_CAST(attachment);
 	}
 
-#if GCIP_IS_GKI
 	attachment->dma_map_attrs |= GCIP_MAP_FLAGS_GET_DMA_ATTR(gcip_map_flags);
-#endif
 
 	/* Map the attachment into the default domain. */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 2, 0)
@@ -1402,3 +1358,5 @@ void gcip_iommu_unmap(struct gcip_iommu_domain *domain, dma_addr_t iova, size_t 
 		dev_warn(domain->dev, "Unmapping IOVA %pad, size (%#zx) only unmapped %#zx", &iova,
 			 size, unmapped);
 }
+
+MODULE_IMPORT_NS(DMA_BUF);

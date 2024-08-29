@@ -17,6 +17,7 @@
 #include <iif/iif-manager.h>
 
 #include "edgetpu-config.h"
+#include "edgetpu-devfreq.h"
 #include "edgetpu-dmabuf.h"
 #include "edgetpu-firmware.h"
 #include "edgetpu-internal.h"
@@ -68,86 +69,6 @@ static void edgetpu_platform_cleanup_fw_region(struct edgetpu_mobile_platform_de
 	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
 
 	edgetpu_firmware_cleanup_fw_region(etdev);
-}
-
-static int mobile_check_ext_mailbox_args(const char *func, struct edgetpu_dev *etdev,
-					 struct edgetpu_ext_mailbox_ioctl *args)
-{
-	if (args->type != EDGETPU_EXT_MAILBOX_TYPE_TZ) {
-		etdev_err(etdev, "%s: Invalid type %d != %d\n", func, args->type,
-			  EDGETPU_EXT_MAILBOX_TYPE_TZ);
-		return -EINVAL;
-	}
-	if (args->count != 1) {
-		etdev_err(etdev, "%s: Invalid mailbox count: %d != 1\n", func, args->count);
-		return -EINVAL;
-	}
-	return 0;
-}
-
-int edgetpu_chip_acquire_ext_mailbox(struct edgetpu_client *client,
-				     struct edgetpu_ext_mailbox_ioctl *args)
-{
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(client->etdev);
-	int ret;
-
-	ret = mobile_check_ext_mailbox_args(__func__, client->etdev, args);
-	if (ret)
-		return ret;
-
-	mutex_lock(&etmdev->tz_mailbox_lock);
-	if (etmdev->secure_client) {
-		etdev_err(client->etdev, "TZ mailbox already in use by PID %d\n",
-			  etmdev->secure_client->pid);
-		mutex_unlock(&etmdev->tz_mailbox_lock);
-		return -EBUSY;
-	}
-	ret = edgetpu_mailbox_enable_ext(client, EDGETPU_TZ_MAILBOX_ID, NULL, 0);
-	if (!ret)
-		etmdev->secure_client = client;
-	mutex_unlock(&etmdev->tz_mailbox_lock);
-	return ret;
-}
-
-int edgetpu_chip_release_ext_mailbox(struct edgetpu_client *client,
-				     struct edgetpu_ext_mailbox_ioctl *args)
-{
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(client->etdev);
-	int ret = 0;
-
-	ret = mobile_check_ext_mailbox_args(__func__, client->etdev,
-					      args);
-	if (ret)
-		return ret;
-
-	mutex_lock(&etmdev->tz_mailbox_lock);
-	if (!etmdev->secure_client) {
-		etdev_warn(client->etdev, "TZ mailbox already released\n");
-		mutex_unlock(&etmdev->tz_mailbox_lock);
-		return 0;
-	}
-	if (etmdev->secure_client != client) {
-		etdev_err(client->etdev,
-			  "TZ mailbox owned by different client\n");
-		mutex_unlock(&etmdev->tz_mailbox_lock);
-		return -EBUSY;
-	}
-	etmdev->secure_client = NULL;
-	ret = edgetpu_mailbox_disable_ext(client, EDGETPU_TZ_MAILBOX_ID);
-	mutex_unlock(&etmdev->tz_mailbox_lock);
-	return ret;
-}
-
-void edgetpu_chip_client_remove(struct edgetpu_client *client)
-{
-	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(client->etdev);
-
-	mutex_lock(&etmdev->tz_mailbox_lock);
-	if (etmdev->secure_client == client) {
-		etmdev->secure_client = NULL;
-		edgetpu_mailbox_disable_ext(client, EDGETPU_TZ_MAILBOX_ID);
-	}
-	mutex_unlock(&etmdev->tz_mailbox_lock);
 }
 
 /* Handle mailbox response doorbell IRQ for mobile platform devices. */
@@ -262,11 +183,11 @@ static void edgetpu_put_iif_mgr(struct edgetpu_dev *etdev)
 	put_device(etdev->iif_dev);
 }
 
-static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
-					 struct edgetpu_mobile_platform_dev *etmdev)
+static int edgetpu_mobile_platform_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct edgetpu_dev *etdev = &etmdev->edgetpu_dev;
+	struct edgetpu_mobile_platform_dev *etmdev;
+	struct edgetpu_dev *etdev;
 	struct resource *r;
 	struct edgetpu_mapped_resource regs;
 	int ret;
@@ -277,12 +198,19 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 		{ .name = "edgetpu-soc" },
 	};
 
+	etmdev = devm_kzalloc(dev, sizeof(*etmdev), GFP_KERNEL);
+	if (!etmdev)
+		return -ENOMEM;
 	mutex_init(&etmdev->tz_mailbox_lock);
-
+	etdev = &etmdev->edgetpu_dev;
 	platform_set_drvdata(pdev, etdev);
 	etdev->dev = dev;
 	etdev->num_cores = EDGETPU_NUM_CORES;
-
+	etdev->num_telemetry_buffers = EDGETPU_NUM_CORES;
+	etdev->log_buffer_size = EDGETPU_TELEMETRY_LOG_BUFFER_SIZE;
+#if IS_ENABLED(CONFIG_EDGETPU_TELEMETRY_TRACE)
+	etdev->trace_buffer_size = EDGETPU_TELEMETRY_TRACE_BUFFER_SIZE;
+#endif
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (IS_ERR_OR_NULL(r)) {
 		dev_err(dev, "failed to get memory resource");
@@ -309,9 +237,11 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 	ret = edgetpu_platform_setup_fw_region(etmdev);
 	if (ret) {
 		dev_err(dev, "setup fw regions failed: %d", ret);
-		goto out_shutdown;
+		return ret;
 	}
 
+	mutex_init(&etdev->vii_format_uninitialized_lock);
+	etdev->vii_format = EDGETPU_VII_FORMAT_UNKNOWN;
 	ret = edgetpu_device_add(etdev, &regs, iface_params, ARRAY_SIZE(iface_params));
 	if (ret) {
 		dev_err(dev, "edgetpu device add failed: %d", ret);
@@ -334,6 +264,10 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 	if (ret)
 		etdev_warn(etdev, "Failed to create thermal device: %d", ret);
 
+	ret = edgetpu_devfreq_create(etdev);
+	if (ret)
+		etdev_warn(etdev, "Failed to create devfreq interface: %d", ret);
+
 	ret = edgetpu_sync_fence_manager_create(etdev);
 	if (ret) {
 		etdev_err(etdev, "Failed to create DMA fence manager: %d", ret);
@@ -352,15 +286,13 @@ static int edgetpu_mobile_platform_probe(struct platform_device *pdev,
 	return 0;
 
 out_destroy_thermal:
+	edgetpu_devfreq_destroy(etdev);
 	edgetpu_thermal_destroy(etdev);
 	edgetpu_firmware_destroy(etdev);
 out_remove_device:
 	edgetpu_device_remove(etdev);
 out_cleanup_fw_region:
 	edgetpu_platform_cleanup_fw_region(etmdev);
-out_shutdown:
-	dev_dbg(dev, "Probe finished with error %d, powering down", ret);
-	edgetpu_pm_shutdown(etdev, true);
 	return ret;
 }
 
@@ -370,6 +302,7 @@ static int edgetpu_mobile_platform_remove(struct platform_device *pdev)
 	struct edgetpu_mobile_platform_dev *etmdev = to_mobile_dev(etdev);
 
 	edgetpu_put_iif_mgr(etdev);
+	edgetpu_devfreq_destroy(etdev);
 	edgetpu_thermal_destroy(etdev);
 	edgetpu_firmware_destroy(etdev);
 	edgetpu_device_remove(etdev);

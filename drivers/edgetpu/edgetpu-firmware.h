@@ -59,6 +59,32 @@ struct edgetpu_image_header {
 #define EDGETPU_FW_MAGIC	0x46555054
 
 /*
+ * Instruction remap registers make carveout memory appear at address
+ * 0x10000000 from the TPU CPU perspective
+ */
+#define EDGETPU_INSTRUCTION_REMAP_BASE		0x10000000
+
+/* Default size limit of the area in remapped DRAM reserved for firmware code and internal data. */
+#define EDGETPU_DEFAULT_FW_LIMIT 0x100000
+
+/* Default size of remapped DRAM data region. */
+#define EDGETPU_DEFAULT_REMAPPED_DATA_SIZE 0x100000
+
+/*
+ * Maximum size limit of the area in remapped DRAM reserved for firmware code and internal data.
+ * The firmware image config may modify the split between code and data, but the total size of both
+ * must be respected.
+ */
+#define EDGETPU_MAX_FW_LIMIT (EDGETPU_DEFAULT_FW_LIMIT + EDGETPU_DEFAULT_REMAPPED_DATA_SIZE)
+
+/*
+ * Default address from which the TPU CPU can access data in the remapped region.
+ * Data in remapped DRAM starts after firmware code and internal data.
+ */
+#define EDGETPU_DEFAULT_REMAPPED_DATA_ADDR                                                         \
+	(EDGETPU_INSTRUCTION_REMAP_BASE + EDGETPU_DEFAULT_FW_LIMIT)
+
+/*
  * Load and run firmware.
  * @name: the name passed into underlying request_firmware API
  * Used internally by the sysfs load interface and by unit tests.
@@ -160,17 +186,17 @@ int edgetpu_firmware_setup_fw_region(struct edgetpu_dev *etdev, phys_addr_t fw_r
 /* Cleanup firmware region carveout and iremap pool, free firmware private data. */
 void edgetpu_firmware_cleanup_fw_region(struct edgetpu_dev *etdev);
 
-/* Return KVA of FW shared memory area. */
-void *edgetpu_firmware_shared_mem_vaddr(struct edgetpu_dev *etdev);
+/* Return KVA of FW shared data area. */
+void *edgetpu_firmware_shared_data_vaddr(struct edgetpu_dev *etdev);
 
-/* Return device DMA addr of FW shared memory area. */
-dma_addr_t edgetpu_firmware_shared_mem_daddr(struct edgetpu_dev *etdev);
+/* Return device DMA addr of FW shared data area. */
+dma_addr_t edgetpu_firmware_shared_data_daddr(struct edgetpu_dev *etdev);
 
-/* Return phys addr of FW shared memory area. */
-phys_addr_t edgetpu_firmware_shared_mem_paddr(struct edgetpu_dev *etdev);
+/* Return phys addr of FW shared data area. */
+phys_addr_t edgetpu_firmware_shared_data_paddr(struct edgetpu_dev *etdev);
 
-/* Return size of FW shared memory area. */
-size_t edgetpu_firmware_shared_mem_size(struct edgetpu_dev *etdev);
+/* Return size of FW shared data area. */
+size_t edgetpu_firmware_shared_data_size(struct edgetpu_dev *etdev);
 
 /* Return phys addr of FW remap region start. */
 phys_addr_t edgetpu_firmware_fw_region_paddr(struct edgetpu_dev *etdev);

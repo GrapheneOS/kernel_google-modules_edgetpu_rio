@@ -117,20 +117,22 @@ struct iif_fence {
 	uint16_t submitted_signalers;
 	/* The number of signaled signalers. */
 	uint16_t signaled_signalers;
-	/*
-	 * Protects @submitted_signalers, @signaled_signalers, @all_signaler_submitted_cb_list,
-	 * @all_signaler_submitted_error, @poll_cb_list and @signal_error.
-	 */
-	spinlock_t signalers_lock;
-#if IS_ENABLED(CONFIG_DEBUG_SPINLOCK)
-	struct lock_class_key signalers_key;
-#endif /* IS_ENABLED(CONFIG_DEBUG_SPINLOCK) */
 	/* The interrupt state before holding @signalers_lock. */
 	unsigned long signalers_lock_flags;
 	/* The number of outstanding waiters. */
 	uint16_t outstanding_waiters;
-	/* Protects @outstanding_waiters. */
-	spinlock_t waiters_lock;
+	/* The number of outstanding waiters per IP. */
+	uint16_t outstanding_waiters_per_ip[IIF_IP_RESERVED];
+	/* The number of outstanding wakelock holds per waiter IP. */
+	uint16_t outstanding_block_wakelock[IIF_IP_RESERVED];
+	/*
+	 * Protects overall properties of the fence. (outstanding signalers / waiters, callbacks,
+	 * state, ...)
+	 */
+	rwlock_t fence_lock;
+#if IS_ENABLED(CONFIG_DEBUG_SPINLOCK)
+	struct lock_class_key fence_lock_key;
+#endif /* IS_ENABLED(CONFIG_DEBUG_SPINLOCK) */
 	/* Reference count. */
 	struct kref kref;
 	/* Operators. */
@@ -228,6 +230,12 @@ int iif_fence_submit_signaler(struct iif_fence *fence);
  * Note that the waiter submission will not be done when not all signalers have been submitted.
  * (i.e., @fence->submitted_signalers < @fence->total_signalers)
  *
+ * This function will acquire the block wakelock of @ip before it updates the IIF's wait table to
+ * mark @ip is going to wait on @fence. Otherwise, if the signaler IPx processes its command even
+ * earlier than the waiter IPy powers its block up by the race, IPx may try to notify IPy which is
+ * not powered up yet. If IPy spec doesn't allow that, it may cause an unexpected bug. Therefore, we
+ * should acquire the block wakelock of @ip before updating the wait table.
+ *
  * This function cannot be called in the IRQ context.
  *
  * Returns the number of remaining signalers to be submitted (i.e., returning 0 means the submission
@@ -251,9 +259,10 @@ int iif_fence_submit_waiter(struct iif_fence *fence, enum iif_ip_type ip);
  * This function cannot be called in the IRQ context.
  *
  * Note that this function may reorder fences internally. This is to prevent a potential dead lock
- * which can be caused by holding the locks of multiple fences at the same time.
+ * which can be caused by holding the locks of multiple fences at the same time. Also, fences in
+ * @in_fences and @out_fences should be unique. Otherwise, it will return -EDEADLK.
  *
- * Otherwise, returns 0 on success.
+ * The function returns 0 on success.
  */
 int iif_fence_submit_signaler_and_waiter(struct iif_fence **in_fences, int num_in_fences,
 					 struct iif_fence **out_fences, int num_out_fences,
@@ -268,6 +277,10 @@ int iif_fence_submit_signaler_and_waiter(struct iif_fence **in_fences, int num_i
  * If the caller is going to signal @fence in the un-sleepable context such as IRQ context or spin
  * lock, one should use the `iif_fence_signal_async` function below. Its functionality is the same,
  * but notifying poll callbacks will be done asynchronously.
+ *
+ * It may try to release the block wakelock of waiter IPs if there are some IPs which called the
+ * `iif_fence_waited` function earlier than this function call and releasing the block wakelock of
+ * those IPs was pended. (See `iif_fence_waited` function below.)
  *
  * Returns the number of remaining signals on success. Otherwise, returns a negative errno.
  */
@@ -335,6 +348,17 @@ bool iif_fence_is_signaled(struct iif_fence *fence);
 
 /*
  * Notifies the driver that a waiter of @ip finished waiting on @fence.
+ *
+ * It will try to release the block wakelock of @ip which was held when `iif_fence_submit_waiter`
+ * was called if @fence was already signaled (i.e., `iif_fence_signal` was called) and the IP
+ * defined the `release_block_wakelock` operator (See iif-manager.h file).
+ *
+ * Note that if @fence is not signaled yet, releasing the block wakelock will be pended until @fence
+ * is signaled (i.e., `iif_fence_signal` is called) or it is destroyed. This case can happen when
+ * the signaler IPx is not responding in time and the waiter IPy processes its command as timeout.
+ * This pending logic is required because if IPy doesn't pend releasing its block wakelock and IPx
+ * suddenly processes its command, IPx may try to notify IPy whose block is already powered down and
+ * it may cause an unexpected bug if IPy spec doesn't allow that.
  *
  * If the caller is going to stop waiting on @fence in the un-sleepable context such as IRQ context
  * or spin lock, one should use the `iif_fence_waited_async` function below. Its functionality is

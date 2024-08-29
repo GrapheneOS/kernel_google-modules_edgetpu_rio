@@ -176,9 +176,7 @@ static const struct thermal_cooling_device_ops gcip_thermal_ops = {
 };
 
 /* This API was removed, but Android still uses it to update thermal request. */
-#if GCIP_IS_GKI
 void thermal_cdev_update(struct thermal_cooling_device *cdev);
-#endif
 
 static void gcip_thermal_update(struct gcip_thermal *thermal)
 {
@@ -186,11 +184,7 @@ static void gcip_thermal_update(struct gcip_thermal *thermal)
 
 	cdev->updated = false;
 
-#if GCIP_IS_GKI
 	thermal_cdev_update(cdev);
-#elif IS_ENABLED(CONFIG_THERMAL)
-	dev_err_once(thermal->dev, "Thermal update not implemented");
-#endif
 }
 
 static ssize_t user_vote_show(struct device *dev, struct device_attribute *attr, char *buf)
@@ -400,9 +394,12 @@ static int gcip_thermal_cooling_register(struct gcip_thermal *thermal, const cha
 	if (node_name)
 		node = of_find_node_by_name(NULL, node_name);
 	if (!node)
-		dev_warn(thermal->dev, "Failed to find thermal cooling node\n");
+		dev_warn(thermal->dev, "Failed to find thermal cooling node: %s\n",
+			 node_name ? node_name : "");
 
 	thermal->cdev = thermal_of_cooling_device_register(node, type, thermal, &gcip_thermal_ops);
+	/* OK to call it even if @node is NULL. */
+	of_node_put(node);
 	if (IS_ERR(thermal->cdev))
 		return PTR_ERR(thermal->cdev);
 

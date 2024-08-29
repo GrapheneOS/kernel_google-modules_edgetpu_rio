@@ -53,6 +53,7 @@
 #define EXTERNAL_DEBUG_OS_LOCK_OSLK BIT(5)
 #define EXTERNAL_DEBUG_OS_LOCK_DLK BIT(6)
 
+#if EDGETPU_HAS_FW_DEBUG
 /* Handle FW response data available. */
 void edgetpu_fw_debug_resp_ready(struct edgetpu_dev *etdev, u32 data_len)
 {
@@ -60,7 +61,9 @@ void edgetpu_fw_debug_resp_ready(struct edgetpu_dev *etdev, u32 data_len)
 		data_len = FW_DEBUG_BUFFER_SIZE;
 	etdev->fw_debug_mem.data_len = data_len;
 	dma_sync_sgtable_for_cpu(etdev->dev, etdev->fw_debug_mem.sgt, DMA_BIDIRECTIONAL);
-	complete(&etdev->fw_debug_mem.rd_data_ready);
+	etdev->fw_debug_mem.async_resp_pending = false;
+	etdev->fw_debug_mem.resp_data_ready = true;
+	complete_all(&etdev->fw_debug_mem.rd_data_ready);
 }
 
 /* Read response data from firmware debug service. */
@@ -68,6 +71,8 @@ static ssize_t fw_debug_read(struct file *file, char __user *buf, size_t count, 
 {
 	struct edgetpu_dev *etdev = file->private_data;
 
+	if (*ppos > etdev->fw_debug_mem.data_len)
+		return 0;
 	/* If no response data ready to be consumed wait for notification of KCI/RKCI response. */
 	if (wait_for_completion_interruptible(&etdev->fw_debug_mem.rd_data_ready))
 		return -EINTR;
@@ -77,9 +82,9 @@ static ssize_t fw_debug_read(struct file *file, char __user *buf, size_t count, 
 		return -EFAULT;
 	*ppos += count;
 	if (*ppos >= etdev->fw_debug_mem.data_len) {
-		*ppos = 0;
 		etdev->fw_debug_mem.data_len = 0;
 		reinit_completion(&etdev->fw_debug_mem.rd_data_ready);
+		etdev->fw_debug_mem.resp_data_ready = false;
 	}
 	return count;
 }
@@ -88,6 +93,22 @@ static ssize_t fw_debug_read(struct file *file, char __user *buf, size_t count, 
 static ssize_t fw_debug_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
 {
 	struct edgetpu_dev *etdev = file->private_data;
+	int ret;
+
+	/* If waiting for RKCI send reset w/ FW handshake.  Races handled by FW. */
+	if (etdev->fw_debug_mem.async_resp_pending) {
+		ret = edgetpu_kci_fw_debug_reset(etdev);
+		if (ret)
+			etdev_warn_ratelimited(etdev, "fw debug reset error %d", ret);
+		etdev->fw_debug_mem.async_resp_pending = false;
+	}
+
+	/* If unread response data waiting, discard it. */
+	if (etdev->fw_debug_mem.resp_data_ready) {
+		etdev->fw_debug_mem.data_len = 0;
+		reinit_completion(&etdev->fw_debug_mem.rd_data_ready);
+		etdev->fw_debug_mem.resp_data_ready = false;
+	}
 
 	if (etdev->fw_debug_mem.data_len + count > FW_DEBUG_BUFFER_SIZE)
 		count = FW_DEBUG_BUFFER_SIZE - etdev->fw_debug_mem.data_len;
@@ -114,7 +135,9 @@ static void fw_debug_release_flush(struct edgetpu_dev *etdev, struct file *file)
 	dma_sync_sgtable_for_device(etdev->dev, etdev->fw_debug_mem.sgt, DMA_BIDIRECTIONAL);
 	etdev->fw_debug_mem.data_len = 0;
 	ret = edgetpu_kci_fw_debug_cmd(etdev, FW_DEBUG_BUFFER_IOVA, data_len);
-	if (ret != GCIP_KCI_ERROR_OK && ret != GCIP_KCI_ERROR_UNAVAILABLE)
+	if (ret == GCIP_KCI_ERROR_UNAVAILABLE)
+		etdev->fw_debug_mem.async_resp_pending = true;
+	else if (ret != GCIP_KCI_ERROR_OK)
 		etdev_warn_ratelimited(etdev, "fw debug command error %d", ret);
 }
 
@@ -191,6 +214,16 @@ static void edgetpu_fw_debug_exit(struct edgetpu_dev *etdev)
 				   DMA_BIDIRECTIONAL, edgetpu_mmu_default_domain(etdev));
 	gcip_free_noncontiguous(etdev->fw_debug_mem.sgt);
 }
+
+#else /* EDGETPU_HAS_FW_DEBUG */
+static void edgetpu_fw_debug_init(struct edgetpu_dev *etdev)
+{
+}
+
+static void edgetpu_fw_debug_exit(struct edgetpu_dev *etdev)
+{
+}
+#endif /* EDGETPU_HAS_FW_DEBUG */
 
 void edgetpu_debug_dump_cpu_regs(struct edgetpu_dev *etdev)
 {
@@ -400,89 +433,6 @@ static void sscd_release(struct device *dev)
 	pr_debug(DRIVER_NAME " release\n");
 }
 
-static int mobile_sscd_collect_mappings_info(struct edgetpu_mapping_root *root, u32 workload_id,
-					     u8 type, struct sscd_segments_context *ctx)
-{
-	int ret = 0;
-	struct edgetpu_dump_segment *seg_hdr;
-	struct edgetpu_mapping_info_header *hdr;
-	struct edgetpu_mapping_info *info;
-	size_t seg_size;
-	void *buffer = NULL;
-	struct rb_node *node;
-
-	mutex_lock(&root->lock);
-
-	if (!root->count)
-		goto out_unlock;
-	seg_size = sizeof(*seg_hdr) + sizeof(*hdr) + sizeof(*info) * root->count;
-	buffer = kzalloc(seg_size, GFP_KERNEL);
-	if (!buffer) {
-		ret = -ENOMEM;
-		goto out_unlock;
-	}
-
-	seg_hdr = buffer;
-	seg_hdr->type = BIT_ULL(DUMP_TYPE_KERNEL_MAPPINGS_BIT);
-	seg_hdr->size = seg_size - sizeof(*seg_hdr);
-	hdr = (typeof(hdr))(seg_hdr + 1);
-	hdr->n_mappings = root->count;
-	hdr->group_workload_id = workload_id;
-	hdr->mapping_type = type;
-	info = hdr->mappings;
-	for (node = rb_first(&root->rb); node; node = rb_next(node)) {
-		struct edgetpu_mapping *map = container_of(node, struct edgetpu_mapping, node);
-
-		SET_FIELD(info, map, host_address);
-		SET_FIELD(info, map->gcip_mapping, device_address);
-		SET_FIELD(info, map, flags);
-		info->dir = map->gcip_mapping->orig_dir;
-		info->size = (u64)map->gcip_mapping->size;
-		info++;
-	}
-
-out_unlock:
-	mutex_unlock(&root->lock);
-	if (buffer) {
-		struct sscd_segment seg = {
-			.addr = buffer,
-			.size = seg_size,
-		};
-
-		ret = sscd_ctx_push_segment(ctx, &seg, true);
-		if (ret)
-			kfree(buffer);
-	}
-	return ret;
-}
-
-/*
- * For each group, collects the mappings information include host mapping and dmabuf mapping buffers
- * and records to @ctx.
- *
- * Returns a negative errno in case of failure.
- */
-static int mobile_sscd_collect_group_mappings_info(struct edgetpu_device_group **groups,
-						   size_t num_groups,
-						   struct sscd_segments_context *ctx)
-{
-	int i, ret;
-	struct edgetpu_device_group *group;
-
-	for (i = 0; i < num_groups; i++) {
-		group = groups[i];
-		ret = mobile_sscd_collect_mappings_info(&group->host_mappings, group->workload_id,
-							MAPPING_TYPE_HOST, ctx);
-		if (ret)
-			return ret;
-		ret = mobile_sscd_collect_mappings_info(&group->dmabuf_mappings, group->workload_id,
-							MAPPING_TYPE_DMABUF, ctx);
-		if (ret)
-			return ret;
-	}
-	return 0;
-}
-
 static int mobile_sscd_collect_etdev_info(struct edgetpu_dev *etdev,
 					  struct sscd_segments_context *ctx)
 {
@@ -510,168 +460,9 @@ static int mobile_sscd_collect_etdev_info(struct edgetpu_dev *etdev,
 	return sscd_ctx_push_segment(ctx, &seg, true);
 }
 
-static int mobile_sscd_collect_clients_info(struct edgetpu_client **clients, size_t num_clients,
-					    struct sscd_segments_context *ctx)
-{
-	int i;
-	struct edgetpu_dump_segment *seg_hdr;
-	struct edgetpu_client_info_header *hdr;
-	struct edgetpu_client_info *info;
-	struct edgetpu_client *client;
-	const size_t seg_size = sizeof(*seg_hdr) + sizeof(*hdr) + sizeof(*info) * num_clients;
-	void *buffer;
-	struct sscd_segment seg = {
-		.size = seg_size,
-	};
-
-	if (!num_clients)
-		return 0;
-	buffer = kzalloc(seg_size, GFP_KERNEL);
-	if (!buffer)
-		return -ENOMEM;
-	seg.addr = buffer;
-	seg_hdr = buffer;
-	seg_hdr->type = BIT_ULL(DUMP_TYPE_KERNEL_CLIENTS_BIT);
-	seg_hdr->size = seg_size - sizeof(*seg_hdr);
-	hdr = (typeof(hdr))(seg_hdr + 1);
-	info = hdr->clients;
-	for (i = 0; i < num_clients; i++) {
-		client = clients[i];
-		SET_FIELD(info, client, pid);
-		SET_FIELD(info, client, tgid);
-		SET_FIELD(info, client, perdie_events);
-		info->wakelock_req_count = client->wakelock.req_count;
-		mutex_lock(&client->group_lock);
-		info->group_workload_id = client->group ? client->group->workload_id : ~0u;
-		mutex_unlock(&client->group_lock);
-		info++;
-	}
-	hdr->n_clients = num_clients;
-	return sscd_ctx_push_segment(ctx, &seg, true);
-}
-
-static int mobile_sscd_collect_groups_info(struct edgetpu_device_group **groups, size_t num_groups,
-					   struct sscd_segments_context *ctx)
-{
-	int i;
-	struct edgetpu_dump_segment *seg_hdr;
-	struct edgetpu_group_info_header *hdr;
-	struct edgetpu_group_info *info;
-	struct edgetpu_device_group *group;
-	const size_t seg_size = sizeof(*seg_hdr) + sizeof(*hdr) + sizeof(*info) * num_groups;
-	void *buffer;
-	struct sscd_segment seg = {
-		.size = seg_size,
-	};
-
-	if (!num_groups)
-		return 0;
-	buffer = kzalloc(seg_size, GFP_KERNEL);
-	if (!buffer)
-		return -ENOMEM;
-	seg.addr = buffer;
-	seg_hdr = buffer;
-	seg_hdr->type = BIT_ULL(DUMP_TYPE_KERNEL_GROUPS_BIT);
-	seg_hdr->size = seg_size - sizeof(*seg_hdr);
-	hdr = (typeof(hdr))(seg_hdr + 1);
-	info = hdr->groups;
-	for (i = 0; i < num_groups; i++) {
-		group = groups[i];
-		SET_FIELD(info, group, workload_id);
-		SET_FIELD(info, group, vcid);
-		SET_FIELD(info, group, status);
-		SET_FIELD(info, group->etdomain, pasid);
-		info->size_host_mappings = edgetpu_mappings_total_size(&group->host_mappings);
-		info->size_dmabuf_mappings = edgetpu_mappings_total_size(&group->dmabuf_mappings);
-		mutex_lock(&group->lock);
-		info->queues_attached = edgetpu_group_finalized_and_attached(group);
-		mutex_unlock(&group->lock);
-		info++;
-	}
-	hdr->n_groups = num_groups;
-	return sscd_ctx_push_segment(ctx, &seg, true);
-}
-
-static struct edgetpu_client **edgetpu_get_clients(struct edgetpu_dev *etdev, size_t *p_num_clients)
-{
-	struct edgetpu_client **clients;
-	struct edgetpu_list_device_client *lc;
-	size_t num_clients = 0, i = 0;
-
-	mutex_lock(&etdev->clients_lock);
-	for_each_list_device_client(etdev, lc)
-		num_clients++;
-	clients = kmalloc_array(num_clients, sizeof(*clients), GFP_KERNEL);
-	if (!clients) {
-		mutex_unlock(&etdev->clients_lock);
-		return ERR_PTR(-ENOMEM);
-	}
-
-	for_each_list_device_client(etdev, lc)
-		clients[i++] = edgetpu_client_get(lc->client);
-	mutex_unlock(&etdev->clients_lock);
-	*p_num_clients = num_clients;
-	return clients;
-}
-
-static struct edgetpu_device_group **edgetpu_get_groups(struct edgetpu_dev *etdev,
-							size_t *p_num_groups)
-{
-	struct edgetpu_device_group **groups;
-	struct edgetpu_device_group *group;
-	struct edgetpu_list_group *g;
-	size_t num_groups = 0;
-
-	mutex_lock(&etdev->groups_lock);
-	groups = kmalloc_array(etdev->n_groups, sizeof(*groups), GFP_KERNEL);
-	if (!groups) {
-		mutex_unlock(&etdev->groups_lock);
-		return ERR_PTR(-ENOMEM);
-	}
-
-	etdev_for_each_group(etdev, g, group)
-		groups[num_groups++] = edgetpu_device_group_get(group);
-	mutex_unlock(&etdev->groups_lock);
-	*p_num_groups = num_groups;
-	return groups;
-}
-
 static int mobile_collect_device_info(struct edgetpu_dev *etdev, struct sscd_segments_context *ctx)
 {
-	struct edgetpu_device_group **groups;
-	struct edgetpu_client **clients;
-	size_t num_groups = 0, num_clients = 0;
-	int i, ret;
-
-	clients = edgetpu_get_clients(etdev, &num_clients);
-	if (IS_ERR(clients))
-		return PTR_ERR(clients);
-	groups = edgetpu_get_groups(etdev, &num_groups);
-	if (IS_ERR(groups)) {
-		ret = PTR_ERR(groups);
-		goto out_put_clients;
-	}
-
-	ret = mobile_sscd_collect_etdev_info(etdev, ctx);
-	if (ret)
-		goto out_put_groups;
-	ret = mobile_sscd_collect_clients_info(clients, num_clients, ctx);
-	if (ret)
-		goto out_put_groups;
-	ret = mobile_sscd_collect_groups_info(groups, num_groups, ctx);
-	if (ret)
-		goto out_put_groups;
-	ret = mobile_sscd_collect_group_mappings_info(groups, num_groups, ctx);
-
-out_put_groups:
-	for (i = 0; i < num_groups; i++)
-		edgetpu_device_group_put(groups[i]);
-	kfree(groups);
-out_put_clients:
-	for (i = 0; i < num_clients; i++)
-		edgetpu_client_put(clients[i]);
-	kfree(clients);
-	return ret;
+	return mobile_sscd_collect_etdev_info(etdev, ctx);
 }
 
 /* Generates general dump, including telemetry logs and device info. */
