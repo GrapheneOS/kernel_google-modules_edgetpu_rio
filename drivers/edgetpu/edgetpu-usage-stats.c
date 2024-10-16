@@ -40,9 +40,9 @@ static ssize_t tpu_usage_show(struct device *dev, struct gcip_usage_stats_attr *
 	mutex_lock(&ustats->dvfs_freqs_lock);
 	if (!ustats->dvfs_freqs_num) {
 		mutex_unlock(&ustats->dvfs_freqs_lock);
-		for (i = 0; i < etdev->num_active_states; i++)
+		for (i = 0; i < EDGETPU_NUM_STATES; i++)
 			ret += scnprintf(buf + ret, PAGE_SIZE - ret, " %d",
-					 etdev->active_states[i]);
+					 edgetpu_active_states[i]);
 	} else {
 		for (i = 0; i < ustats->dvfs_freqs_num; i++)
 			ret += scnprintf(buf + ret, PAGE_SIZE - ret, " %d", ustats->dvfs_freqs[i]);
@@ -56,7 +56,7 @@ static ssize_t tpu_usage_show(struct device *dev, struct gcip_usage_stats_attr *
 	hash_for_each (ustats->core_usage_htable[attr->subcomponent], bkt, uid_entry, node) {
 		ret += scnprintf(buf + ret, PAGE_SIZE - ret, "%d:", uid_entry->uid);
 
-		for (i = 0; i < etdev->num_active_states; i++)
+		for (i = 0; i < EDGETPU_NUM_STATES; i++)
 			ret += scnprintf(buf + ret, PAGE_SIZE - ret, " %lld",
 					 uid_entry->time_in_state[i]);
 
@@ -207,18 +207,14 @@ static int update_usage_kci(void *data)
 
 static int get_default_dvfs_freqs_num(void *data)
 {
-	struct edgetpu_usage_stats *ustats = data;
-
-	return ustats->etdev->num_active_states;
+	return EDGETPU_NUM_STATES;
 }
 
 static unsigned int get_default_dvfs_freq(int idx, void *data)
 {
-	struct edgetpu_usage_stats *ustats = data;
-
-	if (idx >= ustats->etdev->num_active_states)
+	if (idx >= EDGETPU_NUM_STATES)
 		return 0;
-	return ustats->etdev->active_states[idx];
+	return edgetpu_active_states[idx];
 }
 
 static const struct gcip_usage_stats_ops ustats_ops = {
