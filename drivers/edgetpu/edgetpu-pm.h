@@ -15,7 +15,7 @@
 
 #include "edgetpu-internal.h"
 
-#define EDGETPU_OFF_STATE 0
+extern u32 edgetpu_active_states[];
 
 /* Power management data for an EdgeTPU device. */
 struct edgetpu_pm {
